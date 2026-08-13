@@ -1981,7 +1981,10 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         gs.init_gates(data, "feat/c", "small-medium")
         gs.set_route(data, "feat/c", "/wt/b")
         res = auto.handle_skill_completion(
-            "grumpy:review", data, branch="feat/b", active_branches=None,
+            "grumpy:review",
+            data,
+            branch="feat/b",
+            active_branches=None,
             source_root="/wt/b",
         )
         self.assertFalse(res["recorded"])
@@ -1999,7 +2002,10 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         gs.record_gate(data, "feat/c", "grumpy-review", authorized=True)
         gs.set_route(data, "feat/c", "/wt/b")
         res = auto.handle_skill_completion(
-            "grumpy:review", data, branch="feat/b", active_branches=None,
+            "grumpy:review",
+            data,
+            branch="feat/b",
+            active_branches=None,
             source_root="/wt/b",
         )
         self.assertFalse(res["recorded"])
