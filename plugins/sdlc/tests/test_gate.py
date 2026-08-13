@@ -1967,10 +1967,26 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         err = r.stderr.decode().lower()
         self.assertIn("feat/c", err)
         self.assertIn("--unroute", err)
-        self.assertNotIn("feat/c", read_json(self.gp).get("feat/b", {}))
-        self.assertEqual(self.gates("feat/b"), {})
+        self.assertEqual(self.gates("feat/c"), {})  # stale target: not stamped
+        self.assertEqual(self.gates("feat/b"), {})  # no silent fallback either
         # wt_c is gone; don't let tearDown try to remove it again.
         self.wt_c = None
+
+    def test_routed_stamp_fails_closed_when_worktree_list_fails(self):
+        # active_branches=None means `git worktree list` itself failed, not
+        # that the target is confirmed gone. The routed path must not treat
+        # "couldn't check" as "must be fine" — same posture find_active_cycle
+        # already takes for the heuristic path.
+        data = {}
+        gs.init_gates(data, "feat/c", "small-medium")
+        gs.set_route(data, "feat/c", "/wt/b")
+        res = auto.handle_skill_completion(
+            "grumpy:review", data, branch="feat/b", active_branches=None,
+            source_root="/wt/b",
+        )
+        self.assertFalse(res["recorded"])
+        self.assertTrue(res.get("surprising"))
+        self.assertEqual(data["feat/c"]["gates"], {})
 
     def test_payload_cwd_overrides_process_cwd(self):
         # The hook trusts the payload's cwd, so a session reporting B resolves
@@ -2002,6 +2018,17 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         err = r.stderr.decode()
         self.assertIn("feat/c", err)
         self.assertIn("--unroute", err)
+
+    def test_enforce_denial_says_nothing_about_a_route_when_there_is_none(self):
+        # The route-naming line must be conditional on an actual route pointing
+        # elsewhere — an unrouted worktree with missing gates gets the plain
+        # denial, not a false "your gates are routed away" hint.
+        self.cli(["--init", "small-medium", "--branch", "feat/b"], self.wt_b)
+        r = self.enforce("gh pr create --head feat/b", self.wt_b)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        err = r.stderr.decode()
+        self.assertNotIn("--unroute", err)
+        self.assertNotIn("routed", err.lower())
 
     def test_two_worktrees_driving_one_target_both_record(self):
         # B and C both gate A. Both their skill gates belong on A — and neither
