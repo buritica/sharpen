@@ -1988,6 +1988,23 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.assertTrue(res.get("surprising"))
         self.assertEqual(data["feat/c"]["gates"], {})
 
+    def test_already_recorded_routed_skip_stays_quiet_even_if_worktree_list_fails(self):
+        # A routed cycle that's already finished needs no liveness check at
+        # all — nothing is about to be written. A `git worktree list` hiccup
+        # must not turn that steady-state no-op into a surprise; that would
+        # reintroduce the renag-forever bug this diff removed, just triggered
+        # by git flakiness instead of routing.
+        data = {}
+        gs.init_gates(data, "feat/c", "small-medium")
+        gs.record_gate(data, "feat/c", "grumpy-review", authorized=True)
+        gs.set_route(data, "feat/c", "/wt/b")
+        res = auto.handle_skill_completion(
+            "grumpy:review", data, branch="feat/b", active_branches=None,
+            source_root="/wt/b",
+        )
+        self.assertFalse(res["recorded"])
+        self.assertFalse(res.get("surprising"))
+
     def test_payload_cwd_overrides_process_cwd(self):
         # The hook trusts the payload's cwd, so a session reporting B resolves
         # B's route even when the hook process itself was spawned elsewhere.

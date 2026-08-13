@@ -102,6 +102,34 @@ def handle_skill_completion(
     routed = gs.routed_branch(data, source_root)
     if routed:
         target_branch, bd = routed
+        # Read-only questions first, liveness check last: the liveness check
+        # only matters when a write is actually about to happen. Checking it
+        # first meant a transient `git worktree list` failure interrupted a
+        # routed cycle that had *already finished* — the exact renag-forever
+        # this diff exists to close, just re-triggered by git flakiness
+        # instead of routing. Neither of these two early returns touches
+        # active_branches, so a git hiccup can't turn a steady-state no-op
+        # into a surprise.
+        gate = gs.determine_gate(skill, bd)
+        if not gate:
+            return {
+                "recorded": False,
+                "reason": (
+                    f'No applicable gate on routed branch "{target_branch}" '
+                    "(--unroute to stop routing here)"
+                ),
+                "surprising": True,
+            }
+        if bd.get("gates", {}).get(gate):
+            # NOT surprising: this is the steady state of a routed cycle that
+            # already finished — every later skill invocation on this worktree
+            # would otherwise renag forever until someone runs --unroute. The
+            # first time a routed stamp lands (or lands on the wrong branch)
+            # is loud below; a no-op repeat of that same stamp is not.
+            return {
+                "recorded": False,
+                "reason": f'"{gate}" already recorded on routed "{target_branch}"',
+            }
         if active_branches is None:
             # Couldn't enumerate worktrees, so we can't confirm the route's
             # target is still checked out anywhere. Same posture as
@@ -129,26 +157,6 @@ def handle_skill_completion(
                     "anywhere — stale route (--unroute to clear it)"
                 ),
                 "surprising": True,
-            }
-        gate = gs.determine_gate(skill, bd)
-        if not gate:
-            return {
-                "recorded": False,
-                "reason": (
-                    f'No applicable gate on routed branch "{target_branch}" '
-                    "(--unroute to stop routing here)"
-                ),
-                "surprising": True,
-            }
-        if bd.get("gates", {}).get(gate):
-            # NOT surprising: this is the steady state of a routed cycle that
-            # already finished — every later skill invocation on this worktree
-            # would otherwise renag forever until someone runs --unroute. The
-            # first time a routed stamp lands (or lands on the wrong branch)
-            # is loud below; a no-op repeat of that same stamp is not.
-            return {
-                "recorded": False,
-                "reason": f'"{gate}" already recorded on routed "{target_branch}"',
             }
         # Routed or not, this hook just watched the skill run.
         gs.record_gate(data, target_branch, gate, authorized=True)
