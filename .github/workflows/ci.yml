@@ -1,0 +1,99 @@
+# PR validation: lint, test, marketplace consistency check.
+# Each job fans through the shared setup workflow and only runs when the
+# files it cares about changed (path gate below).
+#
+# Scaffolded by the `sdlc` plugin (/sdlc:init).
+name: CI
+
+on:
+  # No `branches:` filter. That key filters on the PR's BASE branch, so
+  # `branches: [main]` silently skips CI entirely for a PR stacked on another
+  # branch — and GitHub then reports that PR as "clean", because nothing is
+  # blocking a merge when no checks exist. Unvalidated reads identical to
+  # passing. Running on every base costs a little more runner time and removes
+  # a whole class of false green.
+  #
+  # `edited` is in `types` because it is the activity that fires when a PR's
+  # BASE CHANGES. The default set (opened/synchronize/reopened) does not include
+  # it, so when a parent PR merges and GitHub auto-retargets a stacked PR to
+  # main, no new run fires — and the stacked PR keeps a green earned against a
+  # base that no longer exists, computed from a path gate diffed against that
+  # old base. `edited` also fires on title/body edits, so this costs some extra
+  # runs. That is the deliberate trade: a few wasted minutes against a required
+  # check that means "we validated this against a different branch."
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Always-runs path gate. Exposes one boolean per file bucket so downstream
+  # jobs only run when relevant files change. On docs-only PRs, downstream
+  # jobs are skipped. Note: skipped jobs do NOT satisfy GitHub required status
+  # checks — only the changes job itself always completes.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'plugins/**'
+              - 'scripts/**'
+              - '.claude-plugin/**'
+              - '.github/workflows/**'
+              - 'requirements-dev.txt'
+
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/setup.yml
+    with:
+      command: "ruff format --check . && ruff check ."
+
+  test:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/setup.yml
+    with:
+      command: "python3 scripts/run-tests.py"
+
+  marketplace:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/setup.yml
+    with:
+      command: "python3 scripts/check-marketplace.py"
+
+  # Aggregator: always runs, fails if any validation job failed, was
+  # cancelled, or timed out. Treats skipped (path-gated) as passing so
+  # docs-only PRs satisfy this required check without hanging on skipped jobs.
+  ci-pass:
+    needs: [changes, lint, test, marketplace]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          set -eu
+          results="${{ join(needs.*.result, ' ') }}"
+          [ -n "$results" ] || { echo "ERROR: No job results found — needs list may be empty"; exit 1; }
+          for r in $results; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "Failed jobs check — results (changes lint test marketplace): $results"
+              exit 1
+            fi
+          done
+          echo "All required jobs passed: $results"

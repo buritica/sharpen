@@ -1,0 +1,44 @@
+{
+  "description": "SDLC gate enforcement (JSON-backed, pure python — no bun): block PR creation until all gates pass, block direct skill-gate stamping, auto-record skill gates, auto-init gate cycles on first commit to a feature branch.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/enforce-sdlc-gates.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/block-direct-gate-record.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/auto-record-skill-gate.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/auto-init-gate-cycle.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

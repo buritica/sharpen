@@ -1,0 +1,51 @@
+# Grumpy model map — single switch point for model routing.
+#
+# Commands and `exec:` hints reference ROLE names, never raw model strings.
+# To switch provider or bump a model rev, change `active_provider` (or one
+# column) and nothing downstream changes.
+#
+# Native dispatch: the Task/Agent tool's `model` argument accepts only
+# `sonnet` / `opus` / `haiku`. Roles whose resolved model is one of those run
+# natively. Roles marked `wrapper-required` (Fable, Gemini) are NOT reachable
+# through the generic dispatch tool yet — until a per-provider runner exists,
+# they fall back to their `native` model. Commands MUST announce the
+# substitution rather than silently downgrade.
+
+active_provider: claude
+
+roles:
+  audit:        # grumpy:audit synthesis + planning (heaviest reasoning)
+    claude: claude-fable-5
+    gemini: gemini-3.1-pro
+    native: opus              # Fable/Gemini are wrapper_required; opus is the native dispatch
+    wrapper_required: [claude-fable-5, gemini-3.1-pro]
+  analysis:     # review / architecture / security / product / edge-cases finding passes
+    claude: claude-opus-4-8
+    gemini: gemini-3.1-pro
+    native: opus              # opus is natively dispatchable
+    wrapper_required: [gemini-3.1-pro]
+  exec:         # default fix execution (M steps)
+    claude: claude-sonnet-4-6
+    gemini: gemini-3.5-flash
+    native: sonnet
+    wrapper_required: [gemini-3.5-flash]
+  exec-trivial: # S mechanical steps (exec: trivial)
+    claude: claude-haiku-4-5
+    gemini: gemini-3.1-flash-lite
+    native: haiku
+    wrapper_required: [gemini-3.1-flash-lite]
+  escalation:   # gate-failure bump target — one rung up; native ceiling is `analysis` (opus)
+    order: [exec-trivial, exec, analysis]
+
+# Native dispatch ladder for `--max-tier` clamping + escalation (low → high):
+#   exec-trivial(haiku) < exec(sonnet) < analysis(opus)
+# The `audit` role exists for grumpy:audit's own synthesis model selection
+# (Fable, wrapper_required → opus fallback); natively it collapses to `analysis`,
+# so escalation tops out at analysis — there is no higher native rung.
+#
+# Notes (June 2026):
+# - gemini-3.5-flash (GA 2026-05-19) is the strong agentic/coding Flash; the
+#   right executor once a Gemini runner exists.
+# - gemini-3.5-pro is in testing (GA ~July 2026); promote audit/analysis to it
+#   once GA.
+# - No gemini-3.5-flash-lite yet → exec-trivial stays on 3.1-flash-lite.

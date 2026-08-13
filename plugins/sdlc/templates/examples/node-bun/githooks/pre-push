@@ -1,0 +1,22 @@
+#!/bin/bash
+# Mirror CI locally before push so red runs are caught at the desk, not on the PR.
+# Scaffolded by the `sdlc` plugin. Set SKIP_PREPUSH=1 to bypass (e.g. docs-only).
+set -euo pipefail
+
+if [ "${SKIP_PREPUSH:-0}" = "1" ]; then
+  echo "SKIP_PREPUSH=1 — skipping pre-push checks."
+  exit 0
+fi
+
+echo "Running lint + typecheck before push..."
+bun run lint
+bun run typecheck
+
+# Affected-only tests if the repo defines `test:changed`; else full suite.
+if bun run --silent test:changed >/dev/null 2>&1 || grep -q '"test:changed"' package.json 2>/dev/null; then
+  echo "Running affected tests..."
+  bun run test:changed
+else
+  echo "Running tests..."
+  bun test
+fi

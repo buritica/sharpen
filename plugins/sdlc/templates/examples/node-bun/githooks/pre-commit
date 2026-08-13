@@ -1,0 +1,33 @@
+#!/bin/bash
+# Block direct commits to main, and auto-format staged files before they land.
+# Scaffolded by the `sdlc` plugin. Override main-guard in an emergency with
+# ALLOW_MAIN_COMMIT=1; skip formatting with SKIP_FORMAT=1.
+set -euo pipefail
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+
+if [ "$branch" = "main" ]; then
+  if [ "${ALLOW_MAIN_COMMIT:-0}" = "1" ]; then
+    echo "WARNING: Committing directly to main (ALLOW_MAIN_COMMIT=1 override)."
+  else
+    echo "ERROR: Direct commits to main are not allowed."
+    echo ""
+    echo "Use a branch or worktree:"
+    echo "  git worktree add -b fix/my-fix .git/worktrees/my-fix origin/main"
+    echo ""
+    echo "Emergency override: ALLOW_MAIN_COMMIT=1 git commit ..."
+    exit 1
+  fi
+fi
+
+# Format + lint-fix only the staged files (fast), then re-stage the result so
+# what you commit is what got formatted. No-op if biome isn't set up.
+if [ "${SKIP_FORMAT:-0}" != "1" ] && [ -f biome.json ] && command -v bun >/dev/null 2>&1; then
+  staged=$(git diff --cached --name-only --diff-filter=ACMR \
+    | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|css)$' || true)
+  if [ -n "$staged" ]; then
+    echo "Formatting staged files with biome..."
+    echo "$staged" | xargs bunx biome check --write --no-errors-on-unmatched
+    echo "$staged" | xargs git add
+  fi
+fi

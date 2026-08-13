@@ -1,0 +1,49 @@
+# Reusable workflow: checkout + Python setup + run command.
+# On hosted runners: installs requirements-dev.txt (ruff) via pip with cache.
+# On self-hosted runners: deps are expected to be pre-installed; runs git clean.
+#
+# Scaffolded by the `sdlc` plugin (/sdlc:init).
+name: Setup
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner label(s) as a JSON array string"
+        required: false
+        default: '"ubuntu-latest"'
+        type: string
+      command:
+        description: "Command to run after setup"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Clean untracked files (self-hosted)
+        if: ${{ contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+        run: git clean -fd
+
+      - name: Install dev dependencies
+        if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+        run: pip install -r requirements-dev.txt
+
+      - name: Run
+        env:
+          COMMAND: ${{ inputs.command }}
+        run: bash -c "$COMMAND"

@@ -1,0 +1,29 @@
+{
+  "name": "sharpen",
+  "owner": {
+    "name": "buritica"
+  },
+  "metadata": {
+    "description": "An SDLC where one required CI check is the gate, an adversarial code reviewer, and opt-in branch protection."
+  },
+  "plugins": [
+    {
+      "name": "sdlc",
+      "source": "./plugins/sdlc",
+      "description": "The full single-repo SDLC: spec, plan, gate, ship, plus repo bootstrap (new), CI + deploy pipeline scaffolding (init, audit, secrets) with ci-pass as the one required enforcement check, and test-quality depth (test-gaps, test-critique, test-flake). Absorbs the former ci, scaffold, test, and deploy plugins. Pair with grumpy for review depth and sdlc-guardrails for opt-in main-branch protection.",
+      "version": "4.4.0"
+    },
+    {
+      "name": "grumpy",
+      "source": "./plugins/grumpy",
+      "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents",
+      "version": "1.6.0"
+    },
+    {
+      "name": "sdlc-guardrails",
+      "source": "./plugins/sdlc-guardrails",
+      "description": "Opt-in main-branch commit protection for the sdlc workflow (gate-chain enforcement lives in the sdlc plugin)",
+      "version": "1.4.2"
+    }
+  ]
+}

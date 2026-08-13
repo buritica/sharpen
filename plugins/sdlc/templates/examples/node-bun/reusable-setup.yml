@@ -1,0 +1,59 @@
+# Reusable workflow: dependency install + cache + runner hygiene.
+# Parameterized so every validation job (lint/typecheck/test) shares one setup
+# path. Branches hosted vs self-hosted: hosted gets toolchain install + cache,
+# self-hosted gets a `git clean` instead (deps already on the box).
+#
+# Scaffolded by the `sdlc` plugin (/sdlc:init). Bun-first; for npm/pnpm repos
+# /sdlc:init rewrites the install + setup-* steps to match.
+name: Setup
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner label(s) as a JSON array string"
+        required: false
+        default: '"ubuntu-latest"'
+        type: string
+      command:
+        description: "Command to run after install"
+        required: true
+        type: string
+      install-args:
+        description: "Extra args for the install step"
+        required: false
+        default: "--frozen-lockfile"
+        type: string
+
+# Least privilege by default. Elevate per-job in the caller only where needed.
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+
+      - uses: actions/cache@v4
+        if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      # On self-hosted runners deps persist between runs; clean untracked cruft
+      # so a stale build artifact can't mask a failure. Preserve node_modules
+      # and the bun cache to keep installs fast.
+      - name: Clean untracked files (self-hosted)
+        if: ${{ contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+        run: git clean -fdx --exclude=node_modules --exclude=.bun
+
+      - run: bun install ${{ inputs.install-args }}
+
+      - run: ${{ inputs.command }}

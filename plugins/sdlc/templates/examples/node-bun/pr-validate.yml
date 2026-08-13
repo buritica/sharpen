@@ -1,0 +1,128 @@
+# PR validation — lint, typecheck, test. Each job fans out through the shared
+# reusable-setup workflow, and only runs when files it actually cares about
+# changed (see the `changes` gate below).
+#
+# Scaffolded by the `sdlc` plugin (/sdlc:init).
+name: CI
+
+on:
+  # No `branches:` filter — see spec.md pattern 1. That key filters on the PR's
+  # base branch, so `branches: [main]` skips CI for a PR stacked on another
+  # branch, and GitHub reports it clean because no checks exist to block it.
+  # `edited` is in `types` because that is the activity fired when a PR's base
+  # changes; without it, a stacked PR auto-retargeted after its parent merges
+  # keeps a green earned against the old base and never re-runs.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# Cancel superseded runs on the same ref so pushes don't pile up runners
+# (matters most on self-hosted boxes with one runner).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Always-runs path gate. Classifies which buckets of files changed and exposes
+  # one boolean per bucket. Downstream jobs gate on these, so:
+  #   - a docs-only PR runs nothing heavy (still green),
+  #   - a web-only PR skips the root lint/typecheck/test,
+  #   - a root code PR skips the web job.
+  # This is also the robust alternative to top-level `paths-ignore`: because the
+  # gate itself ALWAYS completes, a required status check is always satisfied —
+  # paths-ignore would instead leave docs-only PRs stuck "pending" forever.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # No checkout: on a `pull_request` trigger, dorny/paths-filter lists the
+    # PR's changed files via the GitHub API instead of a local git diff. That
+    # API call needs pull-requests: read, which on PRIVATE repos the top-level
+    # contents: read does not cover — the job 403s ("Resource not accessible
+    # by integration") on every PR. Public repos don't hit it, which is how
+    # this goes unnoticed until the repo goes private. Job-level permissions
+    # REPLACE the workflow-level block (not merge with it), so this job now
+    # has no `contents` access — if a future step here needs an actual
+    # checkout, add `contents: read` back explicitly.
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `code` = source outside web/ and docs. `web` = the web/ subtree.
+          # /sdlc:init prunes the `web` bucket + job if the repo has no web/.
+          # predicate-quantifier: 'every' is required for exclusion-only filters
+          # like `code` below — under the default 'some', a root .md file still
+          # matches '!web/**' and would wrongly mark a docs-only PR as `code`.
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '!**/*.md'
+              - '!docs/**'
+              - '!web/**'
+              - '!.env.example'
+              - '!.env.op.example'
+            web:
+              - 'web/**'
+
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      command: "bun run lint"
+
+  typecheck:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      command: "bun run typecheck"
+
+  test:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      # /sdlc:init sets runs-on to a self-hosted label here if the repo needs it.
+      command: "bun test"
+
+  # Web-specific checks — only when web/ changed. /sdlc:init removes this job
+  # (and the `web` filter above) for repos without a web/ subtree, and adjusts
+  # the command to whatever web scripts exist (typecheck / build / e2e).
+  web:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      command: "bun run web:typecheck && bun run web:build"
+
+  # Enforcement aggregator (spec.md pattern 2). This is the ONE status check
+  # branch protection should require. It `needs:` every validation job, runs
+  # even when some were skipped (`if: always()`), and fails if any did not pass
+  # — treating `skipped` as acceptable so a path-gated docs-only PR stays
+  # satisfiable instead of hanging "pending" forever on a never-reported job.
+  # `changes` MUST be in this list too, not just the jobs that need it: if the
+  # gate job itself fails, every downstream job reports `skipped` (its `if`
+  # never evaluates true), and skipped reads as OK — a broken gate would
+  # otherwise collapse to a green required check with nothing actually run.
+  # /sdlc:init keeps this `needs:` list in sync with whatever jobs exist.
+  ci-pass:
+    needs: [changes, lint, typecheck, test, web]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "dependency results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "A required job did not pass."; exit 1
+            fi
+          done

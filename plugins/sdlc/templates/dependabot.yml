@@ -1,0 +1,14 @@
+# Keeps GitHub Actions pinned versions current. Pair with action pinning so
+# bumps are reviewed, not silent.
+#
+# Scaffolded by the `sdlc` plugin (/sdlc:init). Lives at .github/dependabot.yml.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"

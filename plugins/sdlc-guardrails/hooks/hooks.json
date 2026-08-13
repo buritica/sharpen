@@ -1,0 +1,17 @@
+{
+  "description": "SDLC guardrails: block main-branch commits (opt-in per repo). Gate-chain enforcement lives in the sdlc plugin's enforce-sdlc-gates.py (JSON-backed, pure python).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/_block-main-commits.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
