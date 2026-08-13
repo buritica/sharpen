@@ -1379,12 +1379,13 @@ class SharedWorktreeStoreTest(unittest.TestCase):
         # shared store and feat/b is checked out in worktree B.
         self.cli(["--init", "small-medium", "--branch", "feat/b"], self.wt)
         r = self.auto("grumpy:review", self.main)
-        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("grumpy-review", read_json(self.shared)["feat/b"]["gates"])
-        # A cross-worktree stamp must NAME the branch it landed on. This is the
-        # adoption path, not an explicit route — keying the message off
-        # `routed` alone would silently drop the branch name here, and a stamp
-        # on the wrong branch cannot be undone.
+        # A cross-worktree stamp must NAME the branch it landed on, AND surface
+        # (exit 2): it is a write, and a wrong-branch stamp cannot be undone
+        # (skill-gated gates have no manual --record). Keying the message off
+        # `routed` alone would silently drop the branch name here, and miss the
+        # surfacing too — the adoption path, not an explicit route.
+        self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn(" on feat/b", r.stderr.decode())
 
 
@@ -1809,6 +1810,8 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
 
     def tearDown(self):
         for wt in (self.wt_b, self.wt_c):
+            if not wt:
+                continue
             subprocess.run(
                 ["git", "-C", self.main, "worktree", "remove", "-f", wt],
                 capture_output=True,
@@ -1828,6 +1831,11 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
     def gates(self, branch):
         return read_json(self.gp).get(branch, {}).get("gates", {})
 
+    def enforce(self, cmd, cwd):
+        return run_hook(
+            ENFORCE, {"tool_name": "Bash", "tool_input": {"command": cmd}}, cwd, self.gp
+        )
+
     def init_routed(self, target, cwd, tier="small-medium"):
         r = self.cli(["--init", tier, "--branch", target, "--route-from", cwd], cwd)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1838,7 +1846,9 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         # gate was stamped on B's own branch.
         self.init_routed("feat/c", self.wt_b)
         r = self.skill("grumpy:review", self.wt_b)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        # The write landed away from this worktree's own branch — irreversible
+        # (no manual --record for skill gates), so it surfaces (exit 2).
+        self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("grumpy-review", self.gates("feat/c"))
         self.assertNotIn("feat/b", read_json(self.gp))
 
@@ -1858,7 +1868,7 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.cli(["--init", "small-medium", "--branch", "feat/c"], self.wt_c)
         self.init_routed("feat/a", self.wt_b)
         r = self.skill("grumpy:review", self.wt_b)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 2, r.stderr)  # cross-worktree write, surfaces
         self.assertIn("grumpy-review", self.gates("feat/a"))
         self.assertEqual(self.gates("feat/c"), {})
 
@@ -1936,20 +1946,38 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.init_routed("feat/c", self.wt_b)
         self.skill("grumpy:review", self.wt_b)
         r = self.skill("grumpy:review", self.wt_b)  # already recorded on feat/c
-        # Exit 2 is "show the agent this line" (see hook_out.notify) — not a
-        # block; the
-        # tool already ran. Every routed skip is surprising by construction:
-        # someone explicitly asked for this stamp, so a silent 0 would hide it.
-        self.assertEqual(r.returncode, 2, r.stderr)
+        # This is the steady state of a routed cycle that already finished —
+        # nothing was lost, and it recurs on every later skill run until
+        # --unroute. Interrupting here forever is the permanent nag this axis
+        # exists to remove, so it stays quiet (exit 0).
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.gates("feat/b"), {})
         self.assertIn("feat/c", r.stderr.decode())
+
+    def test_stale_route_to_a_deleted_branch_does_not_stamp(self):
+        # The route never checks its target is still checked out, unlike the
+        # heuristic cross-worktree path (which takes active_branches). After
+        # `git worktree remove` + `git branch -D`, a stamp must not land on a
+        # branch that no longer exists anywhere.
+        self.init_routed("feat/c", self.wt_b)
+        git(self.main, "worktree", "remove", "-f", self.wt_c)
+        git(self.main, "branch", "-D", "feat/c")
+        r = self.skill("grumpy:review", self.wt_b)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        err = r.stderr.decode().lower()
+        self.assertIn("feat/c", err)
+        self.assertIn("--unroute", err)
+        self.assertNotIn("feat/c", read_json(self.gp).get("feat/b", {}))
+        self.assertEqual(self.gates("feat/b"), {})
+        # wt_c is gone; don't let tearDown try to remove it again.
+        self.wt_c = None
 
     def test_payload_cwd_overrides_process_cwd(self):
         # The hook trusts the payload's cwd, so a session reporting B resolves
         # B's route even when the hook process itself was spawned elsewhere.
         self.init_routed("feat/c", self.wt_b)
         r = self.skill("grumpy:review", self.main, payload_cwd=self.wt_b)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 2, r.stderr)  # cross-worktree write, surfaces
         self.assertIn("grumpy-review", self.gates("feat/c"))
 
     def test_driver_on_detached_head_still_routes(self):
@@ -1959,8 +1987,21 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.init_routed("feat/a", self.wt_b)
         git(self.wt_b, "checkout", "-q", "--detach")
         r = self.skill("grumpy:review", self.wt_b)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 2, r.stderr)  # cross-worktree write, surfaces
         self.assertIn("grumpy-review", self.gates("feat/a"))
+
+    def test_enforce_denial_names_the_route_starving_this_branch(self):
+        # B's own branch (feat/b) is starved for gates because B is routing its
+        # skill gates to feat/c instead. The denial for feat/b names that route
+        # and --unroute, rather than just listing 8 missing gates with no
+        # explanation of why they never landed.
+        self.cli(["--init", "small-medium", "--branch", "feat/b"], self.wt_b)
+        self.init_routed("feat/c", self.wt_b)
+        r = self.enforce("gh pr create --head feat/b", self.wt_b)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        err = r.stderr.decode()
+        self.assertIn("feat/c", err)
+        self.assertIn("--unroute", err)
 
     def test_two_worktrees_driving_one_target_both_record(self):
         # B and C both gate A. Both their skill gates belong on A — and neither

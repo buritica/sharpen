@@ -102,18 +102,38 @@ def handle_skill_completion(
     routed = gs.routed_branch(data, source_root)
     if routed:
         target_branch, bd = routed
+        if active_branches is not None and target_branch not in active_branches:
+            # The route outlived its branch (removed worktree, deleted branch).
+            # Stamping here would land a gate nobody can see or correct — so
+            # this is the one routed outcome that must interrupt regardless of
+            # what it costs, same reasoning as the stale-target write itself.
+            return {
+                "recorded": False,
+                "reason": (
+                    f'Routed target "{target_branch}" is no longer checked out '
+                    "anywhere — stale route (--unroute to clear it)"
+                ),
+                "surprising": True,
+            }
         gate = gs.determine_gate(skill, bd)
         if not gate:
             return {
                 "recorded": False,
-                "reason": f'No applicable gate on routed branch "{target_branch}"',
+                "reason": (
+                    f'No applicable gate on routed branch "{target_branch}" '
+                    "(--unroute to stop routing here)"
+                ),
                 "surprising": True,
             }
         if bd.get("gates", {}).get(gate):
+            # NOT surprising: this is the steady state of a routed cycle that
+            # already finished — every later skill invocation on this worktree
+            # would otherwise renag forever until someone runs --unroute. The
+            # first time a routed stamp lands (or lands on the wrong branch)
+            # is loud below; a no-op repeat of that same stamp is not.
             return {
                 "recorded": False,
                 "reason": f'"{gate}" already recorded on routed "{target_branch}"',
-                "surprising": True,
             }
         # Routed or not, this hook just watched the skill run.
         gs.record_gate(data, target_branch, gate, authorized=True)
@@ -254,19 +274,19 @@ def main():
         return ho.notify("auto-record", f"skipped {skill}: unexpected error ({e})")
 
     if holder.get("recorded"):
-        # Quiet on purpose: a gate recording is the expected outcome and asks
-        # nothing of the reader. Goes through notify(surface=False) rather than
-        # a bare stderr write so the channel choice is visible as a choice.
-        # Names the branch whenever it isn't the local one — a cross-worktree
-        # stamp should never be something the user has to infer. That covers
-        # both an explicit route and the single-candidate adoption in
-        # handle_skill_completion, which
-        # a `routed`-only test would miss.
-        where = f" on {holder['target']}" if holder.get("target") != branch else ""
+        # A stamp on the local branch is the expected outcome and asks nothing
+        # of the reader — quiet. A stamp that landed anywhere else (an explicit
+        # route, or the single-candidate cross-worktree adoption) is a write
+        # nobody watching this session would otherwise see, and it cannot be
+        # corrected after the fact (skill-gated gates have no manual --record),
+        # so it surfaces. Keyed off target != branch rather than `routed` alone
+        # so it also catches the adoption path a `routed`-only check would miss.
+        cross_worktree = holder.get("target") != branch
+        where = f" on {holder['target']}" if cross_worktree else ""
         return ho.notify(
             "auto-record",
             f'recorded "{holder["gate"]}"{where} after {skill}',
-            surface=False,
+            surface=cross_worktree,
         )
     if holder.get("reason"):
         # Surfaced only when the skip is one the caller had no way to predict,
