@@ -102,22 +102,65 @@ def handle_skill_completion(
     routed = gs.routed_branch(data, source_root)
     if routed:
         target_branch, bd = routed
+        # Read-only questions first, liveness check last: the liveness check
+        # only matters when a write is actually about to happen. Checking it
+        # first meant a transient `git worktree list` failure interrupted a
+        # routed cycle that had *already finished* — the exact renag-forever
+        # this diff exists to close, just re-triggered by git flakiness
+        # instead of routing. Neither of these two early returns touches
+        # active_branches, so a git hiccup can't turn a steady-state no-op
+        # into a surprise.
         gate = gs.determine_gate(skill, bd)
         if not gate:
             return {
                 "recorded": False,
-                "reason": f'No applicable gate on routed branch "{target_branch}"',
+                "reason": (
+                    f'No applicable gate on routed branch "{target_branch}" '
+                    "(--unroute to stop routing here)"
+                ),
                 "surprising": True,
             }
         if bd.get("gates", {}).get(gate):
+            # NOT surprising: this is the steady state of a routed cycle that
+            # already finished — every later skill invocation on this worktree
+            # would otherwise renag forever until someone runs --unroute. The
+            # first time a routed stamp lands (or lands on the wrong branch)
+            # is loud below; a no-op repeat of that same stamp is not.
             return {
                 "recorded": False,
                 "reason": f'"{gate}" already recorded on routed "{target_branch}"',
+            }
+        if active_branches is None:
+            # Couldn't enumerate worktrees, so we can't confirm the route's
+            # target is still checked out anywhere. Same posture as
+            # find_active_cycle below: a safety check that couldn't run is not
+            # proof the thing it checks for is fine, so this fails closed too
+            # rather than silently stamping on the strength of a stale route.
+            return {
+                "recorded": False,
+                "reason": (
+                    f'Routed target "{target_branch}" could not be verified as '
+                    "still checked out — `git worktree list` failed, so the "
+                    "stale-route check was skipped"
+                ),
+                "surprising": True,
+            }
+        if target_branch not in active_branches:
+            # The route outlived its branch (removed worktree, deleted branch).
+            # Stamping here would land a gate nobody can see or correct — so
+            # this is the one routed outcome that must interrupt regardless of
+            # what it costs, same reasoning as the stale-target write itself.
+            return {
+                "recorded": False,
+                "reason": (
+                    f'Routed target "{target_branch}" is no longer checked out '
+                    "anywhere — stale route (--unroute to clear it)"
+                ),
                 "surprising": True,
             }
         # Routed or not, this hook just watched the skill run.
         gs.record_gate(data, target_branch, gate, authorized=True)
-        return {"recorded": True, "gate": gate, "target": target_branch, "routed": True}
+        return {"recorded": True, "gate": gate, "target": target_branch}
 
     if branch == "HEAD":
         # Detached HEAD: routine mid-rebase, and there is no branch to key a
@@ -254,30 +297,33 @@ def main():
         return ho.notify("auto-record", f"skipped {skill}: unexpected error ({e})")
 
     if holder.get("recorded"):
-        # Quiet on purpose: a gate recording is the expected outcome and asks
-        # nothing of the reader. Goes through notify(surface=False) rather than
-        # a bare stderr write so the channel choice is visible as a choice.
-        # Names the branch whenever it isn't the local one — a cross-worktree
-        # stamp should never be something the user has to infer. That covers
-        # both an explicit route and the single-candidate adoption in
-        # handle_skill_completion, which
-        # a `routed`-only test would miss.
-        where = f" on {holder['target']}" if holder.get("target") != branch else ""
+        # A stamp on the local branch is the expected outcome and asks nothing
+        # of the reader — quiet. A stamp that landed anywhere else (an explicit
+        # route, or the single-candidate cross-worktree adoption) is a write
+        # nobody watching this session would otherwise see, and it cannot be
+        # corrected after the fact (skill-gated gates have no manual --record),
+        # so it surfaces. Keyed off target != branch rather than `routed` alone
+        # so it also catches the adoption path a `routed`-only check would miss.
+        cross_worktree = holder.get("target") != branch
+        where = f" on {holder['target']}" if cross_worktree else ""
         return ho.notify(
             "auto-record",
             f'recorded "{holder["gate"]}"{where} after {skill}',
-            surface=False,
+            surface=cross_worktree,
         )
     if holder.get("reason"):
         # Surfaced only when the skip is one the caller had no way to predict,
-        # i.e. it set "surprising": any skip on an explicitly routed branch
-        # (someone asked for that stamp by name), and an ambiguous
-        # cross-worktree match. Everything else is an ordinary outcome of
-        # asking — no cycle here, a gate already recorded, no applicable gate,
-        # detached HEAD, not a git repo — and stays quiet so an ungated repo
-        # doesn't nag on every skill run. Note auto-init makes the opposite
-        # call for a non-repo cwd, because there a commit really did go
-        # ungated; here there was never a cycle to record against.
+        # i.e. it set "surprising": a stale or exhausted route, a routed
+        # branch with no applicable gate, and an ambiguous cross-worktree
+        # match. NOT every skip on a routed branch — the already-recorded case
+        # deliberately omits "surprising" (see above) since it's the steady
+        # state of a finished routed cycle, not news. Everything else is an
+        # ordinary outcome of asking — no cycle here, a gate already recorded,
+        # no applicable gate, detached HEAD, not a git repo — and stays quiet
+        # so an ungated repo doesn't nag on every skill run. Note auto-init
+        # makes the opposite call for a non-repo cwd, because there a commit
+        # really did go ungated; here there was never a cycle to record
+        # against.
         return ho.notify(
             "auto-record",
             f"skipped {skill}: {holder['reason']}",

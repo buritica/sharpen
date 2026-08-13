@@ -1,0 +1,10 @@
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Ruff's own documented defaults (pyflakes + a pycodestyle error subset):
+# real bugs and syntax issues, not style opinions. This repo has no prior
+# ruff config, so leaving `select` unset pulls in ruff's full preview-style
+# ruleset (~90+ findings across files no PR touched) instead of the
+# intentional baseline CI's `ruff check .` is meant to enforce.
+select = ["E4", "E7", "E9", "F"]

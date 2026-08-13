@@ -234,6 +234,18 @@ def _check_one(inv):
         "RESETS the cycle, so any gate above is discarded and the skill-gated "
         "ones must be earned again by re-running their skills."
     )
+    # A missing skill-gate here is often not "nobody ran the skill" — it's "the
+    # skill ran, but this worktree's route sent the stamp somewhere else." The
+    # store already has the answer; say it instead of leaving the reader to
+    # find --status on their own.
+    source_root = gs.canonical_worktree_root(workdir)
+    routed = gs.routed_branch(data, source_root)
+    if routed and routed[0] != branch:
+        reason += (
+            f'\n\nThis worktree\'s skill gates are routed to "{routed[0]}", not '
+            f'"{branch}" — that may be why gates are missing here. '
+            "/sdlc:gate --unroute stops routing them elsewhere."
+        )
     return False, reason, state, notes
 
 
