@@ -137,7 +137,7 @@ def handle_skill_completion(
             }
         # Routed or not, this hook just watched the skill run.
         gs.record_gate(data, target_branch, gate, authorized=True)
-        return {"recorded": True, "gate": gate, "target": target_branch, "routed": True}
+        return {"recorded": True, "gate": gate, "target": target_branch}
 
     if branch == "HEAD":
         # Detached HEAD: routine mid-rebase, and there is no branch to key a
