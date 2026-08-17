@@ -994,18 +994,11 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
 
     def _repo_off_main(self, branch="feat/docs"):
-        # make_repo() has no `main` to diff against — these tests need a real
-        # divergence point, since _pick_tier only auto-downgrades when it can
-        # confidently diff against main/master.
-        repo = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
-        git(repo, "init", "-q", "-b", "main")
-        git(repo, "config", "user.email", "t@t")
-        git(repo, "config", "user.name", "t")
-        with open(os.path.join(repo, "README.md"), "w") as f:
-            f.write("hello\n")
-        git(repo, "add", "README.md")
-        git(repo, "commit", "-q", "-m", "init")
+        # make_repo(branch="main") already does init/config/an initial commit
+        # — these tests only need a real divergence point on top of that,
+        # since _pick_tier auto-downgrades only when it can confidently diff
+        # against main/master.
+        repo = make_repo(branch="main")
         git(repo, "checkout", "-q", "-b", branch)
         return repo
 
