@@ -8,6 +8,17 @@ if any required gate for the tier is missing. Because the store is shared across
 worktrees, a cycle recorded in one checkout is seen here even when the PR is
 created from another. Opt-in: no cycle for the branch -> allow.
 
+KNOWN BLIND SPOT, not a bug to be fixed here: `--head owner:branch` (a PR from a
+fork) strips to the bare branch name for the store lookup (extract_head_flag),
+but that name almost never has a cycle in THIS checkout's store — the fork
+contributor's own commits ran against their own clone, if any hooks ran at all.
+That reads as "no cycle -> allow" and the PR goes out ungated. This is
+architectural, not a parsing gap: the whole system is local-hook-based state
+with no shared backend across separate clones, so there is no cycle to find.
+Closing it needs a different enforcement point entirely (a CI-side check that
+re-derives gate state from the PR's own commits, not this local store) — not a
+fix to how this hook reads --head.
+
 Denials go out as the documented PreToolUse payload *and* exit 2; caveats that
 accompany an allow can only reach the user. See hook_out for why.
 
