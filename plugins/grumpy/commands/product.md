@@ -2,7 +2,7 @@
 description:
   Grumpy product review — experience, outcomes, metrics, and delight from a
   senior product engineer with high standards
-argument-hint: "[--level grumpy|grumpier|linus] [--gemini] [focus-areas] [--worktree <path>]"
+argument-hint: "[--level grumpy|grumpier|linus] [focus-areas] [--worktree <path>]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Write", "TaskCreate", "TaskUpdate", "Agent"]
 ---
 
@@ -48,34 +48,6 @@ level-appropriate version:
 ## Worktree targeting
 
 Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. When set, explore `$WT` for the project scan instead of the current directory. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
-
-## Gemini Mode
-
-Determine whether to run in Gemini mode:
-
-1. Check `$ARGUMENTS` for `--gemini` (case-insensitive). If found, remove it from arguments and use Gemini mode.
-2. If no flag, check the `GRUMPY_MODEL` environment variable. If set (any value), use Gemini mode.
-3. If neither, skip this section entirely.
-
-Gemini mode requires a diff — it cannot review the whole project. If Gemini mode is active:
-
-Note: `--level` has no effect in Gemini mode — the Gemini prompts use a fixed grumpy persona regardless of level.
-
-1. Run Scope Detection below. If no diff found: "Gemini mode requires a diff — no changes detected. Run without --gemini (or unset GRUMPY_MODEL) for a whole-project review." and stop.
-
-2. Locate the runner script:
-   ```bash
-   GEMINI_SCRIPT=$(find ~/.claude/plugins -maxdepth 6 -name "gemini.ts" -path "*/grumpy/scripts/*" 2>/dev/null | head -1)
-   ```
-   If empty, also try `./plugins/grumpy/scripts/gemini.ts` (local dev clone). If still not found, respond: "gemini.ts not found. Reinstall the grumpy plugin or check your plugin path." and stop.
-
-3. Run the following. If it exits with a non-zero code, display any error output and stop — do not launch sub-agents or run either review path:
-   ```bash
-   <diff-command> | timeout 360 bun "$GEMINI_SCRIPT" product
-   ```
-   `GEMINI_API_KEY` must be set in the environment (falls back to `GRUMPY_GEMINI_KEY`). If the command fails (non-zero exit or timeout), respond: "Gemini product review failed. See the error above. You can run without --gemini to use the normal review pipeline."
-
-4. Display the output and stop. Do not launch sub-agents or run either review path.
 
 ## Scope Detection
 
@@ -390,8 +362,6 @@ mkdir -p "$ARTIFACT_DIR"
 ```
 
 Write the complete report (from `# Product Review:` through `## Verdict`) to `$ARTIFACT_DIR/product.md` using the Write tool.
-
-If Gemini mode was used, write the Gemini output instead.
 
 ## Personality Guidelines
 

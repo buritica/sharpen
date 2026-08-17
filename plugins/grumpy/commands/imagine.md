@@ -3,7 +3,7 @@ description:
   Grumpy production imagination — behavioral audit of your diff covering happy
   paths per transport, state transitions, concurrency, error/cleanup, UX,
   logging, metrics, and edge cases including first deploy
-argument-hint: "[--level grumpy|grumpier|linus] [--gemini] [--worktree <path>]"
+argument-hint: "[--level grumpy|grumpier|linus] [--worktree <path>]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Write", "TaskCreate", "TaskUpdate", "Agent"]
 ---
 
@@ -55,36 +55,6 @@ first.
 ## Worktree targeting
 
 Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
-
-## Gemini Mode
-
-Determine whether to run in Gemini mode:
-
-1. Check `$ARGUMENTS` for `--gemini` (case-insensitive). If found, remove it from arguments and use Gemini mode.
-2. If no flag, check the `GRUMPY_MODEL` environment variable. If set (any value), use Gemini mode.
-3. If neither, skip this section and run the normal multi-agent pipeline.
-
-If Gemini mode is active:
-
-Note: `--level` has no effect in Gemini mode — the Gemini prompts use a fixed grumpy persona regardless of level.
-
-1. Determine the diff using the same priority order as Step 1 below. Run `git -C "$WT" rev-parse --abbrev-ref HEAD` first — if it returns `HEAD`, respond: "You're in detached HEAD state. Attach to a branch before running imagine." and stop. Then try each diff command in order until one returns output: `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD`, `git -C "$WT" diff --staged`, `git -C "$WT" diff`, `git -C "$WT" diff HEAD~1`.
-
-2. If the diff is empty: "There's nothing here to imagine. Did you actually write any code or just think about it really hard?" — stop.
-
-3. Locate the runner script:
-   ```bash
-   GEMINI_SCRIPT=$(find ~/.claude/plugins -maxdepth 6 -name "gemini.ts" -path "*/grumpy/scripts/*" 2>/dev/null | head -1)
-   ```
-   If empty, also try `./plugins/grumpy/scripts/gemini.ts` (local dev clone). If still not found, respond: "gemini.ts not found. Reinstall the grumpy plugin or check your plugin path." and stop.
-
-4. Run the following. If it exits with a non-zero code, display any error output and stop — do not fall back to the normal pipeline:
-   ```bash
-   <diff-command> | timeout 360 bun "$GEMINI_SCRIPT" imagine
-   ```
-   `GEMINI_API_KEY` must be set in the environment (falls back to `GRUMPY_GEMINI_KEY`). If the command fails (non-zero exit or timeout), respond: "Gemini imagine failed. See the error above. You can run without --gemini to use the normal simulation pipeline."
-
-5. Display the output and stop. Do not launch sub-agents or run the normal simulation pipeline.
 
 ## Step 1: Determine Scope
 
@@ -458,8 +428,6 @@ mkdir -p "$ARTIFACT_DIR"
 
 Write the complete Step 3 report (everything from `# Production Imagination:` through `## Verdict`) to `$ARTIFACT_DIR/imagine.md` using the Write tool.
 
-If Gemini mode was used, write the Gemini output instead.
-
 ## Step 5: Update the Plan
 
 If a plan artifact exists for the current branch, append an imagine summary to its `## Notes` section:
@@ -535,4 +503,3 @@ addressed. Don't silently modify code.
 
 - Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the base branch: `git diff origin/main...HEAD`.
 - "First deploy" scenarios are the highest-value findings — new env vars, missing migrations, config changes that need a restart. These are easy to dismiss as "obvious" but ship broken regularly.
-- Gemini mode timeout is 360 seconds. Complex diffs with many transport paths can hit this.

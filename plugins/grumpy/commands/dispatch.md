@@ -180,11 +180,14 @@ The following modes exist in this plugin. **Only ever reference or dispatch to
 modes in this list:**
 
 - `review` — comprehensive code review
-- `security` — auth, injection, credential, and data-exposure audit
-- `architecture` — structure, coupling, scalability, and conventions
+- `security` — auth, injection, credential, and data-exposure audit (whole-project,
+  not diff-scoped — see Gotchas)
+- `architecture` — structure, coupling, scalability, and conventions (whole-project,
+  not diff-scoped — see Gotchas)
 - `product` — UX, user-facing API surface, and experience quality
 - `edge-cases` — algorithm correctness, error paths, and boundary conditions
-- `cleanup` — dead code, over-abstraction, and unnecessary complexity
+- `cleanup` — dead code, over-abstraction, and unnecessary complexity (whole-project,
+  not diff-scoped — see Gotchas)
 - `imagine` — production-scenario walkthrough (deploys, async, failure modes)
 - `audit` — full-codebase comprehensive audit (use only when the diff touches
   the entire project or is a major structural change)
@@ -193,8 +196,12 @@ modes in this list:**
 
 ## Gotchas
 
-- `audit` is whole-project, not diff-based. Only route here when the diff is
-  itself a whole-project restructure or the user explicitly asks for it.
+- `audit`, `security`, `architecture`, and `cleanup` are all whole-project, not
+  diff-based — each says so in its own command doc. A diff whose keywords match
+  their routing signal (e.g. one file touching a JWT secret) still triggers a
+  full-repo scan, not a scoped one. Route to them for a small diff only when the
+  user explicitly wants that depth; otherwise say so in the report rather than
+  silently paying for a whole-project pass the diff didn't ask for.
 - `fix` is a repair action, not a review. Never dispatch to it automatically —
   mention it in the verdict as a next step.
 - Fan-out increases runtime significantly. If the diff is clearly dominated by

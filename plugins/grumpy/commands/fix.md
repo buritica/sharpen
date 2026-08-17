@@ -127,6 +127,14 @@ same file), but **in parallel across different files**.
 
 ### Model routing (thrifty split: cheap where it can, strong where it must)
 
+The split only has something to route on when the source artifact carries
+`exec:`/`accept:` hints — today that's `/grumpy:audit` alone (see Step 1).
+Findings from `review`/`imagine`/`security`/etc. have no hint, which the rule
+below resolves to `analysis` (opus) for every one of them — correct per the
+rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
+strong tier, not a mix. The thrifty split is real, just conditional on going
+through `/grumpy:audit` first.
+
 Read `plugins/grumpy/models.yaml` (relative to this plugin, not the target repo)
 for the role→model map. If it isn't readable from where you're running, use the
 native defaults below directly — they are the source of truth for dispatch. Route
@@ -140,11 +148,11 @@ each task by its `exec:` tier hint, passing the resolved model as the Task tool'
 Use the ladder's role names everywhere so escalation and clamping line up:
 `exec-trivial < exec < analysis`. `opus` (the `analysis` role) is the top
 **natively dispatchable** model, so it is the ceiling — the `audit` role's real
-models are `wrapper_required` and fall back to opus anyway, so there is no higher
+model is `wrapper_required` and falls back to opus anyway, so there is no higher
 native rung to climb to.
 
 Only `sonnet`/`opus`/`haiku` are natively dispatchable. If `models.yaml` resolves
-a role to a `wrapper_required` model (Fable/Gemini), use its native fallback
+a role to a `wrapper_required` model (Fable), use its native fallback
 (`opus`) and say so.
 
 `--max-tier <role>` **clamps** routing to that ceiling (order:
@@ -300,6 +308,6 @@ If yes, repeat Steps 2–4 for the Optional bucket.
 
 ## Gotchas
 
-- Fix reads the prior review/imagine output from conversation context. If that context was lost (compaction, new conversation), fix has nothing to work with — re-run the review first.
+- Fix reads persisted artifacts under `.claude/grumpy/<branch>/` first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
 - Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
 - Fix only addresses critical and serious findings by default. Medium/low findings are logged but not fixed — file them as issues if they warrant follow-up.
