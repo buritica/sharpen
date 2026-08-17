@@ -4,8 +4,12 @@ PostToolUse hook: auto-init an SDLC gate cycle on any git commit to a
 non-default branch (idempotent — no-ops if a cycle already exists).
 
 When a git commit runs on a feature branch that has no active gate cycle, this
-hook initializes a 'small-medium' cycle so the enforce-sdlc-gates.py hook fires
-on a subsequent `gh pr create` — without requiring a manual /sdlc:gate --init.
+hook initializes a gate cycle so the enforce-sdlc-gates.py hook fires on a
+subsequent `gh pr create` — without requiring a manual /sdlc:gate --init.
+Defaults to 'small-medium'; auto-downgrades to 'tiny' when every file changed
+since the branch diverged from main/master is confidently docs/text/assets
+(see _pick_tier) — mirrors /sdlc:gate's own docs-only classification, but
+applied automatically instead of waiting for a human to notice and re-init.
 
 Projects can opt out by shipping their own SDLC overlay skill at
 `.claude/skills/sdlc/SKILL.md`. The overlay signals "this repo has its own
@@ -40,6 +44,27 @@ import shell_parse as sp
 GIT_COMMIT = "git commit"
 DEFAULT_TIER = "small-medium"
 OVERLAY_SKILL_PATH = os.path.join(".claude", "skills", "sdlc", "SKILL.md")
+
+# Allowlist, not a denylist: an unrecognized extension (or none at all) is
+# NOT docs. See _pick_tier — under-classifying silently skips gates 2-6,
+# over-classifying is one `--init tiny` away from being right, so ties go to
+# the bigger tier.
+DOCS_EXTENSIONS = {
+    ".md",
+    ".mdx",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".webp",
+    ".pdf",
+}
+DOCS_BASENAMES = {"LICENSE", "NOTICE", "CHANGELOG", "COPYING"}
 
 
 # Deliberately does NOT claim the commit succeeded. This hook cannot know that:
@@ -113,6 +138,53 @@ def has_project_overlay(cwd=None):
     if not top:
         return False
     return os.path.isfile(os.path.join(top, OVERLAY_SKILL_PATH))
+
+
+def _is_docs_path(path):
+    base = os.path.basename(path)
+    if base in DOCS_BASENAMES:
+        return True
+    _, ext = os.path.splitext(path)
+    return ext.lower() in DOCS_EXTENSIONS
+
+
+def _changed_paths_since_default(workdir):
+    """Files changed on this branch since it diverged from main/master, or
+    None when that can't be determined (neither branch exists locally, or a
+    git failure) — the caller must NOT assume docs-only on None."""
+    for base in ("main", "master"):
+        try:
+            merge_base = (
+                subprocess.check_output(
+                    ["git", "merge-base", base, "HEAD"],
+                    cwd=workdir,
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode()
+                .strip()
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        try:
+            out = subprocess.check_output(
+                ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
+                cwd=workdir,
+                stderr=subprocess.DEVNULL,
+            ).decode()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return [line for line in out.splitlines() if line]
+    return None
+
+
+def _pick_tier(workdir):
+    """DEFAULT_TIER unless every file changed since the default branch is
+    confidently docs/text/assets. Any uncertainty (no main/master to diff
+    against, a git failure, an empty diff) keeps the safe default."""
+    paths = _changed_paths_since_default(workdir)
+    if not paths:
+        return DEFAULT_TIER
+    return "tiny" if all(_is_docs_path(p) for p in paths) else DEFAULT_TIER
 
 
 def main():
@@ -208,6 +280,12 @@ def main():
         )
 
     path = gs.default_store_path(cwd=workdir)
+    # Resolved before the lock, same as every other git call in this hook —
+    # a stalled git inside update_store's exclusive lock would stall every
+    # other worktree's writer. Harmless to compute even when a cycle already
+    # exists (the mutator's idempotency check discards it), since it's a
+    # read-only diff, not a write.
+    tier = _pick_tier(workdir)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.
@@ -218,7 +296,7 @@ def main():
         # revoking it. Only an explicit --init/--unroute tears a route down.
         result = gs.update_store(
             path,
-            lambda d: None if d.get(branch) else gs.init_gates(d, branch, DEFAULT_TIER),
+            lambda d: None if d.get(branch) else gs.init_gates(d, branch, tier),
         )
     # Every failure here leaves the branch with no cycle, same as above.
     except gs.StoreCorruptError as e:
@@ -247,13 +325,24 @@ def main():
         # skill-gated gates cannot be recorded any other way.
         #
         # Which is exactly why it exits 2 rather than 0: it asks the reader to
-        # do something ("re-init as tiny if the change qualifies"), and at
-        # exit 0 no reader ever gets it. Fires at most once per branch, since
-        # `result` is None when a cycle already exists. Non-blocking — the
-        # commit already ran.
+        # do something, and at exit 0 no reader ever gets it. Fires at most
+        # once per branch, since `result` is None when a cycle already exists.
+        # Non-blocking — the commit already ran.
+        if tier == "tiny":
+            # _pick_tier already confirmed every changed file is docs/text/
+            # assets — gates 2-6 don't apply, so there's nothing to ask the
+            # reader to widen unless that changes.
+            return ho.notify(
+                "auto-init",
+                f'{COMMIT_OK}. It armed a tiny gate cycle for "{branch}" — '
+                "every file changed so far looks like docs/text/assets, so "
+                "the grumpy review gates don't apply. Run "
+                "`/sdlc:gate --init small-medium` (or `significant`) if that "
+                "changes.",
+            )
         return ho.notify(
             "auto-init",
-            f"{COMMIT_OK}. It armed a {DEFAULT_TIER} gate cycle for "
+            f"{COMMIT_OK}. It armed a {tier} gate cycle for "
             f'"{branch}": gates 2-6 need /simplify and the grumpy skills to '
             "record, so without them, re-init as tiny (/sdlc:gate --init tiny) "
             "if the change qualifies.",
