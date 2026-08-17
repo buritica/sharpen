@@ -1045,7 +1045,7 @@ class AutoInitTest(unittest.TestCase):
         # test in this class uses) — can't confirm docs-only, so the safe
         # default holds. This is the existing behavior, asserted explicitly
         # so a future change to the diff logic can't silently start guessing.
-        r = self._commit()
+        self._commit()
         data = read_json(self.gp)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
 
