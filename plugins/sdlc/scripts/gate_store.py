@@ -22,7 +22,8 @@ Schema:
       "tier": "small-medium",
       "created_at": "2026-06-16T04:53:38+00:00",
       "gates": { "tests": "<iso8601>", "lint": "<iso8601>", ... },
-      "routed_from": ["/abs/path/to/a/driving/worktree"]   # optional
+      "routed_from": ["/abs/path/to/a/driving/worktree"],   # optional
+      "tier_reason": "docs-only diff auto-detected (2 file(s))"   # optional
     }
   }
 
@@ -32,6 +33,11 @@ B's cwd — would otherwise stamp skill gates on B's branch. At `--init` the
 command writes B's worktree root here, and the hook resolves its own root and
 prefers the branch routed from it over `detect_branch()`. A channel, not a
 heuristic: it works with any number of live worktrees.
+
+`tier_reason` records WHY a tier was picked (e.g. auto-init-gate-cycle.py's
+docs-only detection). Its absence is the signal that a tier was chosen
+manually (via `--init`) rather than auto-detected — it is never backfilled
+for a manual choice.
 """
 
 import fcntl
@@ -418,6 +424,16 @@ def routed_branch(data, source_root):
     return None
 
 
+def has_any_route(data):
+    """Cheap in-memory check: does ANY branch in the store have a route?
+    `canonical_worktree_root()` (what a caller needs to then call
+    route_mismatch/route_mismatch_note) is a `git rev-parse` subprocess —
+    callers that would only spawn it to find nothing routed (e.g. every
+    plain `--status` call on a repo that's never used routing) should check
+    this first and skip the spawn entirely."""
+    return any(route_sources(bd) for bd in data.values())
+
+
 def route_mismatch(data, source_root, branch):
     """The branch `source_root` is routed to, if that's not `branch` — else
     None. Shared by every caller that just needs to say "your skill gates
@@ -428,6 +444,20 @@ def route_mismatch(data, source_root, branch):
     if routed and routed[0] != branch:
         return routed[0]
     return None
+
+
+def route_mismatch_note(data, source_root, branch):
+    """Ready-to-append sentence when `source_root`'s skill gates route to a
+    branch other than `branch`, else None. One canonical wording shared by
+    every caller (enforce-sdlc-gates.py's denial, record-gate.py's --status)
+    so a future tweak doesn't have to be remembered in more than one place."""
+    elsewhere = route_mismatch(data, source_root, branch)
+    if not elsewhere:
+        return None
+    return (
+        f'This worktree\'s skill gates are routed to "{elsewhere}", not '
+        f'"{branch}" (--unroute to stop).'
+    )
 
 
 def record_gate(data, branch, gate, authorized=False):
@@ -455,7 +485,8 @@ def record_gate(data, branch, gate, authorized=False):
         raise ValueError(
             f'No gate cycle for branch "{branch}". Run: record-gate.py --init <tier>'
         )
-    if gate not in required_gates(bd):
+    required = required_gates(bd)
+    if gate not in required:
         # A tier that doesn't require this gate has no business recording
         # it — determine_gate already keeps the auto-record hook from ever
         # asking for one (see its own check), so the only way here is a
@@ -464,7 +495,7 @@ def record_gate(data, branch, gate, authorized=False):
         # format_status) already assumes rather than re-filters.
         raise ValueError(
             f'"{gate}" is not required by the "{bd.get("tier")}" tier for '
-            f'"{branch}". Required: {", ".join(required_gates(bd))}'
+            f'"{branch}". Required: {", ".join(required)}'
         )
     bd.setdefault("gates", {})[gate] = _now()
     return bd

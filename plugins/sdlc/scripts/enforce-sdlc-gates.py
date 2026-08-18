@@ -250,13 +250,9 @@ def _check_one(inv):
     # store already has the answer; say it instead of leaving the reader to
     # find --status on their own.
     source_root = gs.canonical_worktree_root(workdir)
-    elsewhere = gs.route_mismatch(data, source_root, branch)
-    if elsewhere:
-        reason += (
-            f'\n\nThis worktree\'s skill gates are routed to "{elsewhere}", not '
-            f'"{branch}" — that may be why gates are missing here. '
-            "/sdlc:gate --unroute stops routing them elsewhere."
-        )
+    note = gs.route_mismatch_note(data, source_root, branch)
+    if note:
+        reason += f"\n\n{note} That may be why gates are missing here."
     return False, reason, state, notes
 
 

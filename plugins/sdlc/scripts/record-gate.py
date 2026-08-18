@@ -177,12 +177,16 @@ def main(argv):
             # --unroute's output. Say it plainly whenever this worktree's
             # skill gates land somewhere other than the branch being asked
             # about, regardless of whether that branch has a cycle at all.
-            elsewhere = gs.route_mismatch(data, gs.canonical_worktree_root(), branch)
-            if elsewhere:
-                out += (
-                    f'\n\nThis worktree\'s skill gates are routed to "{elsewhere}", '
-                    f'not "{branch}" (--unroute to stop).'
+            note = None
+            if gs.has_any_route(data):
+                # Skip the git subprocess spawn (canonical_worktree_root)
+                # entirely on a repo that's never used routing — the
+                # overwhelmingly common case for a plain --status call.
+                note = gs.route_mismatch_note(
+                    data, gs.canonical_worktree_root(), branch
                 )
+            if note:
+                out += f"\n\n{note}"
             sys.stdout.write(out + "\n")
         elif command == "--oneline":
             sys.stdout.write(gs.format_oneline(gs.load_store(path).get(branch)) + "\n")

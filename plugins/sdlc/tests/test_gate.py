@@ -1919,6 +1919,23 @@ class RouteStoreTest(unittest.TestCase):
     def test_route_mismatch_is_none_when_not_routed_at_all(self):
         self.assertIsNone(gs.route_mismatch(self.d, "/wt/nowhere", "feat/a"))
 
+    def test_route_mismatch_note_names_branch_and_unroute(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        note = gs.route_mismatch_note(self.d, "/wt/b", "feat/b")
+        self.assertIn("feat/a", note)
+        self.assertIn("--unroute", note)
+
+    def test_route_mismatch_note_is_none_when_routed_to_the_asked_branch(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertIsNone(gs.route_mismatch_note(self.d, "/wt/b", "feat/a"))
+
+    def test_has_any_route_false_on_an_unrouted_store(self):
+        self.assertFalse(gs.has_any_route(self.d))
+
+    def test_has_any_route_true_once_any_branch_is_routed(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertTrue(gs.has_any_route(self.d))
+
     def test_route_survives_reinit(self):
         # --init doubles as the post-gate reset. Losing the route there would
         # silently unhook the driving worktree halfway through the chain.
