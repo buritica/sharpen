@@ -144,11 +144,20 @@ pyproject.toml [tool.ruff] → ruff format --check . && ruff check .
 Cargo.toml → cargo clippy
 ansible.cfg / .ansible-lint → ansible-lint   (run yamllint too if .yamllint present)
 .yamllint / .yamllint.yml / .yamllint.yaml → yamllint .
+*.sh files present + `shellcheck` on PATH → shellcheck <the *.sh files>
 ```
 
 Ansible/IaC repos are easy to miss: they have no package manifest, so without
 these lines the lint gate silently does nothing. If `.ansible-lint`/`.yamllint`
 exist, the lint gate is `ansible-lint` + `yamllint .` — not a no-op.
+
+`shellcheck` is additive, not exclusive: run it alongside whatever else this
+table matched whenever the repo has `.sh` files at all (an Ansible repo with
+shell scripts under `files/` or `scripts/` needs both ansible-lint AND
+shellcheck — CI running four linters while the gate only reproduces one or
+two is exactly the false-confidence gap this table exists to close). If
+`shellcheck` isn't installed, say so in the gate's mode line rather than
+silently skipping it.
 
 If the project has a `lint` or `lint:fix` script in package.json, prefer that.
 
