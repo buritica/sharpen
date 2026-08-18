@@ -17,7 +17,7 @@
       "name": "grumpy",
       "source": "./plugins/grumpy",
       "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents",
-      "version": "1.7.0"
+      "version": "2.0.0"
     },
     {
       "name": "sdlc-guardrails",

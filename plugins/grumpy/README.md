@@ -57,7 +57,11 @@ Use it when the invoking session's cwd isn't the worktree you want reviewed (orc
 
 ## Upgrading
 
-Public releases start here — nothing to migrate from.
+**Upgrading to 2.0.0 (Gemini Mode removed):** `--gemini`, `GRUMPY_MODEL`, and
+`scripts/gemini.ts` are gone. If you had `GRUMPY_MODEL` set in your shell profile,
+it is now silently ignored — every command runs the normal multi-agent pipeline
+regardless. `models.yaml`'s role→model map is unaffected; it still drives the
+real tier-routed dispatch `/grumpy:fix` uses.
 
 `grumpy` composes with `sdlc` through a shared path contract
 (`.claude/grumpy/<branch>/` and `.claude/sdlc/<branch>/`): review and imagine read a plan

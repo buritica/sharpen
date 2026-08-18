@@ -20,6 +20,11 @@ CI, and treat a FAIL here as more embarrassing than a FAIL anywhere else. `/sdlc
 owns the 1Password tiers. `/sdlc:test-gaps` and `/sdlc:test-critique` deepen gate 1 when a
 change adds real behavior, because exit 0 proves the suite ran, not that it means anything.
 
+This repo has no secret-scan job (P4 in the audit spec) by deliberate choice — the
+gitleaks workflow it shipped with silently no-op'd without an undocumented
+`GITLEAKS_LICENSE` secret, so it was removed rather than fixed. `/sdlc:audit` will flag
+P4 as missing here; that's expected, not a regression to chase.
+
 `/sdlc:new` and `/sdlc:init` are for consumer repos, not this one. This repo is already
 scaffolded.
 
