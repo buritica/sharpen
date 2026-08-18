@@ -1042,6 +1042,30 @@ class AutoInitTest(unittest.TestCase):
         data = read_json(self.gp)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
 
+    def test_prefers_origin_main_over_local_main_when_they_diverge(self):
+        # The exact scenario _merge_base's docstring exists to protect
+        # against: local main is ahead of origin/main (nobody fetches before
+        # every commit). If local main were preferred, a docs-only commit on
+        # top of a LOCAL-ONLY non-docs commit would misclassify as tiny —
+        # origin/main doesn't know about that non-docs commit yet, so basing
+        # the diff on it correctly pulls it into the comparison.
+        repo = make_repo(branch="main")  # init commit: README.md only
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        with open(os.path.join(repo, "app.py"), "w") as f:
+            f.write("print(1)\n")
+        git(repo, "add", "app.py")
+        git(repo, "commit", "-q", "-m", "app")  # local main only, origin/main unaware
+        git(repo, "checkout", "-q", "-b", "feat/docs")
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("docs\n")
+        git(repo, "add", "docs.md")
+        git(repo, "commit", "-q", "-m", "docs")
+        r = self._commit(cmd="git commit -q -m docs", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "small-medium")
+
     def test_no_branch_detected_exits_2_so_the_warning_is_seen(self):
         # A PostToolUse hook's stderr only reaches the model on exit 2; on
         # exit 0 it goes to the debug log. No cycle stamped means the later

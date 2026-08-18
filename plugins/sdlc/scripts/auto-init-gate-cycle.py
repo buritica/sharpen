@@ -59,7 +59,10 @@ DOCS_EXTENSIONS = {
     ".jpg",
     ".jpeg",
     ".gif",
-    ".svg",
+    # NOT .svg: unlike the raster formats above, SVG is XML and can carry
+    # <script>/event-handler payloads — a "docs-only" diff whose only file is
+    # a crafted .svg would otherwise skip the review gate for exactly the
+    # kind of content that needs it.
     ".ico",
     ".webp",
     ".pdf",
@@ -285,11 +288,15 @@ def main():
     # subprocess spawns: this hook fires on EVERY commit, not just the first
     # per branch, but the tier it computes is only used when a cycle doesn't
     # exist yet — discarded by the mutator's idempotency check on every
-    # commit after the first. A corrupt store here just means "can't tell";
-    # fall through and let the mutator's own load raise and report it below.
+    # commit after the first. Broad except on purpose: a corrupt store, a
+    # permissions blip, a delete racing this read, or a syntactically-valid-
+    # but-wrong-shape store (`.get` on a non-dict) all just mean "can't tell
+    # here" — fall through to computing the tier normally rather than
+    # crashing before the real error handling below (which re-reads the same
+    # store under the lock) ever gets a chance to report it properly.
     try:
         cycle_exists = bool(gs.load_store(path).get(branch))
-    except gs.StoreCorruptError:
+    except Exception:
         cycle_exists = False
     tier = DEFAULT_TIER if cycle_exists else _pick_tier(workdir)
     try:
