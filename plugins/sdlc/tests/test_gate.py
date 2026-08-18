@@ -1852,6 +1852,47 @@ class AutoRecordAmbiguityTest(unittest.TestCase):
         self.assertTrue(res["recorded"])
         self.assertEqual(res["target"], "feat/a")
 
+    def test_detached_head_falls_back_to_the_one_pending_cycle(self):
+        # The anchor checkout of a worktree-based session sits on detached
+        # HEAD by design (git worktree add's normal shape) — that must not
+        # block the cross-worktree fallback that exists precisely for "can't
+        # detect branch from cwd". Issue #5.
+        data = {}
+        gs.init_gates(data, "feat/a", "small-medium")
+        res = auto.handle_skill_completion(
+            "grumpy:review", data, branch="HEAD", active_branches={"feat/a"}
+        )
+        self.assertTrue(res["recorded"])
+        self.assertEqual(res["target"], "feat/a")
+
+    def test_detached_head_with_no_cycles_stays_quiet(self):
+        # Existing behavior preserved: routine mid-rebase, nothing lost.
+        data = {}
+        res = auto.handle_skill_completion(
+            "grumpy:review", data, branch="HEAD", active_branches=set()
+        )
+        self.assertFalse(res["recorded"])
+        self.assertFalse(res.get("surprising"))
+        self.assertIn("detached HEAD", res["reason"])
+
+    def test_detached_head_with_ambiguous_cycles_surfaces(self):
+        # Two live candidates, still on detached HEAD: refuse to guess, same
+        # as the named-branch case — and say so loudly, since this WAS a
+        # cycle we declined to pick.
+        data = {}
+        gs.init_gates(data, "feat/a", "small-medium")
+        gs.init_gates(data, "feat/b", "small-medium")
+        res = auto.handle_skill_completion(
+            "grumpy:review",
+            data,
+            branch="HEAD",
+            active_branches={"feat/a", "feat/b"},
+        )
+        self.assertFalse(res["recorded"])
+        self.assertTrue(res["surprising"])
+        self.assertEqual(data["feat/a"]["gates"], {})
+        self.assertEqual(data["feat/b"]["gates"], {})
+
 
 class StoreHousekeepingTest(unittest.TestCase):
     def test_fallback_store_honors_the_caller_cwd(self):
@@ -2089,6 +2130,19 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("grumpy-review", self.gates("feat/c"))
         self.assertNotIn("feat/b", read_json(self.gp))
+
+    def test_detached_head_anchor_falls_back_to_the_one_pending_worktree_cycle(self):
+        # Issue #5, end to end with real git: the anchor checkout of a
+        # worktree-based session sits on detached HEAD by design (`git
+        # worktree add`'s normal shape). That must not block the
+        # cross-worktree fallback that exists precisely for "can't detect
+        # branch from cwd" — only one other checked-out branch (feat/b) has
+        # a pending cycle, so it's unambiguous.
+        self.cli(["--init", "small-medium", "--branch", "feat/b"], self.wt_b)
+        git(self.main, "checkout", "-q", "--detach")
+        r = self.skill("grumpy:review", self.main)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("grumpy-review", self.gates("feat/b"))
 
     def test_status_names_the_branch_this_worktree_actually_routes_to(self):
         # Before this, --status from the DRIVING worktree only showed that
