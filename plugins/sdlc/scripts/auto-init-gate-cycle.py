@@ -4,8 +4,12 @@ PostToolUse hook: auto-init an SDLC gate cycle on any git commit to a
 non-default branch (idempotent — no-ops if a cycle already exists).
 
 When a git commit runs on a feature branch that has no active gate cycle, this
-hook initializes a 'small-medium' cycle so the enforce-sdlc-gates.py hook fires
-on a subsequent `gh pr create` — without requiring a manual /sdlc:gate --init.
+hook initializes a gate cycle so the enforce-sdlc-gates.py hook fires on a
+subsequent `gh pr create` — without requiring a manual /sdlc:gate --init.
+Defaults to 'small-medium'; auto-downgrades to 'tiny' when every file changed
+since the branch diverged from main/master is confidently docs/text/assets
+(see _pick_tier) — mirrors /sdlc:gate's own docs-only classification, but
+applied automatically instead of waiting for a human to notice and re-init.
 
 Projects can opt out by shipping their own SDLC overlay skill at
 `.claude/skills/sdlc/SKILL.md`. The overlay signals "this repo has its own
@@ -40,6 +44,30 @@ import shell_parse as sp
 GIT_COMMIT = "git commit"
 DEFAULT_TIER = "small-medium"
 OVERLAY_SKILL_PATH = os.path.join(".claude", "skills", "sdlc", "SKILL.md")
+
+# Allowlist, not a denylist: an unrecognized extension (or none at all) is
+# NOT docs. See _pick_tier — under-classifying silently skips gates 2-6,
+# over-classifying is one `--init tiny` away from being right, so ties go to
+# the bigger tier.
+DOCS_EXTENSIONS = {
+    ".md",
+    ".mdx",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    # NOT .svg: unlike the raster formats above, SVG is XML and can carry
+    # <script>/event-handler payloads — a "docs-only" diff whose only file is
+    # a crafted .svg would otherwise skip the review gate for exactly the
+    # kind of content that needs it.
+    ".ico",
+    ".webp",
+    ".pdf",
+}
+DOCS_BASENAMES = {"LICENSE", "NOTICE", "CHANGELOG", "COPYING"}
 
 
 # Deliberately does NOT claim the commit succeeded. This hook cannot know that:
@@ -90,6 +118,22 @@ def is_git_commit(command):
     return sp.invokes(command, GIT_COMMIT)
 
 
+def _git_output(args, cwd=None):
+    """Run git, return decoded+stripped stdout, or None on any failure.
+
+    Local to this file rather than gate_store._git (which raises instead of
+    returning None): every caller here wants "couldn't determine" folded into
+    one falsy value, not an exception to catch again at each call site."""
+    try:
+        return (
+            subprocess.check_output(["git", *args], cwd=cwd, stderr=subprocess.DEVNULL)
+            .decode()
+            .strip()
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def has_project_overlay(cwd=None):
     """Return True when the repo ships its own SDLC overlay skill.
 
@@ -98,21 +142,73 @@ def has_project_overlay(cwd=None):
     overlay file lives on this branch). Any resolution failure returns False
     so the hook keeps its current default-init behavior for repos without an
     overlay."""
-    try:
-        top = (
-            subprocess.check_output(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=cwd,
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False
+    top = _git_output(["rev-parse", "--show-toplevel"], cwd=cwd)
     if not top:
         return False
     return os.path.isfile(os.path.join(top, OVERLAY_SKILL_PATH))
+
+
+def _is_docs_path(path):
+    base = os.path.basename(path)
+    if base in DOCS_BASENAMES:
+        return True
+    _, ext = os.path.splitext(path)
+    return ext.lower() in DOCS_EXTENSIONS
+
+
+def _default_branch_candidates(workdir):
+    """Branches to try as the diff base, most-authoritative first.
+
+    `origin/HEAD`'s symbolic ref names the actual default branch when it's
+    known (set by `git remote set-head origin --auto`, or by some clones) —
+    checked first so a repo whose default branch isn't `main`/`master` (e.g.
+    `trunk`, `develop`) isn't silently unclassifiable forever. It isn't
+    always set, so the hardcoded names remain as a fallback, in the same
+    origin-before-local order as before (see _merge_base)."""
+    candidates = []
+    symbolic = _git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=workdir)
+    if symbolic and symbolic.startswith("refs/remotes/"):
+        resolved = symbolic[len("refs/remotes/") :]
+        candidates.append(resolved)
+    for base in ("origin/main", "origin/master", "main", "master"):
+        if base not in candidates:
+            candidates.append(base)
+    return candidates
+
+
+def _merge_base(workdir):
+    """Merge-base with the first resolvable candidate from
+    _default_branch_candidates, or None. origin/* before local: /sdlc:gate's
+    own documented docs-only check runs `git diff --name-only
+    origin/main...HEAD` (gate.md), and a stale local `main` (nobody fetches
+    before every commit) would otherwise let this hook and that documented
+    check disagree about the same branch."""
+    for base in _default_branch_candidates(workdir):
+        merge_base = _git_output(["merge-base", base, "HEAD"], cwd=workdir)
+        if merge_base:
+            return merge_base
+    return None
+
+
+def _changed_paths_since_default(workdir):
+    """Files changed on this branch since it diverged from the default
+    branch, or None when that can't be determined (no default branch found,
+    or a git failure) — the caller must NOT assume docs-only on None."""
+    merge_base = _merge_base(workdir)
+    if merge_base is None:
+        return None
+    out = _git_output(["diff", "--name-only", f"{merge_base}..HEAD"], cwd=workdir)
+    if out is None:
+        return None
+    return [line for line in out.splitlines() if line]
+
+
+def _pick_tier(workdir):
+    """DEFAULT_TIER unless every file changed since the default branch is
+    confidently docs/text/assets. Any uncertainty (no default branch to diff
+    against, a git failure, an empty diff) keeps the safe default."""
+    paths = _changed_paths_since_default(workdir)
+    return "tiny" if paths and all(_is_docs_path(p) for p in paths) else DEFAULT_TIER
 
 
 def main():
@@ -208,6 +304,35 @@ def main():
         )
 
     path = gs.default_store_path(cwd=workdir)
+    # Cheap, lock-free pre-check before paying for _pick_tier's 2-3 git
+    # subprocess spawns: this hook fires on EVERY commit, not just the first
+    # per branch, but the tier it computes is only used when a cycle doesn't
+    # exist yet — discarded by the mutator's idempotency check on every
+    # commit after the first. Broad except on purpose: a corrupt store, a
+    # permissions blip, a delete racing this read, or a syntactically-valid-
+    # but-wrong-shape store (`.get` on a non-dict) all just mean "can't tell
+    # here" — fall through to computing the tier normally rather than
+    # crashing before the real error handling below (which re-reads the same
+    # store under the lock) ever gets a chance to report it properly.
+    try:
+        cycle_exists = bool(gs.load_store(path).get(branch))
+    except Exception as e:
+        # Debug-log only (surface=False): this hook's real error handling —
+        # StoreCorruptError/ValueError/OSError/Exception around update_store,
+        # a few lines down — re-reads the same store under the lock and
+        # reports properly if something's actually wrong. This is just the
+        # pre-check's own attempt failing, not a new failure mode; going
+        # fully silent here would be the one place in this file that lets a
+        # bug vanish without a trace, which is exactly what every other
+        # except block here is written to avoid.
+        ho.notify(
+            "auto-init",
+            f"pre-check couldn't read the gate store at {path} ({e}), "
+            "computing tier normally",
+            surface=False,
+        )
+        cycle_exists = False
+    tier = DEFAULT_TIER if cycle_exists else _pick_tier(workdir)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.
@@ -218,7 +343,7 @@ def main():
         # revoking it. Only an explicit --init/--unroute tears a route down.
         result = gs.update_store(
             path,
-            lambda d: None if d.get(branch) else gs.init_gates(d, branch, DEFAULT_TIER),
+            lambda d: None if d.get(branch) else gs.init_gates(d, branch, tier),
         )
     # Every failure here leaves the branch with no cycle, same as above.
     except gs.StoreCorruptError as e:
@@ -247,17 +372,27 @@ def main():
         # skill-gated gates cannot be recorded any other way.
         #
         # Which is exactly why it exits 2 rather than 0: it asks the reader to
-        # do something ("re-init as tiny if the change qualifies"), and at
-        # exit 0 no reader ever gets it. Fires at most once per branch, since
-        # `result` is None when a cycle already exists. Non-blocking — the
-        # commit already ran.
-        return ho.notify(
-            "auto-init",
-            f"{COMMIT_OK}. It armed a {DEFAULT_TIER} gate cycle for "
-            f'"{branch}": gates 2-6 need /simplify and the grumpy skills to '
-            "record, so without them, re-init as tiny (/sdlc:gate --init tiny) "
-            "if the change qualifies.",
-        )
+        # do something, and at exit 0 no reader ever gets it. Fires at most
+        # once per branch, since `result` is None when a cycle already exists.
+        # Non-blocking — the commit already ran.
+        if tier == "tiny":
+            # _pick_tier already confirmed every changed file is docs/text/
+            # assets — gates 2-6 don't apply, so there's nothing to ask the
+            # reader to widen unless that changes.
+            detail = (
+                f'It armed a tiny gate cycle for "{branch}" — every file '
+                "changed so far looks like docs/text/assets, so the grumpy "
+                "review gates don't apply. Run `/sdlc:gate --init "
+                "small-medium` (or `significant`) if that changes."
+            )
+        else:
+            detail = (
+                f'It armed a {tier} gate cycle for "{branch}": gates 2-6 '
+                "need /simplify and the grumpy skills to record, so without "
+                "them, re-init as tiny (/sdlc:gate --init tiny) if the "
+                "change qualifies."
+            )
+        return ho.notify("auto-init", f"{COMMIT_OK}. {detail}")
     return 0
 
 

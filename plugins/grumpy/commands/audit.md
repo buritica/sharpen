@@ -48,7 +48,7 @@ planning (Phases 1, 3, 4) on the strongest available model. Read
 Use the `audit` role for synthesis/planning and `analysis` for the composed
 reviews. Only `sonnet`/`opus`/`haiku` are natively dispatchable via the Task
 tool's `model` argument; map any role whose model is marked `wrapper-required`
-(e.g. Fable, Gemini) down to its documented native fallback (`opus`) and note
+(e.g. Fable) down to its documented native fallback (`opus`) and note
 the substitution in the report's run header. **Never silently downgrade** — say
 which model actually ran.
 

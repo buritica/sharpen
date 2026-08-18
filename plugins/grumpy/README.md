@@ -33,7 +33,7 @@ agent and escalating one tier on a failed `accept:` check:
 - `--max-tier <role>` clamps the ceiling (native dispatch tops at `opus`: `exec-trivial < exec < analysis`)
 
 The role→model map lives in `models.yaml` (single switch point; Claude native,
-Gemini/Fable marked `wrapper-required` until a per-provider runner exists).
+Fable marked `wrapper-required` until a per-provider runner exists).
 
 ## Grumpy Levels
 
@@ -55,43 +55,13 @@ Every command accepts `--worktree <path>` (alias `--path <path>`). When set, all
 
 Use it when the invoking session's cwd isn't the worktree you want reviewed (orchestrators, parallel `isolation: worktree` agents, `grumpy:audit → grumpy:fix` against a target repo). Flag absent = current directory, unchanged.
 
-## Gemini Mode
-
-`review`, `imagine`, `edge-cases`, and `product` can route through the Gemini
-API for faster single-call reviews.
-
-### Prerequisites
-
-- [`bun`](https://bun.sh) installed and on `PATH` &mdash; the runner script (`scripts/gemini.ts`) uses the bun shebang and bun's built-in `fetch`. No `npm install` is needed; the script has zero dependencies.
-- `GEMINI_API_KEY` (or `GRUMPY_GEMINI_KEY`) set in your environment. Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
-
-Verify both:
-
-```bash
-command -v bun && echo "bun: ok" || echo "bun: MISSING"
-[ -n "$GEMINI_API_KEY$GRUMPY_GEMINI_KEY" ] && echo "key: set" || echo "key: MISSING"
-```
-
-### Configuration
-
-```bash
-export GEMINI_API_KEY=your-key
-export GRUMPY_MODEL=gemini-pro   # or gemini-flash
-```
-
-Per-invocation flags override the env var:
-
-```bash
-/grumpy:review --gemini-flash   # fast
-/grumpy:review --gemini-pro     # thorough, uses extended thinking
-```
-
-If `bun` or the key is missing, the command will tell you and fall back to suggesting the normal multi-agent pipeline.
-
-
 ## Upgrading
 
-Public releases start here — nothing to migrate from.
+**Upgrading to 2.0.0 (Gemini Mode removed):** `--gemini`, `GRUMPY_MODEL`, and
+`scripts/gemini.ts` are gone. If you had `GRUMPY_MODEL` set in your shell profile,
+it is now silently ignored — every command runs the normal multi-agent pipeline
+regardless. `models.yaml`'s role→model map is unaffected; it still drives the
+real tier-routed dispatch `/grumpy:fix` uses.
 
 `grumpy` composes with `sdlc` through a shared path contract
 (`.claude/grumpy/<branch>/` and `.claude/sdlc/<branch>/`): review and imagine read a plan

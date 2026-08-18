@@ -116,6 +116,8 @@ For **Tiny** (≤3 lines, no executable code): gates 1, 7, 8 only.
 
 For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only origin/main...HEAD`: only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
 
+`auto-init-gate-cycle.py` already runs this same check automatically on the first commit to a new branch — a confidently docs-only diff arms `tiny` on its own, no `--init` needed. This manual path still matters for a branch that *starts* with code (so the hook already armed `small-medium`) but later turns out to be docs-only, or for confirming what the hook decided.
+
 ## Auto-detection
 
 Detect the project's toolchain by checking for config files:
@@ -232,3 +234,4 @@ After any post-chain modification, reset gate tracking and re-run the full chain
 - The simplify gate (gate 2) is the most commonly skipped. If no simplify skill or grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.
 - `--worktree` without `--route-from` is the quiet failure: the bash gates land on `$WT`'s branch and the skill gates land on this session's, so the chain never completes and nothing says why. `--status --branch "$BRANCH"` shows `Driven from:` when the route is in place.
 - Gate tracking + enforcement are pure python (stdlib), so the `gh pr create` block works without `bun`. (`bun` may still be the project's *test* runner — that's a separate, per-project toolchain concern.)
+- Enforcement is **local-hook state, not a hosted backend**: a PR opened with `--head owner:branch` (a fork) has no cycle in this checkout's shared store, no matter what the fork contributor's own hooks recorded on their side — it reads as "no cycle -> allow" and ships ungated. This system does not defend against unreviewed external contributions; a repo that accepts fork PRs needs a CI-side gate too, not just this hook.

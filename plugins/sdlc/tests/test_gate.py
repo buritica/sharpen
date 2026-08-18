@@ -993,6 +993,103 @@ class AutoInitTest(unittest.TestCase):
         self.assertIn("feat/x", data)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
 
+    def _repo_off_main(self, branch="feat/docs"):
+        # make_repo(branch="main") already does init/config/an initial commit
+        # — these tests only need a real divergence point on top of that,
+        # since _pick_tier auto-downgrades only when it can confidently diff
+        # against main/master.
+        repo = make_repo(branch="main")
+        git(repo, "checkout", "-q", "-b", branch)
+        return repo
+
+    def test_docs_only_diff_auto_inits_tiny(self):
+        # `_commit` only simulates the PostToolUse payload — it never actually
+        # runs the command — so the real commit has to land first for the
+        # hook's own `git diff` to see it.
+        repo = self._repo_off_main()
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("more docs\n")
+        git(repo, "add", "docs.md")
+        git(repo, "commit", "-q", "-m", "docs")
+        r = self._commit(cmd="git commit -q -m docs", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "tiny")
+
+    def test_mixed_diff_stays_small_medium(self):
+        # One non-docs file in the diff must not qualify — conservative on
+        # purpose, since under-classifying silently skips gates 2-6.
+        repo = self._repo_off_main()
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("docs\n")
+        with open(os.path.join(repo, "app.py"), "w") as f:
+            f.write("print(1)\n")
+        git(repo, "add", "docs.md", "app.py")
+        git(repo, "commit", "-q", "-m", "mixed")
+        r = self._commit(cmd="git commit -q -m mixed", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "small-medium")
+
+    def test_no_default_branch_to_diff_against_stays_small_medium(self):
+        # No main/master anywhere (as in the plain feat/x fixture every other
+        # test in this class uses) — can't confirm docs-only, so the safe
+        # default holds. This is the existing behavior, asserted explicitly
+        # so a future change to the diff logic can't silently start guessing.
+        self._commit()
+        data = read_json(self.gp)
+        self.assertEqual(data["feat/x"]["tier"], "small-medium")
+
+    def test_prefers_origin_main_over_local_main_when_they_diverge(self):
+        # The exact scenario _merge_base's docstring exists to protect
+        # against: local main is ahead of origin/main (nobody fetches before
+        # every commit). If local main were preferred, a docs-only commit on
+        # top of a LOCAL-ONLY non-docs commit would misclassify as tiny —
+        # origin/main doesn't know about that non-docs commit yet, so basing
+        # the diff on it correctly pulls it into the comparison.
+        repo = make_repo(branch="main")  # init commit: README.md only
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        with open(os.path.join(repo, "app.py"), "w") as f:
+            f.write("print(1)\n")
+        git(repo, "add", "app.py")
+        git(repo, "commit", "-q", "-m", "app")  # local main only, origin/main unaware
+        git(repo, "checkout", "-q", "-b", "feat/docs")
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("docs\n")
+        git(repo, "add", "docs.md")
+        git(repo, "commit", "-q", "-m", "docs")
+        r = self._commit(cmd="git commit -q -m docs", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "small-medium")
+
+    def test_discovers_non_main_default_branch_via_origin_head(self):
+        # A repo whose default branch isn't main/master (trunk, develop, ...)
+        # would otherwise never resolve a merge-base at all — the auto-tiny
+        # feature would silently never fire for it. origin/HEAD's symbolic
+        # ref names the real default branch when it's set.
+        repo = make_repo(branch="trunk")
+        git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+        git(
+            repo,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        )
+        git(repo, "checkout", "-q", "-b", "feat/docs")
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("docs\n")
+        git(repo, "add", "docs.md")
+        git(repo, "commit", "-q", "-m", "docs")
+        r = self._commit(cmd="git commit -q -m docs", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "tiny")
+
     def test_no_branch_detected_exits_2_so_the_warning_is_seen(self):
         # A PostToolUse hook's stderr only reaches the model on exit 2; on
         # exit 0 it goes to the debug log. No cycle stamped means the later
