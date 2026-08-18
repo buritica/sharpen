@@ -162,14 +162,6 @@ def handle_skill_completion(
         gs.record_gate(data, target_branch, gate, authorized=True)
         return {"recorded": True, "gate": gate, "target": target_branch}
 
-    if branch == "HEAD":
-        # Detached HEAD: routine mid-rebase, and there is no branch to key a
-        # gate to. Nothing was lost, so it stays quiet — same call auto-init
-        # makes for the same state.
-        return {
-            "recorded": False,
-            "reason": "detached HEAD — no branch to record against",
-        }
     if not branch:
         # Distinct from detached HEAD so the message says which happened, but
         # NOT surfaced: the overwhelmingly common cause is running a skill
@@ -181,8 +173,16 @@ def handle_skill_completion(
             "reason": "could not resolve the current branch (not a git repo?)",
         }
 
+    is_detached = branch == "HEAD"
     is_protected = branch in ("main", "master")
-    bd = None if is_protected else data.get(branch)
+    # Detached HEAD never has its own dict entry to look up (the literal
+    # string "HEAD" is not a real branch) — treat it as "no local cycle" so
+    # it falls into the SAME cross-worktree fallback as any other branch
+    # with none, rather than giving up before ever trying. `git worktree add`
+    # routinely leaves the anchor checkout detached, so bailing here used to
+    # make the fallback that exists specifically for "can't detect branch
+    # from cwd" unreachable in exactly that case. Issue #5.
+    bd = None if (is_protected or is_detached) else data.get(branch)
     target_branch = branch
 
     if not bd:
@@ -191,24 +191,26 @@ def handle_skill_completion(
             # Surprising only when there WAS a cycle we declined to pick: an
             # ambiguous cross-worktree match, or a git failure that stopped us
             # looking. A branch with no cycle anywhere is the opt-out, not a
-            # problem, and must stay quiet.
+            # problem, and must stay quiet — detached HEAD included, so
+            # `git commit --amend` mid-rebase doesn't turn into an interrupt.
             candidates = _pending_cycles(data, skill, active_branches)
+            where = "detached HEAD" if is_detached else f'branch "{branch}"'
             if active_branches is None:
                 # Couldn't enumerate worktrees, so we declined to guess. Say so —
                 # don't claim "no cycle" when the real cause was a git failure.
                 reason = (
-                    f'No cycle for "{branch}" in this worktree, and '
+                    f"No cycle for {where} in this worktree, and "
                     "`git worktree list` failed so cross-worktree lookup was skipped"
                 )
             elif candidates:
                 reason = (
-                    f'No gate cycle for branch "{branch}", and '
+                    f"No gate cycle for {where}, and "
                     f"{len(candidates)} other checked-out branches have this gate "
                     f"pending ({', '.join(b for b, _ in candidates)}) — refusing "
                     "to guess. Run the skill from the worktree you mean to gate."
                 )
             else:
-                reason = f'No gate cycle for branch "{branch}"'
+                reason = f"No gate cycle for {where}"
             return {
                 "recorded": False,
                 "reason": reason,
@@ -258,7 +260,14 @@ def main():
     path = gs.default_store_path(cwd)
     # All three git calls happen BEFORE the lock: update_store holds an exclusive
     # flock shared by every worktree of the repo, and a stalled git inside it
-    # stalls all of them.
+    # stalls all of them. Tradeoff: `active`/`branch` are a snapshot from before
+    # the lock, while `data` is read fresh once inside it — so a race between two
+    # detached-HEAD worktrees both adopting the same pending branch can leave the
+    # loser's reason string stale ("no cycle" when really "someone else just took
+    # it"). No double-stamp results (the lock still serializes the actual write),
+    # only a misleading diagnostic in that one rare window. Detached HEAD is
+    # `git worktree add`'s normal state, so this window is now a mainline path
+    # rather than only reachable through named-branch ambiguity.
     active = active_worktree_branches(cwd)
     branch = gs.detect_branch(cwd)
     source_root = gs.canonical_worktree_root(cwd)
