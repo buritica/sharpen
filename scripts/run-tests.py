@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Discover and run all test_*.py suites in each plugin's tests/ subdirectory."""
+"""Discover and run all test_*.py suites in each plugin's tests/ subdirectory,
+plus this repo's own top-level scripts/tests/ (for scripts/*.py that aren't
+part of any plugin, like check-marketplace.py)."""
 
 import os
 import subprocess
@@ -9,19 +11,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TIMEOUT = 120  # seconds per suite
 
 
+def _test_files(d):
+    if not os.path.isdir(d):
+        return []
+    return [
+        os.path.join(d, f)
+        for f in sorted(os.listdir(d))
+        if f.startswith("test_") and f.endswith(".py")
+    ]
+
+
 def find_tests():
-    tests = []
+    tests = _test_files(os.path.join(ROOT, "scripts", "tests"))
     plugins_dir = os.path.join(ROOT, "plugins")
     if not os.path.isdir(plugins_dir):
         print(f"plugins/ not found at {plugins_dir}", file=sys.stderr)
         return tests
     for plugin in sorted(os.listdir(plugins_dir)):
-        d = os.path.join(plugins_dir, plugin, "tests")
-        if not os.path.isdir(d):
-            continue
-        for f in sorted(os.listdir(d)):
-            if f.startswith("test_") and f.endswith(".py"):
-                tests.append(os.path.join(d, f))
+        tests += _test_files(os.path.join(plugins_dir, plugin, "tests"))
     return tests
 
 
