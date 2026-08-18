@@ -1167,6 +1167,25 @@ class AutoInitTest(unittest.TestCase):
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "tiny")
 
+    def test_diff_failure_after_a_resolved_merge_base_gets_its_own_reason(self):
+        # Regression: _pick_tier used to collapse "no default branch found"
+        # and "found one, but the diff itself failed" into the same reason
+        # string — factually wrong for the second case. Simulated at the
+        # _git_output level since a real repo can't easily make `git diff`
+        # fail right after `git merge-base` succeeds.
+        spec = importlib.util.spec_from_file_location("ai3", AUTO_INIT)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+
+        def fake_git_output(args, cwd=None):
+            return "deadbeef" if args[0] == "merge-base" else None
+
+        m._git_output = fake_git_output
+        tier, reason = m._pick_tier(self.repo)
+        self.assertEqual(tier, "small-medium")
+        self.assertIn("git failure", reason)
+        self.assertNotIn("no default branch found", reason)
+
     def test_no_branch_detected_exits_2_so_the_warning_is_seen(self):
         # A PostToolUse hook's stderr only reaches the model on exit 2; on
         # exit 0 it goes to the debug log. No cycle stamped means the later

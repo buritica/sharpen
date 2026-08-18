@@ -190,13 +190,9 @@ def _merge_base(workdir):
     return None
 
 
-def _changed_paths_since_default(workdir):
-    """Files changed on this branch since it diverged from the default
-    branch, or None when that can't be determined (no default branch found,
-    or a git failure) — the caller must NOT assume docs-only on None."""
-    merge_base = _merge_base(workdir)
-    if merge_base is None:
-        return None
+def _changed_paths_since(merge_base, workdir):
+    """Files changed since `merge_base`, or None on a git failure — the
+    caller must NOT assume docs-only on None."""
     out = _git_output(["diff", "--name-only", f"{merge_base}..HEAD"], cwd=workdir)
     if out is None:
         return None
@@ -209,10 +205,18 @@ def _pick_tier(workdir):
     default branch to diff against, a git failure, an empty diff) keeps the
     safe default. `reason` records which case applied — stored on the cycle
     (see gate_store.init_gates's tier_reason) so a later reader doesn't have
-    to re-derive it from git state that may have moved on since."""
-    paths = _changed_paths_since_default(workdir)
-    if paths is None:
+    to re-derive it from git state that may have moved on since.
+
+    Calls _merge_base directly (rather than through a combined helper) so
+    "no default branch resolvable" and "found one, but the diff itself
+    failed" get distinct, accurate reasons instead of collapsing into one —
+    they're different problems with different fixes."""
+    merge_base = _merge_base(workdir)
+    if merge_base is None:
         return DEFAULT_TIER, "default (no default branch found to diff against)"
+    paths = _changed_paths_since(merge_base, workdir)
+    if paths is None:
+        return DEFAULT_TIER, "default (a git failure prevented computing the diff)"
     if not paths:
         return DEFAULT_TIER, "default (no changes found since the default branch)"
     if all(_is_docs_path(p) for p in paths):

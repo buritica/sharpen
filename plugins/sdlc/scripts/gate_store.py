@@ -456,7 +456,7 @@ def route_mismatch_note(data, source_root, branch):
         return None
     return (
         f'This worktree\'s skill gates are routed to "{elsewhere}", not '
-        f'"{branch}" (--unroute to stop).'
+        f'"{branch}" (/sdlc:gate --unroute to stop).'
     )
 
 
@@ -474,10 +474,16 @@ def record_gate(data, branch, gate, authorized=False):
     against an adversary — so a named keyword is enough rigor: any bypass has
     to say `authorized=True` out loud, where a reader will see it.
 
-    Also raises if `gate` isn't required by `branch`'s tier (e.g. recording
-    `grumpy-review` on a `tiny` cycle) — keeps `gates` a strict subset of
-    `required_gates`, which every reader already assumes rather than
-    re-filters.
+    Also raises if `gate` isn't required by `branch`'s tier. Defense in
+    depth, not a live path today: the skill-gated check above already
+    catches every unauthorized attempt at a mismatched gate first (every
+    bash gate the CLI can record without authorization is required by every
+    tier), and the one `authorized=True` caller (auto-record-skill-gate.py)
+    already filters through `determine_gate`'s own `required_gates` check
+    before ever getting here. Exists so the NEXT `authorized=True` caller
+    that skips that filtering fails loudly instead of silently polluting
+    `gates` with a key every reader (missing_gates, completed_gates,
+    format_status) assumes is a strict subset of `required_gates`.
     """
     if gate not in ALL_GATE_NAMES:
         raise ValueError(
