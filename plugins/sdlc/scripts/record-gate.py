@@ -168,9 +168,22 @@ def main(argv):
             )
             _log(f"[gate] ✓ {gate} recorded for {branch}. {done}")
         elif command == "--status":
-            sys.stdout.write(
-                gs.format_status(gs.load_store(path).get(branch), branch) + "\n"
-            )
+            data = gs.load_store(path)
+            out = gs.format_status(data.get(branch), branch)
+            # `format_status`'s own "Driven from:" line only reaches whoever
+            # asks about the branch being routed TO. The source side — the
+            # worktree actually doing the driving — had no way to learn this
+            # except by inference (a branch with no cycle here) or by reading
+            # --unroute's output. Say it plainly whenever this worktree's
+            # skill gates land somewhere other than the branch being asked
+            # about, regardless of whether that branch has a cycle at all.
+            elsewhere = gs.route_mismatch(data, gs.canonical_worktree_root(), branch)
+            if elsewhere:
+                out += (
+                    f'\n\nThis worktree\'s skill gates are routed to "{elsewhere}", '
+                    f'not "{branch}" (--unroute to stop).'
+                )
+            sys.stdout.write(out + "\n")
         elif command == "--oneline":
             sys.stdout.write(gs.format_oneline(gs.load_store(path).get(branch)) + "\n")
         else:

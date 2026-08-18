@@ -204,11 +204,20 @@ def _changed_paths_since_default(workdir):
 
 
 def _pick_tier(workdir):
-    """DEFAULT_TIER unless every file changed since the default branch is
-    confidently docs/text/assets. Any uncertainty (no default branch to diff
-    against, a git failure, an empty diff) keeps the safe default."""
+    """(tier, reason). DEFAULT_TIER unless every file changed since the
+    default branch is confidently docs/text/assets. Any uncertainty (no
+    default branch to diff against, a git failure, an empty diff) keeps the
+    safe default. `reason` records which case applied — stored on the cycle
+    (see gate_store.init_gates's tier_reason) so a later reader doesn't have
+    to re-derive it from git state that may have moved on since."""
     paths = _changed_paths_since_default(workdir)
-    return "tiny" if paths and all(_is_docs_path(p) for p in paths) else DEFAULT_TIER
+    if paths is None:
+        return DEFAULT_TIER, "default (no default branch found to diff against)"
+    if not paths:
+        return DEFAULT_TIER, "default (no changes found since the default branch)"
+    if all(_is_docs_path(p) for p in paths):
+        return "tiny", f"docs-only diff auto-detected ({len(paths)} file(s))"
+    return DEFAULT_TIER, "default (diff includes non-docs files)"
 
 
 def main():
@@ -332,7 +341,10 @@ def main():
             surface=False,
         )
         cycle_exists = False
-    tier = DEFAULT_TIER if cycle_exists else _pick_tier(workdir)
+    if cycle_exists:
+        tier, tier_reason = DEFAULT_TIER, None  # unused: mutator no-ops below
+    else:
+        tier, tier_reason = _pick_tier(workdir)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.
@@ -343,7 +355,11 @@ def main():
         # revoking it. Only an explicit --init/--unroute tears a route down.
         result = gs.update_store(
             path,
-            lambda d: None if d.get(branch) else gs.init_gates(d, branch, tier),
+            lambda d: (
+                None
+                if d.get(branch)
+                else gs.init_gates(d, branch, tier, tier_reason=tier_reason)
+            ),
         )
     # Every failure here leaves the branch with no cycle, same as above.
     except gs.StoreCorruptError as e:

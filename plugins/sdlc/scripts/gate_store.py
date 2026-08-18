@@ -307,7 +307,13 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_gates(data, branch, tier):
+def init_gates(data, branch, tier, tier_reason=None):
+    """`tier_reason` records WHY this tier was picked, e.g. by
+    auto-init-gate-cycle.py's docs-only detection — absence of the key is how
+    a reader (format_status, a human editing the store) tells "manually
+    chosen" from "auto-detected"; a manual --init passes no reason and the
+    key is simply not written, so a plain init produces a byte-identical
+    entry to before this field existed."""
     if branch in ("main", "master"):
         raise ValueError(
             f'Refusing to initialize gate cycle for "{branch}". '
@@ -316,6 +322,8 @@ def init_gates(data, branch, tier):
     if tier not in TIERS:
         raise ValueError(f'Invalid tier "{tier}". Valid: {", ".join(TIERS)}')
     entry = {"tier": tier, "created_at": _now(), "gates": {}}
+    if tier_reason:
+        entry["tier_reason"] = tier_reason
     # `--init` doubles as the post-gate reset, so it clears every timestamp. The
     # route is not gate state — it says WHO is driving this branch's cycle — so
     # it survives a reset. Otherwise the mandatory "reset and re-run from gate 1"
@@ -410,6 +418,18 @@ def routed_branch(data, source_root):
     return None
 
 
+def route_mismatch(data, source_root, branch):
+    """The branch `source_root` is routed to, if that's not `branch` — else
+    None. Shared by every caller that just needs to say "your skill gates
+    land elsewhere", without auto-record-skill-gate.py's additional
+    liveness/gate-applicability logic (which needs active_branches and the
+    skill being recorded, neither available to a plain status/denial check)."""
+    routed = routed_branch(data, source_root)
+    if routed and routed[0] != branch:
+        return routed[0]
+    return None
+
+
 def record_gate(data, branch, gate, authorized=False):
     """
     Stamp `gate` as complete on `branch`.
@@ -434,6 +454,17 @@ def record_gate(data, branch, gate, authorized=False):
     if bd is None:
         raise ValueError(
             f'No gate cycle for branch "{branch}". Run: record-gate.py --init <tier>'
+        )
+    if gate not in required_gates(bd):
+        # A tier that doesn't require this gate has no business recording
+        # it — determine_gate already keeps the auto-record hook from ever
+        # asking for one (see its own check), so the only way here is a
+        # direct/authorized call. Refusing keeps `gates` a strict subset of
+        # required_gates, which every reader (missing_gates, completed_gates,
+        # format_status) already assumes rather than re-filters.
+        raise ValueError(
+            f'"{gate}" is not required by the "{bd.get("tier")}" tier for '
+            f'"{branch}". Required: {", ".join(required_gates(bd))}'
         )
     bd.setdefault("gates", {})[gate] = _now()
     return bd
@@ -495,6 +526,9 @@ def format_status(branch_data, branch=None):
     lines.append(
         f"Tier: {branch_data.get('tier')} (started {branch_data.get('created_at')})"
     )
+    tier_reason = branch_data.get("tier_reason")
+    if tier_reason:
+        lines.append(f"  reason: {tier_reason}")
     sources = route_sources(branch_data)
     if sources:
         # A wrong route is the failure mode that used to be invisible; print it.
