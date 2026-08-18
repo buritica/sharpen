@@ -1066,6 +1066,30 @@ class AutoInitTest(unittest.TestCase):
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "small-medium")
 
+    def test_discovers_non_main_default_branch_via_origin_head(self):
+        # A repo whose default branch isn't main/master (trunk, develop, ...)
+        # would otherwise never resolve a merge-base at all — the auto-tiny
+        # feature would silently never fire for it. origin/HEAD's symbolic
+        # ref names the real default branch when it's set.
+        repo = make_repo(branch="trunk")
+        git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+        git(
+            repo,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        )
+        git(repo, "checkout", "-q", "-b", "feat/docs")
+        gp = os.path.join(repo, ".claude", "data", "gates.json")
+        with open(os.path.join(repo, "docs.md"), "w") as f:
+            f.write("docs\n")
+        git(repo, "add", "docs.md")
+        git(repo, "commit", "-q", "-m", "docs")
+        r = self._commit(cmd="git commit -q -m docs", repo=repo, gp=gp)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        data = read_json(gp)
+        self.assertEqual(data["feat/docs"]["tier"], "tiny")
+
     def test_no_branch_detected_exits_2_so_the_warning_is_seen(self):
         # A PostToolUse hook's stderr only reaches the model on exit 2; on
         # exit 0 it goes to the debug log. No cycle stamped means the later

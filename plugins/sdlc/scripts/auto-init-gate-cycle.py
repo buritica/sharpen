@@ -156,14 +156,34 @@ def _is_docs_path(path):
     return ext.lower() in DOCS_EXTENSIONS
 
 
-def _merge_base(workdir):
-    """Merge-base with the first of origin/main, origin/master, main, master
-    that resolves, or None. origin/* first: /sdlc:gate's own documented
-    docs-only check runs `git diff --name-only origin/main...HEAD` (gate.md),
-    and a stale local `main` (nobody fetches before every commit) would
-    otherwise let this hook and that documented check disagree about the
-    same branch."""
+def _default_branch_candidates(workdir):
+    """Branches to try as the diff base, most-authoritative first.
+
+    `origin/HEAD`'s symbolic ref names the actual default branch when it's
+    known (set by `git remote set-head origin --auto`, or by some clones) —
+    checked first so a repo whose default branch isn't `main`/`master` (e.g.
+    `trunk`, `develop`) isn't silently unclassifiable forever. It isn't
+    always set, so the hardcoded names remain as a fallback, in the same
+    origin-before-local order as before (see _merge_base)."""
+    candidates = []
+    symbolic = _git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=workdir)
+    if symbolic and symbolic.startswith("refs/remotes/"):
+        resolved = symbolic[len("refs/remotes/") :]
+        candidates.append(resolved)
     for base in ("origin/main", "origin/master", "main", "master"):
+        if base not in candidates:
+            candidates.append(base)
+    return candidates
+
+
+def _merge_base(workdir):
+    """Merge-base with the first resolvable candidate from
+    _default_branch_candidates, or None. origin/* before local: /sdlc:gate's
+    own documented docs-only check runs `git diff --name-only
+    origin/main...HEAD` (gate.md), and a stale local `main` (nobody fetches
+    before every commit) would otherwise let this hook and that documented
+    check disagree about the same branch."""
+    for base in _default_branch_candidates(workdir):
         merge_base = _git_output(["merge-base", base, "HEAD"], cwd=workdir)
         if merge_base:
             return merge_base
@@ -296,7 +316,21 @@ def main():
     # store under the lock) ever gets a chance to report it properly.
     try:
         cycle_exists = bool(gs.load_store(path).get(branch))
-    except Exception:
+    except Exception as e:
+        # Debug-log only (surface=False): this hook's real error handling —
+        # StoreCorruptError/ValueError/OSError/Exception around update_store,
+        # a few lines down — re-reads the same store under the lock and
+        # reports properly if something's actually wrong. This is just the
+        # pre-check's own attempt failing, not a new failure mode; going
+        # fully silent here would be the one place in this file that lets a
+        # bug vanish without a trace, which is exactly what every other
+        # except block here is written to avoid.
+        ho.notify(
+            "auto-init",
+            f"pre-check couldn't read the gate store at {path} ({e}), "
+            "computing tier normally",
+            surface=False,
+        )
         cycle_exists = False
     tier = DEFAULT_TIER if cycle_exists else _pick_tier(workdir)
     try:
