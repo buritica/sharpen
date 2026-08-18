@@ -209,8 +209,6 @@ def handle_skill_completion(
                     f"pending ({', '.join(b for b, _ in candidates)}) — refusing "
                     "to guess. Run the skill from the worktree you mean to gate."
                 )
-            elif is_detached:
-                reason = "detached HEAD — no branch to record against"
             else:
                 reason = f"No gate cycle for {where}"
             return {
