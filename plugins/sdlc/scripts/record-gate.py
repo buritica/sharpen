@@ -6,7 +6,9 @@ of the repo, keyed by branch.
 Usage:
   record-gate.py --init <tier>          # start a gate cycle for this branch
   record-gate.py --record <gate-name>   # record a gate completion
-  record-gate.py --status               # print current state
+  record-gate.py --status               # print current state (also names
+                                        # where THIS worktree's own skill
+                                        # gates route to, if elsewhere)
   record-gate.py --oneline              # compact one-line status
   record-gate.py --unroute              # stop driving another worktree's gates
   record-gate.py --branch <name>        # override auto-detected branch
@@ -168,9 +170,26 @@ def main(argv):
             )
             _log(f"[gate] ✓ {gate} recorded for {branch}. {done}")
         elif command == "--status":
-            sys.stdout.write(
-                gs.format_status(gs.load_store(path).get(branch), branch) + "\n"
-            )
+            data = gs.load_store(path)
+            out = gs.format_status(data.get(branch), branch)
+            # `format_status`'s own "Driven from:" line only reaches whoever
+            # asks about the branch being routed TO. The source side — the
+            # worktree actually doing the driving — had no way to learn this
+            # except by inference (a branch with no cycle here) or by reading
+            # --unroute's output. Say it plainly whenever this worktree's
+            # skill gates land somewhere other than the branch being asked
+            # about, regardless of whether that branch has a cycle at all.
+            note = None
+            if gs.has_any_route(data):
+                # Skip the git subprocess spawn (canonical_worktree_root)
+                # entirely on a repo that's never used routing — the
+                # overwhelmingly common case for a plain --status call.
+                note = gs.route_mismatch_note(
+                    data, gs.canonical_worktree_root(), branch
+                )
+            if note:
+                out += f"\n\n{note}"
+            sys.stdout.write(out + "\n")
         elif command == "--oneline":
             sys.stdout.write(gs.format_oneline(gs.load_store(path).get(branch)) + "\n")
         else:

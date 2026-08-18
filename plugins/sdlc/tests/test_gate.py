@@ -237,6 +237,31 @@ class CliTest(unittest.TestCase):
         r = run_cli(["--record", "nope"], self.repo, self.gp)
         self.assertEqual(r.returncode, 1)
 
+    def test_record_known_gate_not_required_by_tier_via_authorized_call(self):
+        # Distinct from an unrecognized gate name entirely: "simplify" is a
+        # real gate, just not one `tiny` requires. Unreachable through the
+        # plain unauthorized CLI (every bash gate the CLI can record without
+        # authorization is required by every tier), so this drives it the
+        # way an authorized caller (the auto-record hook) would — same
+        # pattern as test_inline_python_cannot_record above.
+        run_cli(["--init", "tiny"], self.repo, self.gp)
+        env = dict(os.environ, SDLC_GATES_PATH=self.gp, PYTHONPATH=SCRIPTS)
+        r = subprocess.run(
+            [
+                "python3",
+                "-c",
+                "import gate_store as gs, os;"
+                "gs.update_store(os.environ['SDLC_GATES_PATH'],"
+                " lambda d: gs.record_gate(d, 'feat/x', 'simplify', authorized=True))",
+            ],
+            capture_output=True,
+            cwd=self.repo,
+            env=env,
+        )
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not required", r.stderr.decode())
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
 
 class EnforceTest(unittest.TestCase):
     def setUp(self):
@@ -600,6 +625,28 @@ class StoreEdgeTest(unittest.TestCase):
         self.assertEqual(d["feat/x"]["tier"], "tiny")
         self.assertEqual(d["feat/x"]["gates"], {})  # timestamps wiped
 
+    def test_tier_reason_is_stored_when_given(self):
+        d = {}
+        bd = gs.init_gates(
+            d, "feat/x", "tiny", tier_reason="docs-only diff auto-detected"
+        )
+        self.assertEqual(bd["tier_reason"], "docs-only diff auto-detected")
+
+    def test_tier_reason_is_omitted_when_not_given(self):
+        # Manual --init (no reason passed) must not add the key at all —
+        # absence is how a reader tells "manually chosen" from "auto-detected",
+        # and it keeps every pre-existing store byte-identical to before this
+        # field existed.
+        d = {}
+        bd = gs.init_gates(d, "feat/x", "small-medium")
+        self.assertNotIn("tier_reason", bd)
+
+    def test_reinit_replaces_the_previous_tier_reason(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "tiny", tier_reason="docs-only diff auto-detected")
+        bd = gs.init_gates(d, "feat/x", "small-medium")  # manual re-init, no reason
+        self.assertNotIn("tier_reason", bd)
+
     def test_branch_isolation(self):
         d = {}
         gs.init_gates(d, "feat/a", "tiny")
@@ -607,6 +654,18 @@ class StoreEdgeTest(unittest.TestCase):
         gs.record_gate(d, "feat/a", "tests")
         self.assertIn("tests", d["feat/a"]["gates"])
         self.assertEqual(d["feat/b"]["gates"], {})  # unaffected
+
+    def test_format_status_shows_tier_reason_when_present(self):
+        d = {}
+        bd = gs.init_gates(
+            d, "feat/x", "tiny", tier_reason="docs-only diff auto-detected"
+        )
+        self.assertIn("docs-only diff auto-detected", gs.format_status(bd, "feat/x"))
+
+    def test_format_status_omits_reason_line_when_absent(self):
+        d = {}
+        bd = gs.init_gates(d, "feat/x", "small-medium")
+        self.assertNotIn("reason", gs.format_status(bd, "feat/x").lower())
 
     def test_determine_gate_none_when_nothing_or_all_done(self):
         d = {}
@@ -1016,6 +1075,17 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "tiny")
+        # Provenance: a reader six months later shouldn't have to re-derive
+        # "why tiny" from git history that's moved on since.
+        self.assertIn("docs-only", data["feat/docs"]["tier_reason"])
+
+    def test_manual_init_via_cli_has_no_tier_reason(self):
+        # Absence of the key is how a reader tells "manually chosen" apart
+        # from "auto-detected" — a plain --init must not fabricate one.
+        r = run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = read_json(self.gp)
+        self.assertNotIn("tier_reason", data["feat/x"])
 
     def test_mixed_diff_stays_small_medium(self):
         # One non-docs file in the diff must not qualify — conservative on
@@ -1032,6 +1102,9 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "small-medium")
+        self.assertEqual(
+            data["feat/docs"]["tier_reason"], "default (diff includes non-docs files)"
+        )
 
     def test_no_default_branch_to_diff_against_stays_small_medium(self):
         # No main/master anywhere (as in the plain feat/x fixture every other
@@ -1041,6 +1114,10 @@ class AutoInitTest(unittest.TestCase):
         self._commit()
         data = read_json(self.gp)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
+        self.assertEqual(
+            data["feat/x"]["tier_reason"],
+            "default (no default branch found to diff against)",
+        )
 
     def test_prefers_origin_main_over_local_main_when_they_diverge(self):
         # The exact scenario _merge_base's docstring exists to protect
@@ -1089,6 +1166,25 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "tiny")
+
+    def test_diff_failure_after_a_resolved_merge_base_gets_its_own_reason(self):
+        # Regression: _pick_tier used to collapse "no default branch found"
+        # and "found one, but the diff itself failed" into the same reason
+        # string — factually wrong for the second case. Simulated at the
+        # _git_output level since a real repo can't easily make `git diff`
+        # fail right after `git merge-base` succeeds.
+        spec = importlib.util.spec_from_file_location("ai3", AUTO_INIT)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+
+        def fake_git_output(args, cwd=None):
+            return "deadbeef" if args[0] == "merge-base" else None
+
+        m._git_output = fake_git_output
+        tier, reason = m._pick_tier(self.repo)
+        self.assertEqual(tier, "small-medium")
+        self.assertIn("git failure", reason)
+        self.assertNotIn("no default branch found", reason)
 
     def test_no_branch_detected_exits_2_so_the_warning_is_seen(self):
         # A PostToolUse hook's stderr only reaches the model on exit 2; on
@@ -1503,6 +1599,23 @@ class StoreGuardTest(unittest.TestCase):
         gs.record_gate(d, "feat/x", "simplify", authorized=True)
         self.assertIn("simplify", d["feat/x"]["gates"])
 
+    def test_record_gate_refuses_a_gate_not_required_by_the_tier(self):
+        # `tiny` doesn't require simplify/grumpy-*. Recording one anyway
+        # (even authorized) would populate `gates` with a key required_gates
+        # filters back out everywhere else — a landmine for anything that
+        # ever reads the raw dict instead of going through the accessors.
+        d = {}
+        gs.init_gates(d, "feat/x", "tiny")
+        with self.assertRaises(ValueError):
+            gs.record_gate(d, "feat/x", "simplify", authorized=True)
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_record_gate_allows_a_gate_required_by_the_tier(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "tiny")
+        gs.record_gate(d, "feat/x", "tests")
+        self.assertIn("tests", d["feat/x"]["gates"])
+
     def test_bash_gates_need_no_authorization(self):
         d = {}
         gs.init_gates(d, "feat/x", "small-medium")
@@ -1846,6 +1959,34 @@ class RouteStoreTest(unittest.TestCase):
         self.assertIsNone(gs.routed_branch(self.d, "/wt/other"))
         self.assertIsNone(gs.routed_branch(self.d, None))
 
+    def test_route_mismatch_reports_the_other_branch(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertEqual(gs.route_mismatch(self.d, "/wt/b", "feat/b"), "feat/a")
+
+    def test_route_mismatch_is_none_when_routed_to_the_asked_branch(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertIsNone(gs.route_mismatch(self.d, "/wt/b", "feat/a"))
+
+    def test_route_mismatch_is_none_when_not_routed_at_all(self):
+        self.assertIsNone(gs.route_mismatch(self.d, "/wt/nowhere", "feat/a"))
+
+    def test_route_mismatch_note_names_branch_and_unroute(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        note = gs.route_mismatch_note(self.d, "/wt/b", "feat/b")
+        self.assertIn("feat/a", note)
+        self.assertIn("--unroute", note)
+
+    def test_route_mismatch_note_is_none_when_routed_to_the_asked_branch(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertIsNone(gs.route_mismatch_note(self.d, "/wt/b", "feat/a"))
+
+    def test_has_any_route_false_on_an_unrouted_store(self):
+        self.assertFalse(gs.has_any_route(self.d))
+
+    def test_has_any_route_true_once_any_branch_is_routed(self):
+        gs.set_route(self.d, "feat/a", "/wt/b")
+        self.assertTrue(gs.has_any_route(self.d))
+
     def test_route_survives_reinit(self):
         # --init doubles as the post-gate reset. Losing the route there would
         # silently unhook the driving worktree halfway through the chain.
@@ -1948,6 +2089,23 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("grumpy-review", self.gates("feat/c"))
         self.assertNotIn("feat/b", read_json(self.gp))
+
+    def test_status_names_the_branch_this_worktree_actually_routes_to(self):
+        # Before this, --status from the DRIVING worktree only showed that
+        # worktree's own (often nonexistent) local cycle — the only way to
+        # learn "you're routing away" was --unroute's output or inference.
+        self.init_routed("feat/c", self.wt_b)
+        r = self.cli(["--status", "--branch", "feat/b"], self.wt_b)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout.decode()
+        self.assertIn("feat/c", out)
+        self.assertIn("--unroute", out)
+
+    def test_status_says_nothing_about_routing_when_there_is_none(self):
+        self.cli(["--init", "small-medium", "--branch", "feat/b"], self.wt_b)
+        r = self.cli(["--status", "--branch", "feat/b"], self.wt_b)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("--unroute", r.stdout.decode())
 
     def test_route_wins_over_the_driving_worktrees_own_cycle(self):
         # Consequence 1: B has its own cycle, so the old code confidently

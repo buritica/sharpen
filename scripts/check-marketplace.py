@@ -12,7 +12,11 @@ Checks, per plugin listed in .claude-plugin/marketplace.json:
     (this is the drift that has to be bumped by hand in two places)
   - the name matches the directory's plugin.json name
   - every commands/*.md file has YAML-ish frontmatter with a description
-  - any hooks/hooks.json parses and referenced hook scripts exist
+  - any hooks/hooks.json parses, referenced hook scripts exist, their event
+    names are recognized (warn only — this checker's allowlist may lag a new
+    event), and every referenced .py script's imports resolve (stdlib or a
+    same-directory sibling — this repo's hook scripts are pure stdlib by
+    convention, so anything else means a script survived a sibling's deletion)
 
 Also flags plugin directories present on disk but absent from the
 marketplace listing (easy to forget when adding a plugin).
@@ -20,6 +24,7 @@ marketplace listing (easy to forget when adding a plugin).
 Exit 0 if clean, 1 if any error. Warnings alone do not fail the run.
 """
 
+import ast
 import json
 import os
 import re
@@ -27,6 +32,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKETPLACE = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
+
+# sys.stdlib_module_names needs Python 3.10+. This repo's own CLAUDE.md
+# promises hook enforcement "works on any box with python3" — None here
+# means an older interpreter, and check_local_imports degrades to a warning
+# instead of crashing the whole run over one attribute.
+STDLIB_MODULE_NAMES = getattr(sys, "stdlib_module_names", None)
 
 errors = []
 warnings = []
@@ -80,6 +91,22 @@ def check_commands(plugin_dir, name):
             err("{}: command missing frontmatter description".format(rel))
 
 
+# Hook events Claude Code actually dispatches. A typo'd event name (e.g.
+# "PreToolUser") parses as valid JSON and just never fires — nothing else in
+# this repo would catch that, since it only fails at hook-runtime, silently.
+KNOWN_HOOK_EVENTS = {
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+    "UserPromptSubmit",
+    "Stop",
+    "SubagentStop",
+    "PreCompact",
+    "SessionStart",
+    "SessionEnd",
+}
+
+
 def check_hooks(plugin_dir, name):
     hooks_json = os.path.join(plugin_dir, "hooks", "hooks.json")
     if not os.path.isfile(hooks_json):
@@ -87,12 +114,77 @@ def check_hooks(plugin_dir, name):
     data = load_json(hooks_json)
     if not data:
         return
+    # A warning, not an error: KNOWN_HOOK_EVENTS is this checker's best
+    # knowledge, not Claude Code's own source of truth, and a false error
+    # here would block a legitimate new event this list hasn't caught up to.
+    for event in data.get("hooks", {}):
+        if event not in KNOWN_HOOK_EVENTS:
+            warn(
+                '{}: hooks.json has unrecognized event "{}" — typo, or a '
+                "new event this checker's allowlist needs updating for?".format(
+                    name, event
+                )
+            )
     # Collect referenced scripts and confirm they exist on disk.
     blob = json.dumps(data)
-    for ref in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.(?:sh|py))", blob):
+    scripts = set(re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.(?:sh|py))", blob))
+    for ref in scripts:
         script = os.path.join(plugin_dir, ref)
         if not os.path.isfile(script):
             err("{}: hooks.json references missing script {}".format(name, ref))
+        elif ref.endswith(".py"):
+            check_local_imports(script, ref, name)
+
+
+def check_local_imports(script, ref, name):
+    """A hook script that survives a sibling module's deletion only fails at
+    hook-runtime, silently (each hook's own except-and-report pattern can't
+    catch an ImportError raised before its own code runs). Flag any
+    `import X`/`from X import ...` whose X is neither stdlib nor an existing
+    same-directory file — this repo's hook scripts are pure stdlib plus
+    same-plugin siblings by convention (see root CLAUDE.md), so anything
+    else is exactly the drift this check exists to catch.
+
+    Parsed with `ast`, not a regex over the raw text: a regex anchored on
+    line-start also matches "from committing to main by habit" inside a
+    docstring — this doesn't, since only real Import/ImportFrom nodes count."""
+    try:
+        with open(script) as f:
+            source = f.read()
+    except OSError as e:
+        # check_hooks already confirmed this file exists, so a read failure
+        # past that point is unexpected, not routine — say so rather than
+        # skipping quietly.
+        warn("{}: could not read {} to check its imports ({})".format(name, ref, e))
+        return
+    try:
+        tree = ast.parse(source, filename=script)
+    except SyntaxError:
+        # Not this checker's job — CI's lint job (`ruff check`) already has
+        # to parse every file, so a real syntax error surfaces there. Not a
+        # substitute for that check, just not a second one.
+        return
+    if STDLIB_MODULE_NAMES is None:
+        warn(
+            "{}: skipping import check for {} (needs Python 3.10+ for "
+            "sys.stdlib_module_names)".format(name, ref)
+        )
+        return
+    mods = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            mods.add(node.module.split(".")[0])  # level > 0 is a relative import
+    script_dir = os.path.dirname(script)
+    for mod in sorted(mods):
+        if mod == "__future__" or mod in STDLIB_MODULE_NAMES:
+            continue
+        if not os.path.isfile(os.path.join(script_dir, mod + ".py")):
+            err(
+                '{}: {} imports "{}", which is neither stdlib nor a sibling '
+                "module in the same directory".format(name, ref, mod)
+            )
 
 
 def main():

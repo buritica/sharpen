@@ -22,7 +22,8 @@ Schema:
       "tier": "small-medium",
       "created_at": "2026-06-16T04:53:38+00:00",
       "gates": { "tests": "<iso8601>", "lint": "<iso8601>", ... },
-      "routed_from": ["/abs/path/to/a/driving/worktree"]   # optional
+      "routed_from": ["/abs/path/to/a/driving/worktree"],   # optional
+      "tier_reason": "docs-only diff auto-detected (2 file(s))"   # optional
     }
   }
 
@@ -32,6 +33,11 @@ B's cwd — would otherwise stamp skill gates on B's branch. At `--init` the
 command writes B's worktree root here, and the hook resolves its own root and
 prefers the branch routed from it over `detect_branch()`. A channel, not a
 heuristic: it works with any number of live worktrees.
+
+`tier_reason` records WHY a tier was picked (e.g. auto-init-gate-cycle.py's
+docs-only detection). Its absence is the signal that a tier was chosen
+manually (via `--init`) rather than auto-detected — it is never backfilled
+for a manual choice.
 """
 
 import fcntl
@@ -307,7 +313,13 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_gates(data, branch, tier):
+def init_gates(data, branch, tier, tier_reason=None):
+    """`tier_reason` records WHY this tier was picked, e.g. by
+    auto-init-gate-cycle.py's docs-only detection — absence of the key is how
+    a reader (format_status, a human editing the store) tells "manually
+    chosen" from "auto-detected"; a manual --init passes no reason and the
+    key is simply not written, so a plain init produces a byte-identical
+    entry to before this field existed."""
     if branch in ("main", "master"):
         raise ValueError(
             f'Refusing to initialize gate cycle for "{branch}". '
@@ -316,6 +328,8 @@ def init_gates(data, branch, tier):
     if tier not in TIERS:
         raise ValueError(f'Invalid tier "{tier}". Valid: {", ".join(TIERS)}')
     entry = {"tier": tier, "created_at": _now(), "gates": {}}
+    if tier_reason:
+        entry["tier_reason"] = tier_reason
     # `--init` doubles as the post-gate reset, so it clears every timestamp. The
     # route is not gate state — it says WHO is driving this branch's cycle — so
     # it survives a reset. Otherwise the mandatory "reset and re-run from gate 1"
@@ -410,6 +424,42 @@ def routed_branch(data, source_root):
     return None
 
 
+def has_any_route(data):
+    """Cheap in-memory check: does ANY branch in the store have a route?
+    `canonical_worktree_root()` (what a caller needs to then call
+    route_mismatch/route_mismatch_note) is a `git rev-parse` subprocess —
+    callers that would only spawn it to find nothing routed (e.g. every
+    plain `--status` call on a repo that's never used routing) should check
+    this first and skip the spawn entirely."""
+    return any(route_sources(bd) for bd in data.values())
+
+
+def route_mismatch(data, source_root, branch):
+    """The branch `source_root` is routed to, if that's not `branch` — else
+    None. Shared by every caller that just needs to say "your skill gates
+    land elsewhere", without auto-record-skill-gate.py's additional
+    liveness/gate-applicability logic (which needs active_branches and the
+    skill being recorded, neither available to a plain status/denial check)."""
+    routed = routed_branch(data, source_root)
+    if routed and routed[0] != branch:
+        return routed[0]
+    return None
+
+
+def route_mismatch_note(data, source_root, branch):
+    """Ready-to-append sentence when `source_root`'s skill gates route to a
+    branch other than `branch`, else None. One canonical wording shared by
+    every caller (enforce-sdlc-gates.py's denial, record-gate.py's --status)
+    so a future tweak doesn't have to be remembered in more than one place."""
+    elsewhere = route_mismatch(data, source_root, branch)
+    if not elsewhere:
+        return None
+    return (
+        f'This worktree\'s skill gates are routed to "{elsewhere}", not '
+        f'"{branch}" (/sdlc:gate --unroute to stop).'
+    )
+
+
 def record_gate(data, branch, gate, authorized=False):
     """
     Stamp `gate` as complete on `branch`.
@@ -423,6 +473,17 @@ def record_gate(data, branch, gate, authorized=False):
     It guards against an agent talking itself past its own process gate, not
     against an adversary — so a named keyword is enough rigor: any bypass has
     to say `authorized=True` out loud, where a reader will see it.
+
+    Also raises if `gate` isn't required by `branch`'s tier. Defense in
+    depth, not a live path today: the skill-gated check above already
+    catches every unauthorized attempt at a mismatched gate first (every
+    bash gate the CLI can record without authorization is required by every
+    tier), and the one `authorized=True` caller (auto-record-skill-gate.py)
+    already filters through `determine_gate`'s own `required_gates` check
+    before ever getting here. Exists so the NEXT `authorized=True` caller
+    that skips that filtering fails loudly instead of silently polluting
+    `gates` with a key every reader (missing_gates, completed_gates,
+    format_status) assumes is a strict subset of `required_gates`.
     """
     if gate not in ALL_GATE_NAMES:
         raise ValueError(
@@ -434,6 +495,18 @@ def record_gate(data, branch, gate, authorized=False):
     if bd is None:
         raise ValueError(
             f'No gate cycle for branch "{branch}". Run: record-gate.py --init <tier>'
+        )
+    required = required_gates(bd)
+    if gate not in required:
+        # A tier that doesn't require this gate has no business recording
+        # it — determine_gate already keeps the auto-record hook from ever
+        # asking for one (see its own check), so the only way here is a
+        # direct/authorized call. Refusing keeps `gates` a strict subset of
+        # required_gates, which every reader (missing_gates, completed_gates,
+        # format_status) already assumes rather than re-filters.
+        raise ValueError(
+            f'"{gate}" is not required by the "{bd.get("tier")}" tier for '
+            f'"{branch}". Required: {", ".join(required)}'
         )
     bd.setdefault("gates", {})[gate] = _now()
     return bd
@@ -495,6 +568,9 @@ def format_status(branch_data, branch=None):
     lines.append(
         f"Tier: {branch_data.get('tier')} (started {branch_data.get('created_at')})"
     )
+    tier_reason = branch_data.get("tier_reason")
+    if tier_reason:
+        lines.append(f"  reason: {tier_reason}")
     sources = route_sources(branch_data)
     if sources:
         # A wrong route is the failure mode that used to be invisible; print it.
