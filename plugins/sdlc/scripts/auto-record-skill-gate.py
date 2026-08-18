@@ -260,7 +260,14 @@ def main():
     path = gs.default_store_path(cwd)
     # All three git calls happen BEFORE the lock: update_store holds an exclusive
     # flock shared by every worktree of the repo, and a stalled git inside it
-    # stalls all of them.
+    # stalls all of them. Tradeoff: `active`/`branch` are a snapshot from before
+    # the lock, while `data` is read fresh once inside it — so a race between two
+    # detached-HEAD worktrees both adopting the same pending branch can leave the
+    # loser's reason string stale ("no cycle" when really "someone else just took
+    # it"). No double-stamp results (the lock still serializes the actual write),
+    # only a misleading diagnostic in that one rare window. Detached HEAD is
+    # `git worktree add`'s normal state, so this window is now a mainline path
+    # rather than only reachable through named-branch ambiguity.
     active = active_worktree_branches(cwd)
     branch = gs.detect_branch(cwd)
     source_root = gs.canonical_worktree_root(cwd)
