@@ -33,6 +33,12 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKETPLACE = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
 
+# sys.stdlib_module_names needs Python 3.10+. This repo's own CLAUDE.md
+# promises hook enforcement "works on any box with python3" — None here
+# means an older interpreter, and check_local_imports degrades to a warning
+# instead of crashing the whole run over one attribute.
+STDLIB_MODULE_NAMES = getattr(sys, "stdlib_module_names", None)
+
 errors = []
 warnings = []
 
@@ -145,12 +151,25 @@ def check_local_imports(script, ref, name):
     try:
         with open(script) as f:
             source = f.read()
-    except OSError:
+    except OSError as e:
+        # check_hooks already confirmed this file exists, so a read failure
+        # past that point is unexpected, not routine — say so rather than
+        # skipping quietly.
+        warn("{}: could not read {} to check its imports ({})".format(name, ref, e))
         return
     try:
         tree = ast.parse(source, filename=script)
     except SyntaxError:
-        return  # not this checker's job; py_compile already covers that
+        # Not this checker's job — CI's lint job (`ruff check`) already has
+        # to parse every file, so a real syntax error surfaces there. Not a
+        # substitute for that check, just not a second one.
+        return
+    if STDLIB_MODULE_NAMES is None:
+        warn(
+            "{}: skipping import check for {} (needs Python 3.10+ for "
+            "sys.stdlib_module_names)".format(name, ref)
+        )
+        return
     mods = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -159,7 +178,7 @@ def check_local_imports(script, ref, name):
             mods.add(node.module.split(".")[0])  # level > 0 is a relative import
     script_dir = os.path.dirname(script)
     for mod in sorted(mods):
-        if mod == "__future__" or mod in sys.stdlib_module_names:
+        if mod == "__future__" or mod in STDLIB_MODULE_NAMES:
             continue
         if not os.path.isfile(os.path.join(script_dir, mod + ".py")):
             err(

@@ -237,6 +237,31 @@ class CliTest(unittest.TestCase):
         r = run_cli(["--record", "nope"], self.repo, self.gp)
         self.assertEqual(r.returncode, 1)
 
+    def test_record_known_gate_not_required_by_tier_via_authorized_call(self):
+        # Distinct from an unrecognized gate name entirely: "simplify" is a
+        # real gate, just not one `tiny` requires. Unreachable through the
+        # plain unauthorized CLI (every bash gate the CLI can record without
+        # authorization is required by every tier), so this drives it the
+        # way an authorized caller (the auto-record hook) would — same
+        # pattern as test_inline_python_cannot_record above.
+        run_cli(["--init", "tiny"], self.repo, self.gp)
+        env = dict(os.environ, SDLC_GATES_PATH=self.gp, PYTHONPATH=SCRIPTS)
+        r = subprocess.run(
+            [
+                "python3",
+                "-c",
+                "import gate_store as gs, os;"
+                "gs.update_store(os.environ['SDLC_GATES_PATH'],"
+                " lambda d: gs.record_gate(d, 'feat/x', 'simplify', authorized=True))",
+            ],
+            capture_output=True,
+            cwd=self.repo,
+            env=env,
+        )
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not required", r.stderr.decode())
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
 
 class EnforceTest(unittest.TestCase):
     def setUp(self):
@@ -1077,6 +1102,9 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         data = read_json(gp)
         self.assertEqual(data["feat/docs"]["tier"], "small-medium")
+        self.assertEqual(
+            data["feat/docs"]["tier_reason"], "default (diff includes non-docs files)"
+        )
 
     def test_no_default_branch_to_diff_against_stays_small_medium(self):
         # No main/master anywhere (as in the plain feat/x fixture every other
@@ -1086,6 +1114,10 @@ class AutoInitTest(unittest.TestCase):
         self._commit()
         data = read_json(self.gp)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
+        self.assertEqual(
+            data["feat/x"]["tier_reason"],
+            "default (no default branch found to diff against)",
+        )
 
     def test_prefers_origin_main_over_local_main_when_they_diverge(self):
         # The exact scenario _merge_base's docstring exists to protect

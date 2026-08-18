@@ -66,6 +66,20 @@ def run(root):
     )
 
 
+def run_without_stdlib_module_names(root):
+    """Simulate Python <3.10 (no sys.stdlib_module_names) by deleting the
+    attribute before the checker's module-level code runs, then executing it
+    via runpy so `__file__`/ROOT resolution stays identical to a real run."""
+    driver = (
+        "import runpy, sys\n"
+        "if hasattr(sys, 'stdlib_module_names'):\n"
+        "    del sys.stdlib_module_names\n"
+        f"runpy.run_path({os.path.join(root, 'scripts', 'check-marketplace.py')!r}, "
+        "run_name='__main__')\n"
+    )
+    return subprocess.run([sys.executable, "-c", driver], cwd=root, capture_output=True)
+
+
 class CleanMarketplaceTest(unittest.TestCase):
     def test_minimal_plugin_passes(self):
         root = make_marketplace({"foo": {}})
@@ -160,6 +174,29 @@ class HookScriptImportTest(unittest.TestCase):
         out = r.stdout.decode()
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("gate_store", out)
+
+    def test_third_party_import_is_an_error(self):
+        # Not just "missing sibling" — an unambiguous third-party package
+        # name (never plausibly a same-directory sibling) must still be
+        # flagged, matching this repo's pure-stdlib-hooks convention.
+        root = self._with_hook_script("import yaml\n")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("yaml", out)
+
+    def test_missing_stdlib_module_names_degrades_to_a_warning(self):
+        # Python <3.10 has no sys.stdlib_module_names. This must not crash
+        # the whole checker run over one attribute — CLAUDE.md promises
+        # this tooling works on any box with python3.
+        root = self._with_hook_script("import gate_store as gs\n")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run_without_stdlib_module_names(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("WARN", out)
+        self.assertIn("3.10", out)
 
     def test_from_import_of_missing_sibling_is_an_error(self):
         root = self._with_hook_script("from helper import thing\n")

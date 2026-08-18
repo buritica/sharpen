@@ -473,6 +473,11 @@ def record_gate(data, branch, gate, authorized=False):
     It guards against an agent talking itself past its own process gate, not
     against an adversary — so a named keyword is enough rigor: any bypass has
     to say `authorized=True` out loud, where a reader will see it.
+
+    Also raises if `gate` isn't required by `branch`'s tier (e.g. recording
+    `grumpy-review` on a `tiny` cycle) — keeps `gates` a strict subset of
+    `required_gates`, which every reader already assumes rather than
+    re-filters.
     """
     if gate not in ALL_GATE_NAMES:
         raise ValueError(

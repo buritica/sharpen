@@ -6,7 +6,9 @@ of the repo, keyed by branch.
 Usage:
   record-gate.py --init <tier>          # start a gate cycle for this branch
   record-gate.py --record <gate-name>   # record a gate completion
-  record-gate.py --status               # print current state
+  record-gate.py --status               # print current state (also names
+                                        # where THIS worktree's own skill
+                                        # gates route to, if elsewhere)
   record-gate.py --oneline              # compact one-line status
   record-gate.py --unroute              # stop driving another worktree's gates
   record-gate.py --branch <name>        # override auto-detected branch
