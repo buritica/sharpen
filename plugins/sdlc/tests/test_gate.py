@@ -1890,8 +1890,28 @@ class AutoRecordAmbiguityTest(unittest.TestCase):
         )
         self.assertFalse(res["recorded"])
         self.assertTrue(res["surprising"])
+        self.assertIn("detached HEAD", res["reason"])
         self.assertEqual(data["feat/a"]["gates"], {})
         self.assertEqual(data["feat/b"]["gates"], {})
+
+    def test_unrouted_worktree_list_failure_fails_closed_and_names_the_branch(self):
+        # Distinct from test_routed_stamp_fails_closed_when_worktree_list_fails:
+        # that one covers the routed early-return path. This is the ordinary
+        # unrouted lookup — the ordinary `where` f-string this diff's fix
+        # touches — which had no active_branches=None coverage at all before.
+        data = {}
+        gs.init_gates(data, "feat/a", "small-medium")
+        res = auto.handle_skill_completion(
+            "grumpy:review",
+            data,
+            branch="feat/b",
+            active_branches=None,
+        )
+        self.assertFalse(res["recorded"])
+        self.assertTrue(res["surprising"])
+        self.assertIn('branch "feat/b"', res["reason"])
+        self.assertIn("git worktree list", res["reason"])
+        self.assertEqual(data["feat/a"]["gates"], {})
 
 
 class StoreHousekeepingTest(unittest.TestCase):
