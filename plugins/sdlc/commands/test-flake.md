@@ -248,6 +248,11 @@ For each flake, add a brief diagnosis hint if you can infer it from the log
 (timing dependency, shared state, missing teardown, random seed, port conflict,
 etc.).
 
+Mention that the raw logs backing these numbers live at `$FLAKE_TMPDIR` and
+will be deleted at the end of this run (Step 6) — the report is a summary,
+not a durable record; a user wanting to inspect a specific segment or re-run
+analysis on the same data needs to do it before this invocation finishes.
+
 ## 5. Optionally file GitHub issues
 
 If `--file-issues` was passed AND `gh` is available AND flakes were found:

@@ -59,8 +59,20 @@ if [ -z "$BASE" ]; then
     done
   fi
 fi
+if [ -z "$BASE" ]; then
+  echo "Could not resolve a base branch (no origin/HEAD symref, no origin/main," \
+       "origin/master, main, or master). Pass --base <branch> explicitly." >&2
+  exit 1
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD | grep -v '^$'
 ```
+
+Unlike the diff-scoped grumpy commands (which have staged/unstaged/`HEAD~1`
+fallback priorities to fall through to), this command has no other diff
+source — an unresolved `$BASE` here means stop and say so, not silently run
+`git diff --name-only ...HEAD` (which bash would collapse to `HEAD...HEAD`,
+exit 0, empty output — indistinguishable from "no changed source files" and
+reported as a clean bill of health on a repo that may have plenty).
 
 Filter to source files only — exclude test files, config, documentation, and
 generated files from the gap analysis (they are not "production code that needs

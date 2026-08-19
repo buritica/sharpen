@@ -62,6 +62,11 @@ if [ -z "$BASE" ]; then
     done
   fi
 fi
+if [ -z "$BASE" ]; then
+  echo "Could not resolve a base branch (no origin/HEAD symref, no origin/main," \
+       "origin/master, main, or master). Pass --base <branch> explicitly." >&2
+  exit 1
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD \
   | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt|php)$|.*_test\.exs$'
 ```

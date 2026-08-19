@@ -34,6 +34,16 @@ list of modes that would be invoked, then stop. Do not run any review.
 
 ```bash
 WT="${WT:-.}"
+# Check HEAD state before anything else. review.md/edge-cases.md/imagine.md
+# all abort outright on detached HEAD; dispatch must too, and before routing —
+# otherwise it can select a mode set, then have review/edge-cases/imagine
+# individually refuse on detached HEAD while product.md silently falls back
+# to a whole-project scan, producing a fan-out synthesis that conflates two
+# different analysis scopes with no coordination between them.
+if [ "$(git -C "$WT" rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
+  echo "You're in detached HEAD state. Attach to a branch before running dispatch." >&2
+  exit 1
+fi
 # Resolve the default branch — this mirrors the same fallback chain
 # auto-init-gate-cycle.py uses, since a bare origin/HEAD symref isn't always
 # set and a master-only repo would otherwise silently break on a hardcoded

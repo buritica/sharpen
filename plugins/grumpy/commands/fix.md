@@ -77,7 +77,11 @@ deduplicates `review.md`'s findings across every fanned mode (that's what a
 fan-out synthesis is). Parse `dispatch.md` only in that case and skip
 `review.md` — combining both re-derives the same findings twice and can
 dispatch two separate fix agents at the same file:line with no coordination
-between them.
+between them. **Say which artifact(s) you parsed** in the summary (Step 4) —
+same "never silently downgrade" obligation as the `models.yaml`-unreadable
+case below: if `dispatch.md` and `review.md` disagree (e.g. `review.md` was
+re-run standalone after the fan-out and is now newer), the user should learn
+which one fix acted on, not discover it later.
 
 `audit.md` is special: its **Improvement Steps** already carry an `exec:` tier
 hint and an `accept:` command per step. When parsing an audit, treat each step
