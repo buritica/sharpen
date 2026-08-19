@@ -1,6 +1,6 @@
 {
   "name": "sdlc-guardrails",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Opt-in main-branch commit protection for the sdlc workflow (gate-chain enforcement lives in the sdlc plugin)",
   "author": {
     "name": "buritica"
