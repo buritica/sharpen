@@ -77,8 +77,9 @@ Automatically detect what to imagine. No questions:
 After determining the correct diff command, run it and capture the full output
 as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE` (e.g.,
 'origin/main...HEAD', 'staged changes', 'unstaged changes', or 'HEAD~1'). Also
-run `git rev-parse --short HEAD` and store as `HEAD_SHA`. These will be passed
-directly to agents.
+run `git -C "$WT" rev-parse --short HEAD` and store as `HEAD_SHA` — without
+`-C "$WT"` this stamps the invoking session's cwd instead of the targeted
+worktree when `--worktree` is set. These will be passed directly to agents.
 
 If the diff is empty: "There's nothing here to imagine. Did you actually write
 any code or just think about it really hard?"
@@ -501,5 +502,5 @@ addressed. Don't silently modify code.
 
 ## Gotchas
 
-- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the base branch: `git diff origin/main...HEAD`.
+- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the resolved base from Step 1 (`origin/HEAD`, not a hardcoded `origin/main` — the default branch isn't always `main`).
 - "First deploy" scenarios are the highest-value findings — new env vars, missing migrations, config changes that need a restart. These are easy to dismiss as "obvious" but ship broken regularly.

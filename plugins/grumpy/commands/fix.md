@@ -67,8 +67,11 @@ ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 
 Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
 `audit.md`, `review.md`, `imagine.md`, `architecture.md`, `edge-cases.md`,
-`product.md`, `security.md`, `cleanup.md`. Use whichever files exist as the
-review output to parse. If multiple exist, parse all and combine findings.
+`product.md`, `security.md`, `cleanup.md`, `dispatch.md` (a fan-out synthesis —
+written under this name only when `review` was also one of the fanned modes,
+so its own `review.md` isn't clobbered; see `/grumpy:dispatch` Step 5). Use
+whichever files exist as the review output to parse. If multiple exist, parse
+all and combine findings.
 
 `audit.md` is special: its **Improvement Steps** already carry an `exec:` tier
 hint and an `accept:` command per step. When parsing an audit, treat each step
@@ -135,9 +138,11 @@ rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
 strong tier, not a mix. The thrifty split is real, just conditional on going
 through `/grumpy:audit` first.
 
-Read `plugins/grumpy/models.yaml` (relative to this plugin, not the target repo)
-for the role→model map. If it isn't readable from where you're running, use the
-native defaults below directly — they are the source of truth for dispatch. Route
+Read `${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a
+repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
+target repo's cwd in an installed plugin, not this plugin's own directory. If
+it isn't readable from where you're running, use the native defaults below
+directly — they are the source of truth for dispatch. Route
 each task by its `exec:` tier hint, passing the resolved model as the Task tool's
 **`model`** argument:
 
@@ -160,8 +165,9 @@ a role to a `wrapper_required` model (Fable), use its native fallback
 Sonnet-or-cheaper; only gate-failure escalation (below) may exceed it, by one
 rung, once per task. Default: no clamp — route by hint.
 
-Findings from non-audit reviews (no `exec:`/`accept:`) default to the `exec`
-tier.
+(Findings from non-audit reviews have no hint and route to `analysis`/opus per
+the bullet above — see the "thrifty split" note earlier in this section for
+why that's the correct, if pricier, default rather than an oversight.)
 
 Each sub-agent prompt must include:
 

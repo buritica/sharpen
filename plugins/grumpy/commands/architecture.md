@@ -65,7 +65,12 @@ launch those agents. Otherwise launch all five.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase.
+context from Step 1 and independently explores the codebase. Before dispatch,
+replace every "Explore the current working directory" line below with
+"Explore the project at `[WT]`" substituting the literal resolved `$WT` path —
+a sub-agent has no access to this command's shell variables, so "the current
+working directory" otherwise means wherever the harness happens to start it,
+not necessarily `$WT`.
 
 ### Agent 1: Structure
 

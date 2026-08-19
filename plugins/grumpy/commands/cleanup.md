@@ -81,16 +81,23 @@ those agents. Otherwise launch all four.
 ### Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase.
+context from Step 1 and independently explores the codebase. Before dispatch,
+replace every "Explore the current working directory" line below with
+"Explore the project at `[WT]`" substituting the literal resolved `$WT` path —
+a sub-agent has no access to this command's shell variables, so "the current
+working directory" otherwise means wherever the harness happens to start it,
+not necessarily `$WT`.
 
 #### Agent 1: dead-code
 
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're hunting dead code.
 
-Explore the current working directory using Glob and Read (NOT find or ls) and identify:
+Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
 - Unused imports and require statements
-- Unreachable or uncalled functions and methods
+- Unreachable or uncalled functions and methods (Grep for callers before
+  calling anything dead — a zero-hit grep for a symbol's name is what makes
+  "uncalled" a fact instead of a guess)
 - Orphaned files that nothing imports or references
 - Commented-out code blocks
 - Unused variables, constants, and exports
@@ -139,14 +146,15 @@ Be specific: every finding must state what (the symbol/file), where (`file:line`
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're taking out the trash.
 
-Explore the current working directory using Glob and Read (NOT find or ls) and identify:
+Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
 - Temp files: .bak, .old, .tmp, .orig, .swp files
 - One-off scripts that served their purpose and linger
 - Build artifacts not covered by gitignore
 - Stale config files for tools no longer used
 - Leftover scaffolding and boilerplate
 - Empty directories (besides intentional .gitkeep)
-- Unused dependencies in package manifests
+- Unused dependencies in package manifests (Grep for each dependency's import
+  name before calling it unused)
 - Dead migration files or seed data
 - Leftover feature flag config for shipped or removed features
 

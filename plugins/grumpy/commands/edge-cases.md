@@ -53,11 +53,25 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 Automatically detect what to analyze. No questions:
 
 1. Run `git -C "$WT" status` and `git -C "$WT" diff --name-only`
+   - Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it returns
+     `HEAD`, respond: "You're in detached HEAD state. Attach to a branch before
+     running edge-cases — I can't reliably determine what you're trying to ship."
+     and stop.
 2. Determine the best diff, in priority order:
-   - Branch ahead of main: `git -C "$WT" diff main...HEAD`
+   - Branch ahead of origin default:
+     `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD`
    - Staged changes: `git -C "$WT" diff --staged`
    - Unstaged changes: `git -C "$WT" diff`
-   - Fallback: `git -C "$WT" diff HEAD~1`
+   - Fallback: `git -C "$WT" diff HEAD~1 2>/dev/null` — if this returns a fatal error
+     (empty output from error), emit the 'nothing here' message instead of
+     passing the error to agents.
+
+After determining the correct diff command, run it and capture the full output
+as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE`. Sub-agents
+launched via the Task tool do not inherit this command's shell variables
+(`$WT`), so they cannot re-run `git -C "$WT" diff` themselves — the diff must
+be inlined into each agent's prompt (see below), never handed to the agent as
+a command to execute.
 
 If the diff is empty: "There's nothing here. Did you actually write any code or
 just think about it really hard?"
@@ -73,11 +87,13 @@ Prompt:
 ```
 You are a grumpy principal engineer who's been paged at 3am too many times.
 
-Analyze these changes for CODE edge cases. Get the diff by running these commands in order and using the first that returns output:
-1. `git -C "$WT" rev-list --count main..HEAD` — if > 0, use `git -C "$WT" diff main...HEAD`
-2. `git -C "$WT" diff --staged --name-only` — if non-empty, use `git -C "$WT" diff --staged`
-3. `git -C "$WT" diff --name-only` — if non-empty, use `git -C "$WT" diff`
-4. Fallback: `git -C "$WT" diff HEAD~1`
+Analyze these changes for CODE edge cases (base: [DIFF_BASE]):
+
+<<<DIFF_START>>>
+[DIFF_CONTENT]
+<<<DIFF_END>>>
+
+Do not run git commands to re-fetch the diff — use what is provided above.
 
 Focus on:
 - Null/nil/undefined/None — every place a value could be absent
@@ -104,11 +120,13 @@ Prompt:
 ```
 You are a grumpy principal engineer who's been paged at 3am too many times.
 
-Analyze these changes for PRODUCT and OUTCOME edge cases. Get the diff by running these commands in order and using the first that returns output:
-1. `git -C "$WT" rev-list --count main..HEAD` — if > 0, use `git -C "$WT" diff main...HEAD`
-2. `git -C "$WT" diff --staged --name-only` — if non-empty, use `git -C "$WT" diff --staged`
-3. `git -C "$WT" diff --name-only` — if non-empty, use `git -C "$WT" diff`
-4. Fallback: `git -C "$WT" diff HEAD~1`
+Analyze these changes for PRODUCT and OUTCOME edge cases (base: [DIFF_BASE]):
+
+<<<DIFF_START>>>
+[DIFF_CONTENT]
+<<<DIFF_END>>>
+
+Do not run git commands to re-fetch the diff — use what is provided above.
 
 Focus on:
 - Unusual user flows — what happens when users do things in unexpected order?
@@ -135,11 +153,13 @@ Prompt:
 ```
 You are a grumpy principal engineer who's been paged at 3am too many times.
 
-Analyze these changes for SECURITY edge cases. Get the diff by running these commands in order and using the first that returns output:
-1. `git -C "$WT" rev-list --count main..HEAD` — if > 0, use `git -C "$WT" diff main...HEAD`
-2. `git -C "$WT" diff --staged --name-only` — if non-empty, use `git -C "$WT" diff --staged`
-3. `git -C "$WT" diff --name-only` — if non-empty, use `git -C "$WT" diff`
-4. Fallback: `git -C "$WT" diff HEAD~1`
+Analyze these changes for SECURITY edge cases (base: [DIFF_BASE]):
+
+<<<DIFF_START>>>
+[DIFF_CONTENT]
+<<<DIFF_END>>>
+
+Do not run git commands to re-fetch the diff — use what is provided above.
 
 Focus on:
 - Injection — SQL, command, template, path traversal with crafted inputs

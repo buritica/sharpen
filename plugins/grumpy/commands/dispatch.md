@@ -93,15 +93,19 @@ State the reasoning in one sentence per selected mode.
 
 ### Single-mode path
 
-If exactly one mode is selected, run it immediately by reading and executing
-the instructions in the corresponding command file:
+If exactly one mode is selected, invoke it as a real Skill call — do **not**
+`cat` the command file and follow its instructions inline. Gate enforcement
+(the `sdlc` plugin's PostToolUse hook that auto-records `grumpy-review` /
+`grumpy-imagine` gates) fires only when the `Skill` tool itself is called with
+a tracked skill name; inlining a command's instructions never makes that
+call, so on a gated branch the gate silently never records:
 
-```bash
-cat "$CLAUDE_PLUGIN_ROOT/commands/<mode>.md"
+```
+Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")
 ```
 
-Then follow those instructions exactly, passing `--worktree "$WT"` and
-`--level <level>` as arguments.
+This is exactly equivalent to the user typing `/grumpy:<mode> --worktree "$WT"
+--level <level>` directly — same artifact output, same gate recording.
 
 ### Fan-out path
 
@@ -114,11 +118,13 @@ multi-agent pipeline that saturates available capacity):
 
 For each selected mode:
 1. Mark its task `in_progress`.
-2. Read `$CLAUDE_PLUGIN_ROOT/commands/<mode>.md`.
-3. Execute the instructions in that file, passing `--worktree "$WT"` and
-   `--level <level>`.
-4. Capture the findings (Critical Issues, Serious Concerns, Suggestions).
-5. Mark its task `completed`.
+2. Invoke it as a real Skill call, same as the single-mode path:
+   `Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")`.
+   Each mode still writes its own artifact and — for `review`/`imagine` —
+   still records its own gate exactly as a direct invocation would; nothing
+   about running inside a fan-out changes that.
+3. Capture the findings (Critical Issues, Serious Concerns, Suggestions).
+4. Mark its task `completed`.
 
 After all modes complete, synthesize results (see Step 4).
 
@@ -169,7 +175,12 @@ ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
 ```
 
-Write the full report to `$ARTIFACT_DIR/review.md`.
+Write the full report to `$ARTIFACT_DIR/review.md` — **unless** `review` was
+one of the fanned-out modes, in which case its own Step 5 already wrote that
+file with its own (non-synthesized) findings; overwriting it here would
+silently discard that per-mode output. In that case write the synthesis to
+`$ARTIFACT_DIR/dispatch.md` instead, and say so in the report's closing line
+so the user knows where to look for both.
 
 For single-mode dispatches the individual mode already writes its own
 `review.md`; do not overwrite it — the single-mode output is the final report.
@@ -206,5 +217,11 @@ modes in this list:**
   mention it in the verdict as a next step.
 - Fan-out increases runtime significantly. If the diff is clearly dominated by
   one signal, prefer single-mode dispatch and say so.
+- Both paths above invoke real `Skill` calls rather than reading a command
+  file and following it inline. This matters beyond style: the `sdlc` plugin's
+  gate-recording hook only fires on an actual `Skill` tool call naming a
+  tracked skill, so on a gated branch, dispatching to `review`/`imagine`
+  records their gate exactly as if you'd run them directly — no separate step
+  needed, and no silent gap.
 - `--dry-run` is useful before a large fan-out to confirm the routing makes
   sense without spending the time.

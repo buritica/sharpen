@@ -43,23 +43,37 @@ level-appropriate version:
   hostile, call it hostile. Every harsh judgment must be backed by a specific
   product argument. No softening, no hedging."
 
-**Focus areas (optional):** "$ARGUMENTS"
+**Focus areas (optional):** "$ARGUMENTS" — if specific areas are named (e.g.
+`experience metrics`), only launch those agents. This applies to **both** the
+Diff Path and the whole-project path below; otherwise launch all four.
 
 ## Worktree targeting
 
-Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. When set, explore `$WT` for the project scan instead of the current directory. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
+Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
+
+Sub-agents launched via the Task tool do not inherit this command's shell
+variables. For the Diff Path, that means the diff must be inlined into each
+prompt (see below), never handed to the agent as a `git` command to run. For
+the whole-project path, it means every "explore the current working
+directory" instruction below must have `$WT` substituted for its literal
+resolved path before the prompt is sent — an agent told to explore "the
+current working directory" explores wherever the harness happens to start it,
+not necessarily `$WT`.
 
 ## Scope Detection
 
 Before choosing a path, detect whether there is a diff to review:
 
-1. Run each command in order until one returns output:
-   - `git -C "$WT" diff main...HEAD` (branch ahead of main)
+1. Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
+   returns `HEAD` (detached), skip straight to **Step 1: Scan the Project**
+   (whole-project path) — there's no meaningful branch diff to resolve.
+2. Otherwise run each command in order until one returns output:
+   - `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD` (branch ahead of origin default)
    - `git -C "$WT" diff --staged` (staged changes)
    - `git -C "$WT" diff` (unstaged changes)
-   - `git -C "$WT" diff HEAD~1` (fallback)
-2. If any produces output, capture it as `DIFF_CONTENT` and proceed to **Diff Path** below.
-3. If none produces output, proceed to **Step 1: Scan the Project** (whole-project path).
+   - `git -C "$WT" diff HEAD~1 2>/dev/null` (fallback)
+3. If any produces output, capture it as `DIFF_CONTENT` and proceed to **Diff Path** below.
+4. If none produces output, proceed to **Step 1: Scan the Project** (whole-project path).
 
 ## Diff Path: Launch Parallel Agents
 
@@ -74,9 +88,9 @@ You are a grumpy senior product engineer who has reviewed too many products that
 
 Review these changes for USER EXPERIENCE quality. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -104,9 +118,9 @@ You are a grumpy senior product engineer who asks "why does this feature exist?"
 
 Review these changes for whether FEATURES MAP TO OUTCOMES. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -133,9 +147,9 @@ You are a grumpy senior product engineer who has been asked "is this working?" a
 
 Review these changes for PRODUCT OBSERVABILITY. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -162,9 +176,9 @@ You are a grumpy senior product engineer who notices when products are good and 
 
 Review these changes for PRODUCT POLISH. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -176,9 +190,9 @@ Evaluate:
 - Confirmation and feedback: does the user know when actions complete or fail?
 
 Return findings as:
-## 🚨 Actively Harmful (polish)
-## ⚠️ Generic and Forgettable (polish)
-## 🤔 Missed Opportunity (polish)
+## 🚨 Actively Harmful (delight)
+## ⚠️ Generic and Forgettable (delight)
+## 🤔 Missed Opportunity (delight)
 
 Be specific. Reference actual file:line. Show what generic looks like and what good would look like.
 ```
@@ -204,7 +218,12 @@ those agents. Otherwise launch all four.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent independently
-explores the codebase from its product lens.
+explores the codebase from its product lens. Before dispatch, replace every
+"Explore the current working directory" line below with "Explore the project
+at `[WT]`" substituting the literal resolved `$WT` path — a sub-agent has no
+access to this command's shell variables and "the current working directory"
+otherwise means wherever the harness happens to start it, not necessarily
+`$WT`.
 
 ### Agent 1: Experience
 
