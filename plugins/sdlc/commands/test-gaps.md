@@ -14,7 +14,8 @@ CI with untested changed code is still a liability.
 ## 0. Parse arguments
 
 From `$ARGUMENTS`:
-- `--base <branch>` → diff against this branch instead of `origin/main`.
+- `--base <branch>` → diff against this branch instead of the resolved default
+  (see step 2 — a bare `origin/main` guess breaks on `master`-default repos).
 - `--worktree <path>` (alias `--path <path>`) → operate in that worktree.
   Set `WT` to that path; otherwise `WT` is cwd. Use `git -C "$WT"` for all
   git operations.
@@ -44,8 +45,20 @@ Announce the detected stack(s) before proceeding.
 ## 2. Get the changed source files
 
 ```bash
-BASE="${BASE:-origin/main}"
 WT="${WT:-.}"
+if [ -z "$BASE" ]; then
+  # Resolve the default branch dynamically — mirrors the same fallback chain
+  # auto-init-gate-cycle.py uses. A bare "origin/main" guess breaks with
+  # "fatal: ambiguous argument" on a master-default repo, and nothing below
+  # checks that exit code, so a hardcoded guess here silently produces "no
+  # source files changed" on a repo that has plenty.
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [ -z "$BASE" ]; then
+    for candidate in origin/main origin/master main master; do
+      git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+    done
+  fi
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD | grep -v '^$'
 ```
 

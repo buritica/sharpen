@@ -18,8 +18,9 @@ that have been "temporary" for two years. Find them.
 ## 0. Parse arguments
 
 From `$ARGUMENTS`:
-- `--base <branch>` → diff against this branch (default: `origin/main`). Only
-  used when `--scope changed`.
+- `--base <branch>` → diff against this branch instead of the resolved
+  default (see step 2 — a bare `origin/main` guess breaks on `master`-default
+  repos). Only used when `--scope changed`.
 - `--scope all|changed` → `changed` (default) reviews only test files touched in
   the current branch diff; `all` reviews every test file in the repo. Use `all`
   sparingly on large repos.
@@ -49,8 +50,18 @@ Announce the detected stack and scope before proceeding.
 **Scope: changed (default)**
 
 ```bash
-BASE="${BASE:-origin/main}"
 WT="${WT:-.}"
+if [ -z "$BASE" ]; then
+  # Resolve the default branch dynamically — mirrors the same fallback chain
+  # auto-init-gate-cycle.py uses. A bare "origin/main" guess breaks with
+  # "fatal: ambiguous argument" on a master-default repo.
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [ -z "$BASE" ]; then
+    for candidate in origin/main origin/master main master; do
+      git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+    done
+  fi
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD \
   | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt|php)$|.*_test\.exs$'
 ```

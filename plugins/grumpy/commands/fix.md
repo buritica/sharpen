@@ -71,7 +71,13 @@ Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
 written under this name only when `review` was also one of the fanned modes,
 so its own `review.md` isn't clobbered; see `/grumpy:dispatch` Step 5). Use
 whichever files exist as the review output to parse. If multiple exist, parse
-all and combine findings.
+all and combine findings — **except** `dispatch.md` and `review.md` together:
+when both are present, `dispatch.md`'s synthesis already re-lists and
+deduplicates `review.md`'s findings across every fanned mode (that's what a
+fan-out synthesis is). Parse `dispatch.md` only in that case and skip
+`review.md` — combining both re-derives the same findings twice and can
+dispatch two separate fix agents at the same file:line with no coordination
+between them.
 
 `audit.md` is special: its **Improvement Steps** already carry an `exec:` tier
 hint and an `accept:` command per step. When parsing an audit, treat each step

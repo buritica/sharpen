@@ -287,7 +287,17 @@ EOF
 
 Print each created issue URL.
 
-## 6. Exit guidance
+## 6. Clean up
+
+```bash
+rm -rf "$FLAKE_TMPDIR"
+```
+
+Do this last, after the report (and any GitHub issues) have already been
+generated — `$FLAKE_TMPDIR` holds every log and segment file that backed
+those numbers.
+
+## 7. Exit guidance
 
 - If flakes were found: suggest running with `--runs 10` or `--runs 20` to
   measure frequency more accurately before spending time fixing low-rate flakes.

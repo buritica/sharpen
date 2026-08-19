@@ -122,11 +122,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine the HAPPY PATH for the changed code, tracing execution step by step.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -164,11 +162,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine STATE TRANSITIONS for the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -230,11 +226,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine CONCURRENCY and RATE LIMITING behavior for the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -284,11 +278,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Audit the OBSERVABILITY of the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
