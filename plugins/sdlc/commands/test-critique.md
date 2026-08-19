@@ -1,5 +1,5 @@
 ---
-description: "Grumpy-style review of test quality — assertions that can't fail, over-mocking, and skipped tests without justification."
+description: "Adversarial review of test quality — assertions that can't fail, over-mocking, and skipped tests without justification."
 argument-hint: "[--base <branch>] [--scope all|changed] [--worktree <path>]"
 allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
 ---
@@ -18,8 +18,9 @@ that have been "temporary" for two years. Find them.
 ## 0. Parse arguments
 
 From `$ARGUMENTS`:
-- `--base <branch>` → diff against this branch (default: `origin/main`). Only
-  used when `--scope changed`.
+- `--base <branch>` → diff against this branch instead of the resolved
+  default (see step 2 — a bare `origin/main` guess breaks on `master`-default
+  repos). Only used when `--scope changed`.
 - `--scope all|changed` → `changed` (default) reviews only test files touched in
   the current branch diff; `all` reviews every test file in the repo. Use `all`
   sparingly on large repos.
@@ -40,6 +41,7 @@ Test file patterns by stack:
 - **Ruby:** `*_spec.rb`, `test_*.rb`
 - **Elixir:** `*_test.exs`
 - **Java/Kotlin:** `*Test.java`, `*Test.kt`, `*Spec.kt`
+- **PHP:** `*Test.php`
 
 Announce the detected stack and scope before proceeding.
 
@@ -48,10 +50,25 @@ Announce the detected stack and scope before proceeding.
 **Scope: changed (default)**
 
 ```bash
-BASE="${BASE:-origin/main}"
 WT="${WT:-.}"
+if [ -z "$BASE" ]; then
+  # Resolve the default branch dynamically — mirrors the same fallback chain
+  # auto-init-gate-cycle.py uses. A bare "origin/main" guess breaks with
+  # "fatal: ambiguous argument" on a master-default repo.
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [ -z "$BASE" ]; then
+    for candidate in origin/main origin/master main master; do
+      git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+    done
+  fi
+fi
+if [ -z "$BASE" ]; then
+  echo "Could not resolve a base branch (no origin/HEAD symref, no origin/main," \
+       "origin/master, main, or master). Pass --base <branch> explicitly." >&2
+  exit 1
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD \
-  | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt)$|.*_test\.exs$'
+  | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt|php)$|.*_test\.exs$'
 ```
 
 Adapt the grep pattern to the detected stack.
@@ -68,6 +85,7 @@ find "$WT" -type f \( \
   -o -name "*_spec.rb" -o -name "test_*.rb" \
   -o -name "*Test.java" -o -name "*Test.kt" \
   -o -name "*_test.exs" \
+  -o -name "*Test.php" \
 \) 2>/dev/null \
   | grep -vE '(node_modules|dist|build|coverage|vendor|\.git)/'
 ```

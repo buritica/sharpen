@@ -68,14 +68,22 @@ those agents. Otherwise launch all four.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase.
+context from Step 1 and independently explores the codebase. Every agent
+prompt below uses the `[WT_PATH]` placeholder — substitute it with the
+literal resolved `$WT` path before dispatch, for every agent, not just the
+first. A sub-agent has no access to this command's shell variables, so an
+unsubstituted "explore the project" instruction otherwise means wherever the
+harness happens to start it, not necessarily `$WT`. Before launching, check
+each built prompt for a literal `[WT_PATH]` still present — that means the
+substitution step was skipped for that agent, and it must not be dispatched
+unsubstituted: it would silently explore the wrong directory with no error.
 
 ### Agent 1: auth
 
 ```
 You are a grumpy principal engineer auditing a project's authentication and authorization.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Auth flow correctness — login, logout, token refresh, password reset: are they all implemented and sound?
 - Authorization checks — are they present on every protected route? Are they consistent or do some routes skip them?
 - Session management — expiry, invalidation, fixation: are sessions handled correctly or left to hope?
@@ -98,7 +106,7 @@ Be specific. Each finding must state: what it is, where (`file:line`), why it ma
 ```
 You are a grumpy principal engineer auditing a project's secrets management and data exposure.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Hardcoded secrets — API keys, passwords, tokens, connection strings in source code or committed config files
 - PII in logs — are sensitive fields (emails, passwords, tokens, SSNs) logged? Are they masked?
 - Error message leaks — do error responses reveal stack traces, internal paths, database schemas, or other internals?
@@ -121,7 +129,7 @@ Be specific. Each finding must state: what it is, where (`file:line`), why it ma
 ```
 You are a grumpy principal engineer auditing a project's input validation and injection attack surface.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - SQL/NoSQL injection — are queries parameterized or built with string concatenation? Check every database call.
 - XSS — output encoding, CSP headers, template escaping: is user input rendered safely or pasted into HTML?
 - Command injection — are there shell calls that incorporate user input? Are they sanitized?
@@ -144,7 +152,7 @@ Be specific. Each finding must state: what it is, where (`file:line`), why it ma
 ```
 You are a grumpy principal engineer auditing a project's dependency security posture.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Known CVEs — check dependency manifests and lock files for known-vulnerable versions. Note any obviously outdated packages.
 - Outdated packages — major version lag, packages that haven't been updated in years, unmaintained dependencies
 - Supply chain risks — typosquatting indicators (misspelled package names), unusual package sources, unpinned versions

@@ -62,6 +62,11 @@ git -C "$ROOT" config core.hooksPath 2>/dev/null || echo "(core.hooksPath not se
 # EditorConfig
 ls "$ROOT/.editorconfig" 2>/dev/null || echo "(no .editorconfig)"
 
+# Secrets wiring (pattern 7) — the .env.op template /sdlc:secrets scaffolds,
+# and whether CI resolves secrets via op:// references at all.
+ls "$ROOT/.env.op"* "$ROOT/.env.example" 2>/dev/null || echo "(no .env.op template)"
+grep -rl 'op://' "$ROOT/.github/workflows/" 2>/dev/null || echo "(no op:// references in CI)"
+
 # Branch protection (enforcement posture). Derive owner/repo from the remote so
 # this works against --worktree paths (gh has no -C; it reads cwd's remote).
 OWNER_REPO=$(git -C "$ROOT" remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')
@@ -190,6 +195,19 @@ reformatters run against an intentional style (the footgun), e.g.
 
 **P6-C: EditorConfig** — `.editorconfig` at root.
 - PASS: present · WARN: absent
+
+### Pattern 7 — Secrets
+
+**P7: 1Password-backed secrets wiring** — delegated in depth to `/sdlc:secrets`,
+but audit still reports the surface signal: a `.env.op`-style template and CI
+resolving secrets via `op://` references rather than raw platform secrets for
+anything beyond the deploy platform's own credential.
+- PASS: `.env.op` template present and CI has at least one `op://` reference
+- WARN: secrets exist (repo calls an external API/service) but are wired as
+  plain GitHub Actions secrets with no 1Password layer — functional, no
+  tier/blast-radius isolation
+- SKIP: repo has no secrets to manage (no external API keys/tokens referenced
+  anywhere in the codebase or CI)
 
 ### Pattern 8 — Deploy (skip entirely if the repo ships nothing)
 

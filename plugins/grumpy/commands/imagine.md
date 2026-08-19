@@ -66,19 +66,44 @@ Automatically detect what to imagine. No questions:
      running imagine — I can't reliably determine what you're trying to ship."
      and stop.
 2. Determine the best diff, in priority order:
-   - Branch ahead of origin default:
-     `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD`
+   - Branch ahead of origin default: resolve `BASE` first, trying each
+     candidate in order until one exists — this mirrors the same fallback
+     chain `auto-init-gate-cycle.py` uses, since a bare `origin/HEAD` symref
+     isn't always set and a `master`-only repo would otherwise silently break
+     on a hardcoded `origin/main` guess:
+     ```bash
+     BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     if [ -z "$BASE" ]; then
+       for candidate in origin/main origin/master main master; do
+         git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+       done
+     fi
+     ```
+     If `$BASE` is still empty here, **skip this priority entirely** — do
+     not run `git -C "$WT" diff "$BASE"...HEAD`. Bash expands an empty
+     `"$BASE"` away, so the command silently becomes `git diff ...HEAD`,
+     which git parses as `HEAD...HEAD`: exit 0, empty output — indistinguishable
+     from "no diff at this priority," which is exactly the signal every
+     fallback below relies on to know when to try the next one. Only run
+     `git -C "$WT" diff "$BASE"...HEAD` when `$BASE` actually resolved.
    - Staged changes: `git -C "$WT" diff --staged`
    - Unstaged changes: `git -C "$WT" diff`
    - Fallback: `git -C "$WT" diff HEAD~1 2>/dev/null` — if this returns a fatal error
      (empty output from error), emit the 'nothing here' message instead of
      passing the error to agents.
 
-After determining the correct diff command, run it and capture the full output
-as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE` (e.g.,
-'origin/main...HEAD', 'staged changes', 'unstaged changes', or 'HEAD~1'). Also
-run `git rev-parse --short HEAD` and store as `HEAD_SHA`. These will be passed
-directly to agents.
+After determining the correct diff command, run it capped at 200000
+characters (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and
+capture the output as `DIFF_CONTENT`. This diff gets inlined into every one
+of the four parallel agent prompts below, uncapped it multiplies token cost
+by the agent count on a large diff — the cap bounds that the same way
+dispatch already does for its own diff capture. Also capture the diff base
+as `DIFF_BASE` (e.g., 'origin/main' (the resolved $BASE — no '...HEAD'
+suffix, that's appended separately in the git command), 'staged changes',
+'unstaged changes', or 'HEAD~1'). Also
+run `git -C "$WT" rev-parse --short HEAD` and store as `HEAD_SHA` — without
+`-C "$WT"` this stamps the invoking session's cwd instead of the targeted
+worktree when `--worktree` is set. These will be passed directly to agents.
 
 If the diff is empty: "There's nothing here to imagine. Did you actually write
 any code or just think about it really hard?"
@@ -97,11 +122,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine the HAPPY PATH for the changed code, tracing execution step by step.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -139,11 +162,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine STATE TRANSITIONS for the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -205,11 +226,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Imagine CONCURRENCY and RATE LIMITING behavior for the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -259,11 +278,9 @@ You are a grumpy principal engineer who's been paged at 3am too many times.
 Audit the OBSERVABILITY of the changed code.
 Here is the diff to analyze (base: [DIFF_BASE]):
 
-```
-
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -501,5 +518,5 @@ addressed. Don't silently modify code.
 
 ## Gotchas
 
-- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the base branch: `git diff origin/main...HEAD`.
+- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the resolved base from Step 1 (`origin/HEAD`, not a hardcoded `origin/main` — the default branch isn't always `main`).
 - "First deploy" scenarios are the highest-value findings — new env vars, missing migrations, config changes that need a restart. These are easy to dismiss as "obvious" but ship broken regularly.

@@ -44,13 +44,22 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 This command is the heaviest reasoning grumpy does. Run the synthesis and
 planning (Phases 1, 3, 4) on the strongest available model. Read
-`plugins/grumpy/models.yaml` (relative to this plugin) for the role→model map.
-Use the `audit` role for synthesis/planning and `analysis` for the composed
-reviews. Only `sonnet`/`opus`/`haiku` are natively dispatchable via the Task
-tool's `model` argument; map any role whose model is marked `wrapper-required`
-(e.g. Fable) down to its documented native fallback (`opus`) and note
-the substitution in the report's run header. **Never silently downgrade** — say
-which model actually ran.
+`${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a repo-relative
+`plugins/grumpy/models.yaml` spelling resolves against the consumer repo's cwd
+in an installed plugin, not this plugin's own directory, and silently fails to
+exist there. If it isn't readable from where you're running, **say so in the
+report's run header** ("models.yaml unreadable — used native defaults") and
+use these native defaults directly rather than guessing: `audit` role →
+`opus`, `analysis` role → `opus`. This is the same "never silently downgrade"
+obligation as the `wrapper-required` substitution below — a user routed
+entirely to opus because the config file failed to load should learn that
+from the report, not discover it later. Use the `audit` role for
+synthesis/planning and `analysis` for the
+composed reviews. Only `sonnet`/`opus`/`haiku` are natively dispatchable via
+the Task tool's `model` argument; map any role whose model is marked
+`wrapper-required` (e.g. Fable) down to its documented native fallback
+(`opus`) and note the substitution in the report's run header. **Never
+silently downgrade** — say which model actually ran.
 
 ## Phase 1 — Discovery & Mapping (read before judging)
 

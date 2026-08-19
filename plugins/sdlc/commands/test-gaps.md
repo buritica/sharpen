@@ -14,7 +14,8 @@ CI with untested changed code is still a liability.
 ## 0. Parse arguments
 
 From `$ARGUMENTS`:
-- `--base <branch>` → diff against this branch instead of `origin/main`.
+- `--base <branch>` → diff against this branch instead of the resolved default
+  (see step 2 — a bare `origin/main` guess breaks on `master`-default repos).
 - `--worktree <path>` (alias `--path <path>`) → operate in that worktree.
   Set `WT` to that path; otherwise `WT` is cwd. Use `git -C "$WT"` for all
   git operations.
@@ -44,22 +45,55 @@ Announce the detected stack(s) before proceeding.
 ## 2. Get the changed source files
 
 ```bash
-BASE="${BASE:-origin/main}"
 WT="${WT:-.}"
+if [ -z "$BASE" ]; then
+  # Resolve the default branch dynamically — mirrors the same fallback chain
+  # auto-init-gate-cycle.py uses. A bare "origin/main" guess breaks with
+  # "fatal: ambiguous argument" on a master-default repo, and nothing below
+  # checks that exit code, so a hardcoded guess here silently produces "no
+  # source files changed" on a repo that has plenty.
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [ -z "$BASE" ]; then
+    for candidate in origin/main origin/master main master; do
+      git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+    done
+  fi
+fi
+if [ -z "$BASE" ]; then
+  echo "Could not resolve a base branch (no origin/HEAD symref, no origin/main," \
+       "origin/master, main, or master). Pass --base <branch> explicitly." >&2
+  exit 1
+fi
 git -C "$WT" diff --name-only "$BASE"...HEAD | grep -v '^$'
 ```
+
+Unlike the diff-scoped grumpy commands (which have staged/unstaged/`HEAD~1`
+fallback priorities to fall through to), this command has no other diff
+source — an unresolved `$BASE` here means stop and say so, not silently run
+`git diff --name-only ...HEAD` (which bash would collapse to `HEAD...HEAD`,
+exit 0, empty output — indistinguishable from "no changed source files" and
+reported as a clean bill of health on a repo that may have plenty).
 
 Filter to source files only — exclude test files, config, documentation, and
 generated files from the gap analysis (they are not "production code that needs
 tests"):
 
 ```bash
-# Exclude known test and non-source paths — adapt to the detected stack
+# Exclude known test and non-source paths — adapt to the detected stack.
+# Every test pattern is anchored (directory boundary, filename prefix, or
+# filename suffix before the extension) rather than a bare substring match —
+# a bare "test" would also drop real source like attestation.py, contest.ts,
+# or latest.go. Likewise `scripts/` is anchored to the repo root, not any
+# directory named scripts/ anywhere in the tree (a nested plugins/*/scripts/
+# holding real production code should not be excluded).
 git -C "$WT" diff --name-only "$BASE"...HEAD \
   | grep -vE '\.(md|json|yaml|yml|toml|lock|txt|env|svg|png|jpg|gif|ico|woff|css|scss)$' \
-  | grep -vE '(test|spec|__tests__|_test\.|Test\.|_spec\.|Spec\.)'  \
-  | grep -vE '(fixtures?|mocks?|fakes?|stubs?|snapshots?)/' \
-  | grep -vE '(\.github|\.husky|scripts/|docs/|dist/|build/|coverage/|node_modules/)'
+  | grep -vE '(^|/)(tests?|__tests__|specs?|fixtures?|mocks?|fakes?|stubs?|snapshots?)/' \
+  | grep -vE '(^|/)test_[^/]*$' \
+  | grep -vE '[._-](test|spec)\.[a-zA-Z0-9]+$' \
+  | grep -vE '(Test|Spec)\.(php|java|kt)$' \
+  | grep -vE '(^|/)(\.github|\.husky|docs|dist|build|coverage|node_modules)(/|$)' \
+  | grep -vE '^scripts/'
 ```
 
 If the filtered list is empty, report "No source files changed" and exit.
