@@ -65,19 +65,19 @@ launch those agents. Otherwise launch all five.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase. Before dispatch,
-replace every "Explore the current working directory" line below with
-"Explore the project at `[WT]`" substituting the literal resolved `$WT` path —
-a sub-agent has no access to this command's shell variables, so "the current
-working directory" otherwise means wherever the harness happens to start it,
-not necessarily `$WT`.
+context from Step 1 and independently explores the codebase. Every agent
+prompt below uses the `[WT_PATH]` placeholder — substitute it with the
+literal resolved `$WT` path before dispatch, for every agent, not just the
+first. A sub-agent has no access to this command's shell variables, so an
+unsubstituted "explore the project" instruction otherwise means wherever the
+harness happens to start it, not necessarily `$WT`.
 
 ### Agent 1: Structure
 
 ```
 You are a grumpy principal engineer reviewing a project's structure.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - File and folder organization — does the structure communicate intent or just accumulate?
 - Module boundaries — are there clear boundaries or is everything dumped in one place?
 - Separation of concerns — is business logic mixed with infrastructure, presentation, or configuration?
@@ -99,7 +99,7 @@ Be specific. Reference actual files and directories with line numbers where rele
 ```
 You are a grumpy principal engineer reviewing a project's coupling and dependencies.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Dependency direction — do high-level modules depend on low-level modules, or is it backwards?
 - Circular dependencies — are there files or modules that import each other?
 - God modules — is there one file that everything imports? How many dependents does it have?
@@ -122,7 +122,7 @@ Be specific. Name the files and the dependency chains with line numbers (`file:l
 ```
 You are a grumpy principal engineer reviewing a project's scalability posture.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Bottlenecks — are there synchronous operations, single-threaded processing, or blocking calls that will choke under load?
 - Single points of failure — what breaks if one component goes down?
 - Data patterns — N+1 queries, unbounded collection loading, missing pagination?
@@ -145,7 +145,7 @@ Be specific. Point to actual code with line numbers (`file:line`). "Won't scale"
 ```
 You are a grumpy principal engineer reviewing a project's dependency choices.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Redundancy — are there multiple libraries doing the same thing? (e.g., three HTTP clients, two ORMs)
 - Currency — are dependencies reasonably up to date, or are there known-vulnerable versions?
 - Weight — are there heavy dependencies pulled in for trivial functionality?
@@ -168,7 +168,7 @@ Be specific. Name the library, name the problem (`package.json:line` if applicab
 ```
 You are a grumpy principal engineer reviewing a project's internal consistency.
 
-Explore the current working directory and evaluate:
+Explore the project at `[WT_PATH]` and evaluate:
 - Naming consistency — are files, functions, variables, and classes named using consistent conventions?
 - Pattern adherence — does the codebase follow its own patterns, or does every file do things differently?
 - Error handling patterns — is error handling consistent, or does each function invent its own approach?

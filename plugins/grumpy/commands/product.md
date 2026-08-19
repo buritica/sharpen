@@ -53,12 +53,10 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 Sub-agents launched via the Task tool do not inherit this command's shell
 variables. For the Diff Path, that means the diff must be inlined into each
-prompt (see below), never handed to the agent as a `git` command to run. For
-the whole-project path, it means every "explore the current working
-directory" instruction below must have `$WT` substituted for its literal
-resolved path before the prompt is sent — an agent told to explore "the
-current working directory" explores wherever the harness happens to start it,
-not necessarily `$WT`.
+prompt as `DIFF_CONTENT`, never handed to the agent as a `git` command to
+run. For the whole-project path, it means every agent prompt's `[WT_PATH]`
+placeholder (see Step 2 below) must be substituted with `$WT`'s literal
+resolved path before the prompt is sent.
 
 ## Scope Detection
 
@@ -67,8 +65,21 @@ Before choosing a path, detect whether there is a diff to review:
 1. Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
    returns `HEAD` (detached), skip straight to **Step 1: Scan the Project**
    (whole-project path) — there's no meaningful branch diff to resolve.
-2. Otherwise run each command in order until one returns output:
-   - `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD` (branch ahead of origin default)
+2. Otherwise resolve `BASE` first, trying each candidate in order until one
+   exists — this mirrors the same fallback chain `auto-init-gate-cycle.py`
+   uses, since a bare `origin/HEAD` symref isn't always set and a
+   `master`-only repo would otherwise silently break on a hardcoded
+   `origin/main` guess:
+   ```bash
+   BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+   if [ -z "$BASE" ]; then
+     for candidate in origin/main origin/master main master; do
+       git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+     done
+   fi
+   ```
+   Then run each command in order until one returns output:
+   - `git -C "$WT" diff "$BASE"...HEAD` (branch ahead of origin default)
    - `git -C "$WT" diff --staged` (staged changes)
    - `git -C "$WT" diff` (unstaged changes)
    - `git -C "$WT" diff HEAD~1 2>/dev/null` (fallback)
@@ -218,19 +229,19 @@ those agents. Otherwise launch all four.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent independently
-explores the codebase from its product lens. Before dispatch, replace every
-"Explore the current working directory" line below with "Explore the project
-at `[WT]`" substituting the literal resolved `$WT` path — a sub-agent has no
-access to this command's shell variables and "the current working directory"
-otherwise means wherever the harness happens to start it, not necessarily
-`$WT`.
+explores the codebase from its product lens. Every agent prompt below uses
+the `[WT_PATH]` placeholder — substitute it with the literal resolved `$WT`
+path before dispatch, for every agent, not just the first. A sub-agent has no
+access to this command's shell variables, so an unsubstituted "explore the
+project" instruction otherwise means wherever the harness happens to start
+it, not necessarily `$WT`.
 
 ### Agent 1: Experience
 
 ```
 You are a grumpy senior product engineer who has reviewed too many products that work but aren't good.
 
-Explore the current working directory and evaluate the USER EXPERIENCE quality:
+Explore the project at `[WT_PATH]` and evaluate the USER EXPERIENCE quality:
 - User flows — are they logical, or do they require context the user doesn't have?
 - Error messages — do they say what went wrong AND what to do about it, or do they just say "error"?
 - Empty states — are they helpful, or does the product just show nothing?
@@ -254,7 +265,7 @@ Be specific. Each finding: what / where (file:line, flow, or component) / why it
 ```
 You are a grumpy senior product engineer who asks "why does this feature exist?" about everything.
 
-Explore the current working directory and evaluate whether FEATURES MAP TO OUTCOMES:
+Explore the project at `[WT_PATH]` and evaluate whether FEATURES MAP TO OUTCOMES:
 - Purpose clarity — can you tell from the code what problem this product is solving?
 - Feature justification — are there features that seem to exist because someone asked for them, rather than because they solve a user problem?
 - Scope creep — are there capabilities that dilute the product's core purpose?
@@ -277,7 +288,7 @@ Be specific. Each finding: what / where (file, flow, or feature name) / user or 
 ```
 You are a grumpy senior product engineer who has been asked "is this working?" and had no answer too many times.
 
-Explore the current working directory and evaluate PRODUCT OBSERVABILITY:
+Explore the project at `[WT_PATH]` and evaluate PRODUCT OBSERVABILITY:
 - Event tracking — are meaningful user actions instrumented? What's missing?
 - Success metrics — is there any way to measure if the product is achieving its purpose?
 - Error observability — are errors tracked in a way that lets you see patterns, not just individual failures?
@@ -300,7 +311,7 @@ Be specific. Each finding: which action / where (file or flow) / business conseq
 ```
 You are a grumpy senior product engineer who notices when products are good and when they are merely functional.
 
-Explore the current working directory and evaluate PRODUCT POLISH and DELIGHT:
+Explore the project at `[WT_PATH]` and evaluate PRODUCT POLISH and DELIGHT:
 - Copy quality — does the text sound like a human wrote it, or a legal team? Are labels, buttons, and messages clear and specific?
 - Default values — are defaults set to what the user actually wants, or to what's easy to implement?
 - Progressive disclosure — does the product show complexity only when needed, or does it front-load everything?

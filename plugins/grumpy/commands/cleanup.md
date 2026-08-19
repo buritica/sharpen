@@ -81,19 +81,19 @@ those agents. Otherwise launch all four.
 ### Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase. Before dispatch,
-replace every "Explore the current working directory" line below with
-"Explore the project at `[WT]`" substituting the literal resolved `$WT` path —
-a sub-agent has no access to this command's shell variables, so "the current
-working directory" otherwise means wherever the harness happens to start it,
-not necessarily `$WT`.
+context from Step 1 and independently explores the codebase. Every agent
+prompt below uses the `[WT_PATH]` placeholder — substitute it with the
+literal resolved `$WT` path before dispatch, for every agent, not just the
+first. A sub-agent has no access to this command's shell variables, so an
+unsubstituted "explore the project" instruction otherwise means wherever the
+harness happens to start it, not necessarily `$WT`.
 
 #### Agent 1: dead-code
 
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're hunting dead code.
 
-Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
+Explore the project at `[WT_PATH]` using Glob, Grep, and Read (NOT find or ls) and identify:
 - Unused imports and require statements
 - Unreachable or uncalled functions and methods (Grep for callers before
   calling anything dead — a zero-hit grep for a symbol's name is what makes
@@ -121,7 +121,7 @@ Be specific: every finding must state what (the symbol/file), where (`file:line`
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're cataloguing the debt.
 
-Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
+Explore the project at `[WT_PATH]` using Glob, Grep, and Read (NOT find or ls) and identify:
 - TODO/FIXME/HACK/XXX comments — inventory them all with file:line
 - Deprecated API usage or patterns
 - Outdated workarounds with comments like "temporary" or "hack"
@@ -146,7 +146,7 @@ Be specific: every finding must state what (the symbol/file), where (`file:line`
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're taking out the trash.
 
-Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
+Explore the project at `[WT_PATH]` using Glob, Grep, and Read (NOT find or ls) and identify:
 - Temp files: .bak, .old, .tmp, .orig, .swp files
 - One-off scripts that served their purpose and linger
 - Build artifacts not covered by gitignore
@@ -176,7 +176,7 @@ Be specific: every finding must state what (the file/artifact), where (path), an
 ```
 You are a grumpy principal engineer who's been maintaining this codebase alone for six months. You're weary, not angry. You're looking for the places where the codebase can't agree with itself.
 
-Explore the current working directory using Glob, Grep, and Read (NOT find or ls) and identify:
+Explore the project at `[WT_PATH]` using Glob, Grep, and Read (NOT find or ls) and identify:
 - Duplicate implementations of the same logic in different files
 - Inconsistent patterns that should be consolidated (e.g., two ways to fetch data, two error handling approaches)
 - Files that are in the wrong directory based on the project's own conventions

@@ -217,11 +217,8 @@ modes in this list:**
   mention it in the verdict as a next step.
 - Fan-out increases runtime significantly. If the diff is clearly dominated by
   one signal, prefer single-mode dispatch and say so.
-- Both paths above invoke real `Skill` calls rather than reading a command
-  file and following it inline. This matters beyond style: the `sdlc` plugin's
-  gate-recording hook only fires on an actual `Skill` tool call naming a
-  tracked skill, so on a gated branch, dispatching to `review`/`imagine`
-  records their gate exactly as if you'd run them directly — no separate step
-  needed, and no silent gap.
+- Both paths above call `Skill` directly rather than reading a command file
+  and following it inline, specifically so gate-recording works — see the
+  Single-mode path section above for why.
 - `--dry-run` is useful before a large fan-out to confirm the routing makes
   sense without spending the time.

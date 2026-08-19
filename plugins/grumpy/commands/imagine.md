@@ -66,8 +66,20 @@ Automatically detect what to imagine. No questions:
      running imagine — I can't reliably determine what you're trying to ship."
      and stop.
 2. Determine the best diff, in priority order:
-   - Branch ahead of origin default:
-     `git -C "$WT" diff $(git -C "$WT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)...HEAD`
+   - Branch ahead of origin default: resolve `BASE` first, trying each
+     candidate in order until one exists — this mirrors the same fallback
+     chain `auto-init-gate-cycle.py` uses, since a bare `origin/HEAD` symref
+     isn't always set and a `master`-only repo would otherwise silently break
+     on a hardcoded `origin/main` guess:
+     ```bash
+     BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     if [ -z "$BASE" ]; then
+       for candidate in origin/main origin/master main master; do
+         git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+       done
+     fi
+     ```
+     then `git -C "$WT" diff "$BASE"...HEAD`
    - Staged changes: `git -C "$WT" diff --staged`
    - Unstaged changes: `git -C "$WT" diff`
    - Fallback: `git -C "$WT" diff HEAD~1 2>/dev/null` — if this returns a fatal error
