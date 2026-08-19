@@ -94,7 +94,7 @@ Automatically detect what to imagine. No questions:
 
 After determining the correct diff command, run it and capture the full output
 as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE` (e.g.,
-'origin/main...HEAD', 'staged changes', 'unstaged changes', or 'HEAD~1'). Also
+'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's appended separately in the git command), 'staged changes', 'unstaged changes', or 'HEAD~1'). Also
 run `git -C "$WT" rev-parse --short HEAD` and store as `HEAD_SHA` — without
 `-C "$WT"` this stamps the invoking session's cwd instead of the targeted
 worktree when `--worktree` is set. These will be passed directly to agents.

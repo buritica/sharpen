@@ -70,7 +70,10 @@ prompt below uses the `[WT_PATH]` placeholder — substitute it with the
 literal resolved `$WT` path before dispatch, for every agent, not just the
 first. A sub-agent has no access to this command's shell variables, so an
 unsubstituted "explore the project" instruction otherwise means wherever the
-harness happens to start it, not necessarily `$WT`.
+harness happens to start it, not necessarily `$WT`. Before launching, check
+each built prompt for a literal `[WT_PATH]` still present — that means the
+substitution step was skipped for that agent, and it must not be dispatched
+unsubstituted: it would silently explore the wrong directory with no error.
 
 ### Agent 1: Structure
 

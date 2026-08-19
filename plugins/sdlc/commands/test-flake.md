@@ -20,6 +20,14 @@ From `$ARGUMENTS`:
   instead of cwd. Set `WT` to that path; otherwise `WT` is the current
   directory. Use `git -C "$WT"` for all git operations.
 
+Create a private scratch directory for this run's logs and segment files —
+`FLAKE_TMPDIR=$(mktemp -d)`. Every path below that would otherwise be a fixed
+`/tmp/flake-*` name lives under `$FLAKE_TMPDIR` instead: two concurrent
+`/sdlc:test-flake` invocations (two sessions, or a retry before a prior run's
+process tree exited) sharing a fixed path would truncate/overwrite each
+other's logs and segment files mid-run, silently corrupting each other's
+flake counts rather than erroring.
+
 ## 1. Detect the stack and test runner
 
 Read manifests in `$WT` — do not assume bun. Follow the same detection order
@@ -54,7 +62,7 @@ test.
 
 ```bash
 cd "$WT"
-bun test --rerun-each "$RUNS" 2>&1 | tee /tmp/flake-run.log
+bun test --rerun-each "$RUNS" 2>&1 | tee "$FLAKE_TMPDIR/flake-run.log"
 ```
 
 ### Node (npm / pnpm / yarn) — shell loop
@@ -65,7 +73,7 @@ diff the results:
 ```bash
 cd "$WT"
 RUNS=5   # or the user-supplied value
-FAIL_LOG=/tmp/flake-failures.log
+FAIL_LOG="$FLAKE_TMPDIR/flake-failures.log"
 : > "$FAIL_LOG"
 for i in $(seq 1 "$RUNS"); do
   echo "=== Run $i ===" >> "$FAIL_LOG"
@@ -89,12 +97,12 @@ pip show pytest-repeat 2>/dev/null && echo "pytest-repeat available" || echo "sh
 
 With pytest-repeat:
 ```bash
-python -m pytest --count="$RUNS" -v 2>&1 | tee /tmp/flake-run.log
+python -m pytest --count="$RUNS" -v 2>&1 | tee "$FLAKE_TMPDIR/flake-run.log"
 ```
 
 Without it, shell loop:
 ```bash
-FAIL_LOG=/tmp/flake-failures.log
+FAIL_LOG="$FLAKE_TMPDIR/flake-failures.log"
 : > "$FAIL_LOG"
 for i in $(seq 1 "$RUNS"); do
   echo "=== Run $i ===" >> "$FAIL_LOG"
@@ -106,7 +114,7 @@ done
 
 ```bash
 cd "$WT"
-FAIL_LOG=/tmp/flake-failures.log
+FAIL_LOG="$FLAKE_TMPDIR/flake-failures.log"
 : > "$FAIL_LOG"
 for i in $(seq 1 "$RUNS"); do
   echo "=== Run $i ===" >> "$FAIL_LOG"
@@ -122,7 +130,7 @@ manifest as flakes.
 
 ```bash
 cd "$WT"
-FAIL_LOG=/tmp/flake-failures.log
+FAIL_LOG="$FLAKE_TMPDIR/flake-failures.log"
 : > "$FAIL_LOG"
 for i in $(seq 1 "$RUNS"); do
   echo "=== Run $i ===" >> "$FAIL_LOG"
@@ -134,7 +142,7 @@ done
 
 ```bash
 cd "$WT"
-FAIL_LOG=/tmp/flake-failures.log
+FAIL_LOG="$FLAKE_TMPDIR/flake-failures.log"
 : > "$FAIL_LOG"
 for i in $(seq 1 "$RUNS"); do
   echo "=== Run $i ===" >> "$FAIL_LOG"
@@ -155,26 +163,34 @@ test names *within* each run's segment, then aggregate — that way a test
 contributes at most once per run it actually failed in:
 
 ```bash
-rm -f /tmp/flake-run-*.seg
-awk '/^=== Run [0-9]+ ===$/ { n++; next } n { print > ("/tmp/flake-run-" n ".seg") }' "$FAIL_LOG"
+rm -f "$FLAKE_TMPDIR"/flake-run-*.seg
+awk -v dir="$FLAKE_TMPDIR" \
+  '/^=== Run [0-9]+ ===$/ { n++; next } n { print > (dir "/flake-run-" n ".seg") }' \
+  "$FAIL_LOG"
 shopt -s nullglob
-segs=(/tmp/flake-run-*.seg)
+segs=("$FLAKE_TMPDIR"/flake-run-*.seg)
 shopt -u nullglob
 if [ "${#segs[@]}" -eq 0 ]; then
-  echo "No '=== Run N ===' segments found in $FAIL_LOG — the loop in Step 2 may not have run, or the log is empty. Nothing to count." >&2
-else
-  for seg in "${segs[@]}"; do
-    # Example pattern for jest/bun-style output — adapt to the runner's format
-    grep -oE "✗ .*|FAIL .*|FAILED .*|× .*" "$seg" | sort -u
-  done | sort | uniq -c | sort -rn
+  echo "No '=== Run N ===' segments found in $FAIL_LOG — the loop in Step 2 may not have run, or the log is empty. STOP: do not report 'no flakes detected' from this state — no run data was actually collected." >&2
+  exit 1
 fi
+for seg in "${segs[@]}"; do
+  # Example pattern for jest/bun-style output — adapt to the runner's format
+  grep -oE "✗ .*|FAIL .*|FAILED .*|× .*" "$seg" | sort -u
+done | sort | uniq -c | sort -rn
 ```
 
-Without the `nullglob`/array guard, a bare `for seg in /tmp/flake-run-*.seg`
+Passing `$FLAKE_TMPDIR` to `awk` via `-v` rather than interpolating it into
+the single-quoted script is required — a shell variable reference inside
+single quotes is not expanded by the shell, so `awk` would receive the
+literal string `$FLAKE_TMPDIR` as part of the path. Without the
+`nullglob`/array guard, a bare `for seg in "$FLAKE_TMPDIR"/flake-run-*.seg`
 errors on "No such file or directory" when zero segments exist (e.g. the
 wrong branch of Step 2 ran, or `$FAIL_LOG` is empty) — the unmatched glob
 pattern is passed to `grep` literally instead of the loop simply not
-iterating.
+iterating. The `exit 1` on zero segments matters as much as the glob fix
+itself: a silent fall-through here would let a tired agent report "no flakes
+detected" when the counting step actually failed to find any run data.
 
 The count from `uniq -c` here is exactly "number of distinct runs this test
 failed in" — each `seg` file contributes a given test name at most once,
@@ -193,7 +209,7 @@ run), so counting occurrences directly from the `-v` log is already accurate
 — no run-marker splitting needed:
 
 ```bash
-grep -E '(PASSED|FAILED)' /tmp/flake-run.log \
+grep -E '(PASSED|FAILED)' "$FLAKE_TMPDIR/flake-run.log" \
   | awk '{print $NF, $1}' \
   | sort | uniq -c | sort -rn
 ```

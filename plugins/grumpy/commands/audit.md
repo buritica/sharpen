@@ -47,9 +47,14 @@ planning (Phases 1, 3, 4) on the strongest available model. Read
 `${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a repo-relative
 `plugins/grumpy/models.yaml` spelling resolves against the consumer repo's cwd
 in an installed plugin, not this plugin's own directory, and silently fails to
-exist there. If it isn't readable from where you're running, use these native
-defaults directly rather than guessing: `audit` role → `opus`, `analysis` role
-→ `opus`. Use the `audit` role for synthesis/planning and `analysis` for the
+exist there. If it isn't readable from where you're running, **say so in the
+report's run header** ("models.yaml unreadable — used native defaults") and
+use these native defaults directly rather than guessing: `audit` role →
+`opus`, `analysis` role → `opus`. This is the same "never silently downgrade"
+obligation as the `wrapper-required` substitution below — a user routed
+entirely to opus because the config file failed to load should learn that
+from the report, not discover it later. Use the `audit` role for
+synthesis/planning and `analysis` for the
 composed reviews. Only `sonnet`/`opus`/`haiku` are natively dispatchable via
 the Task tool's `model` argument; map any role whose model is marked
 `wrapper-required` (e.g. Fable) down to its documented native fallback

@@ -86,7 +86,7 @@ Automatically detect what to review. No questions—just figure it out:
 
 After determining the correct diff command, run it and capture the full output
 as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE` (e.g.,
-'origin/main...HEAD', 'staged changes', 'unstaged changes', or 'HEAD~1'). These
+'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's appended separately in the git command), 'staged changes', 'unstaged changes', or 'HEAD~1'). These
 will be passed directly to agents — sub-agents launched via the Task tool do
 not inherit this command's shell variables (`$WT`, `$BASE`), so they cannot
 re-run `git -C "$WT" diff` themselves; the diff must be inlined into each

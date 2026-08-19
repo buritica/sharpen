@@ -1,7 +1,7 @@
 ---
 description: "Inspect the current diff and route automatically to the most relevant grumpy review mode(s); for broad changes fans out and synthesizes results."
 argument-hint: "[--level grumpy|grumpier|linus] [--worktree <path>] [--dry-run]"
-allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
+allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate", "Skill"]
 ---
 
 # /grumpy:dispatch

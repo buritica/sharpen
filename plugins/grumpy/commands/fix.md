@@ -141,8 +141,11 @@ through `/grumpy:audit` first.
 Read `${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a
 repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
 target repo's cwd in an installed plugin, not this plugin's own directory. If
-it isn't readable from where you're running, use the native defaults below
-directly — they are the source of truth for dispatch. Route
+it isn't readable from where you're running, **say so in the summary**
+("models.yaml unreadable — used native defaults") and use the native
+defaults below directly — they are the source of truth for dispatch, but a
+user routed by defaults instead of the configured map should learn that from
+the output, not discover it later. Route
 each task by its `exec:` tier hint, passing the resolved model as the Task tool's
 **`model`** argument:
 

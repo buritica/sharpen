@@ -63,12 +63,14 @@ resolved path before the prompt is sent.
 Before choosing a path, detect whether there is a diff to review:
 
 1. Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
-   returns `HEAD` (detached), skip straight to **Step 1: Scan the Project**
-   (whole-project path) — there's no meaningful branch diff to resolve. This
-   is a deliberate difference from `review.md`/`edge-cases.md`/`imagine.md`,
-   which have no whole-project mode to fall back to and so stop outright on
-   detached HEAD instead: this command alone has a real fallback path
-   available, so it uses it rather than refusing to run.
+   returns `HEAD` (detached), say so — "Detached HEAD, no branch diff to
+   review; running a whole-project scan instead." — then skip straight to
+   **Step 1: Scan the Project** (whole-project path). This is a deliberate
+   difference from `review.md`/`edge-cases.md`/`imagine.md`, which have no
+   whole-project mode to fall back to and so stop outright on detached HEAD
+   instead: this command alone has a real fallback path available, so it
+   uses it rather than refusing to run — but the user still needs to know
+   their diff review silently became a full scan, not just get one.
 2. Otherwise resolve `BASE` first, trying each candidate in order until one
    exists — this mirrors the same fallback chain `auto-init-gate-cycle.py`
    uses, since a bare `origin/HEAD` symref isn't always set and a
@@ -245,7 +247,10 @@ the `[WT_PATH]` placeholder — substitute it with the literal resolved `$WT`
 path before dispatch, for every agent, not just the first. A sub-agent has no
 access to this command's shell variables, so an unsubstituted "explore the
 project" instruction otherwise means wherever the harness happens to start
-it, not necessarily `$WT`.
+it, not necessarily `$WT`. Before launching, check each built prompt for a
+literal `[WT_PATH]` still present — that means the substitution step was
+skipped for that agent, and it must not be dispatched unsubstituted: it
+would silently explore the wrong directory with no error.
 
 ### Agent 1: Experience
 
