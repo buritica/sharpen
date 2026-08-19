@@ -92,9 +92,15 @@ Automatically detect what to imagine. No questions:
      (empty output from error), emit the 'nothing here' message instead of
      passing the error to agents.
 
-After determining the correct diff command, run it and capture the full output
-as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE` (e.g.,
-'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's appended separately in the git command), 'staged changes', 'unstaged changes', or 'HEAD~1'). Also
+After determining the correct diff command, run it capped at 200000
+characters (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and
+capture the output as `DIFF_CONTENT`. This diff gets inlined into every one
+of the four parallel agent prompts below, uncapped it multiplies token cost
+by the agent count on a large diff — the cap bounds that the same way
+dispatch already does for its own diff capture. Also capture the diff base
+as `DIFF_BASE` (e.g., 'origin/main' (the resolved $BASE — no '...HEAD'
+suffix, that's appended separately in the git command), 'staged changes',
+'unstaged changes', or 'HEAD~1'). Also
 run `git -C "$WT" rev-parse --short HEAD` and store as `HEAD_SHA` — without
 `-C "$WT"` this stamps the invoking session's cwd instead of the targeted
 worktree when `--worktree` is set. These will be passed directly to agents.

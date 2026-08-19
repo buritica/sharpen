@@ -84,12 +84,16 @@ Automatically detect what to analyze. No questions:
      (empty output from error), emit the 'nothing here' message instead of
      passing the error to agents.
 
-After determining the correct diff command, run it and capture the full output
-as `DIFF_CONTENT`. Also capture the diff base as `DIFF_BASE`. Sub-agents
-launched via the Task tool do not inherit this command's shell variables
-(`$WT`), so they cannot re-run `git -C "$WT" diff` themselves — the diff must
-be inlined into each agent's prompt (see below), never handed to the agent as
-a command to execute.
+After determining the correct diff command, run it capped at 200000
+characters (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and
+capture the output as `DIFF_CONTENT`. This diff gets inlined into every one
+of the three parallel agent prompts below, uncapped it multiplies token cost
+by the agent count on a large diff — the cap bounds that the same way
+dispatch already does for its own diff capture. Also capture the diff base
+as `DIFF_BASE`. Sub-agents launched via the Task tool do not inherit this
+command's shell variables (`$WT`), so they cannot re-run `git -C "$WT" diff`
+themselves — the diff must be inlined into each agent's prompt (see below),
+never handed to the agent as a command to execute.
 
 If the diff is empty: "There's nothing here. Did you actually write any code or
 just think about it really hard?"

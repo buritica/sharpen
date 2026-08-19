@@ -96,7 +96,11 @@ Before choosing a path, detect whether there is a diff to review:
    - `git -C "$WT" diff --staged` (staged changes)
    - `git -C "$WT" diff` (unstaged changes)
    - `git -C "$WT" diff HEAD~1 2>/dev/null` (fallback)
-3. If any produces output, capture it as `DIFF_CONTENT` and proceed to **Diff Path** below.
+3. If any produces output, cap it at 200000 characters (`| head -c 200000`,
+   matching `/grumpy:dispatch`'s own cap) and capture it as `DIFF_CONTENT`,
+   then proceed to **Diff Path** below. This diff gets inlined into every one
+   of the four parallel agent prompts there, uncapped it multiplies token
+   cost by the agent count on a large diff.
 4. If none produces output, proceed to **Step 1: Scan the Project** (whole-project path).
 
 ## Diff Path: Launch Parallel Agents
