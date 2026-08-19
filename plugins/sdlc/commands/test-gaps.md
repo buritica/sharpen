@@ -54,12 +54,21 @@ generated files from the gap analysis (they are not "production code that needs
 tests"):
 
 ```bash
-# Exclude known test and non-source paths — adapt to the detected stack
+# Exclude known test and non-source paths — adapt to the detected stack.
+# Every test pattern is anchored (directory boundary, filename prefix, or
+# filename suffix before the extension) rather than a bare substring match —
+# a bare "test" would also drop real source like attestation.py, contest.ts,
+# or latest.go. Likewise `scripts/` is anchored to the repo root, not any
+# directory named scripts/ anywhere in the tree (a nested plugins/*/scripts/
+# holding real production code should not be excluded).
 git -C "$WT" diff --name-only "$BASE"...HEAD \
   | grep -vE '\.(md|json|yaml|yml|toml|lock|txt|env|svg|png|jpg|gif|ico|woff|css|scss)$' \
-  | grep -vE '(test|spec|__tests__|_test\.|Test\.|_spec\.|Spec\.)'  \
-  | grep -vE '(fixtures?|mocks?|fakes?|stubs?|snapshots?)/' \
-  | grep -vE '(\.github|\.husky|scripts/|docs/|dist/|build/|coverage/|node_modules/)'
+  | grep -vE '(^|/)(tests?|__tests__|specs?|fixtures?|mocks?|fakes?|stubs?|snapshots?)/' \
+  | grep -vE '(^|/)test_[^/]*$' \
+  | grep -vE '[._-](test|spec)\.[a-zA-Z0-9]+$' \
+  | grep -vE '(Test|Spec)\.(php|java|kt)$' \
+  | grep -vE '(^|/)(\.github|\.husky|docs|dist|build|coverage|node_modules)(/|$)' \
+  | grep -vE '^scripts/'
 ```
 
 If the filtered list is empty, report "No source files changed" and exit.

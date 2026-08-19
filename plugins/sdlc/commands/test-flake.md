@@ -26,7 +26,7 @@ Read manifests in `$WT` — do not assume bun. Follow the same detection order
 used by `/sdlc:gate`:
 
 ```
-bun.lockb / bunfig.toml                 → bun test --rerun-each <N>
+bun.lock* / bunfig.toml                 → bun test --rerun-each <N>
 package-lock.json / yarn.lock            → npm test   (no native rerun; wrap in a shell loop)
 pnpm-lock.yaml                           → pnpm test  (no native rerun; wrap in a shell loop)
 pyproject.toml / setup.py / setup.cfg   → pytest      (use pytest-repeat or shell loop)
@@ -41,7 +41,7 @@ lockfile. For stacks not listed there, use WebSearch/WebFetch to confirm the
 current idiomatic test runner before proceeding.
 
 Announce the detected runner before running anything, e.g.:
-> Detected: bun (bun.lockb present). Will use `bun test --rerun-each <N>`.
+> Detected: bun (bun.lock* present). Will use `bun test --rerun-each <N>`.
 
 ## 2. Choose the rerun strategy
 
@@ -144,14 +144,33 @@ done
 
 ## 3. Collect and deduplicate failures
 
-After all runs complete, parse the log(s) to extract test names that failed in
-**at least one run but not all runs**. Tests that fail in every run are
-regressions, not flakes — call them out separately.
+The `failed k/N runs` figure in Step 4 means *distinct runs*, not *failure
+lines* — a naive grep-and-count over the whole log overcounts any test that
+logs more than one failure line within a single run. How to count correctly
+depends on which strategy Step 2 used:
+
+**Shell-loop runners (Node/pytest-fallback/Go/Rust/make):** the loop wrote
+`=== Run N ===` markers into `$FAIL_LOG`. Split on them first, dedupe failing
+test names *within* each run's segment, then aggregate — that way a test
+contributes at most once per run it actually failed in:
 
 ```bash
-# Example extraction for bun / jest-style output — adapt to the runner's format
-grep -E "✗|FAIL|FAILED|× " /tmp/flake-run.log | sort | uniq -c | sort -rn
+rm -f /tmp/flake-run-*.seg
+awk '/^=== Run [0-9]+ ===$/ { n++; next } n { print > ("/tmp/flake-run-" n ".seg") }' "$FAIL_LOG"
+for seg in /tmp/flake-run-*.seg; do
+  # Example pattern for jest/bun-style output — adapt to the runner's format
+  grep -oE "✗ .*|FAIL .*|FAILED .*|× .*" "$seg" | sort -u
+done | sort | uniq -c | sort -rn
 ```
+
+The count from `uniq -c` here is exactly "number of distinct runs this test
+failed in" — each `seg` file contributes a given test name at most once,
+because of the `sort -u` inside the loop.
+
+**Bun's native `--rerun-each`:** there are no `=== Run N ===` markers — bun
+re-executes each test N times inside one process and reports a pass/fail tally
+per test in its own summary output. Read that tally directly instead of
+imposing the run-marker model on it; bun already gives you the k/N count.
 
 Build two lists:
 - **Flakes** — appeared in 1 to (N-1) runs.

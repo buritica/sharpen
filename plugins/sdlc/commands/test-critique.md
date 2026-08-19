@@ -1,5 +1,5 @@
 ---
-description: "Grumpy-style review of test quality — assertions that can't fail, over-mocking, and skipped tests without justification."
+description: "Adversarial review of test quality — assertions that can't fail, over-mocking, and skipped tests without justification."
 argument-hint: "[--base <branch>] [--scope all|changed] [--worktree <path>]"
 allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
 ---
@@ -40,6 +40,7 @@ Test file patterns by stack:
 - **Ruby:** `*_spec.rb`, `test_*.rb`
 - **Elixir:** `*_test.exs`
 - **Java/Kotlin:** `*Test.java`, `*Test.kt`, `*Spec.kt`
+- **PHP:** `*Test.php`
 
 Announce the detected stack and scope before proceeding.
 
@@ -51,7 +52,7 @@ Announce the detected stack and scope before proceeding.
 BASE="${BASE:-origin/main}"
 WT="${WT:-.}"
 git -C "$WT" diff --name-only "$BASE"...HEAD \
-  | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt)$|.*_test\.exs$'
+  | grep -E '\.(test|spec)\.(ts|tsx|js|jsx)$|test_.*\.py$|.*_test\.(py|go|rb)$|.*Test\.(java|kt|php)$|.*_test\.exs$'
 ```
 
 Adapt the grep pattern to the detected stack.
@@ -68,6 +69,7 @@ find "$WT" -type f \( \
   -o -name "*_spec.rb" -o -name "test_*.rb" \
   -o -name "*Test.java" -o -name "*Test.kt" \
   -o -name "*_test.exs" \
+  -o -name "*Test.php" \
 \) 2>/dev/null \
   | grep -vE '(node_modules|dist|build|coverage|vendor|\.git)/'
 ```

@@ -124,7 +124,7 @@ Detect the project's toolchain by checking for config files:
 
 **Test runner:**
 ```
-bun.lockb / bunfig.toml → bun test
+bun.lock* / bunfig.toml → bun test
 package-lock.json / yarn.lock → npm test
 pnpm-lock.yaml → pnpm test
 pyproject.toml / setup.py → pytest
