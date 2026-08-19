@@ -71,7 +71,13 @@ Automatically detect what to analyze. No questions:
        done
      fi
      ```
-     then `git -C "$WT" diff "$BASE"...HEAD`
+     If `$BASE` is still empty here, **skip this priority entirely** — do
+     not run `git -C "$WT" diff "$BASE"...HEAD`. Bash expands an empty
+     `"$BASE"` away, so the command silently becomes `git diff ...HEAD`,
+     which git parses as `HEAD...HEAD`: exit 0, empty output — indistinguishable
+     from "no diff at this priority," which is exactly the signal every
+     fallback below relies on to know when to try the next one. Only run
+     `git -C "$WT" diff "$BASE"...HEAD` when `$BASE` actually resolved.
    - Staged changes: `git -C "$WT" diff --staged`
    - Unstaged changes: `git -C "$WT" diff`
    - Fallback: `git -C "$WT" diff HEAD~1 2>/dev/null` — if this returns a fatal error

@@ -157,11 +157,24 @@ contributes at most once per run it actually failed in:
 ```bash
 rm -f /tmp/flake-run-*.seg
 awk '/^=== Run [0-9]+ ===$/ { n++; next } n { print > ("/tmp/flake-run-" n ".seg") }' "$FAIL_LOG"
-for seg in /tmp/flake-run-*.seg; do
-  # Example pattern for jest/bun-style output — adapt to the runner's format
-  grep -oE "✗ .*|FAIL .*|FAILED .*|× .*" "$seg" | sort -u
-done | sort | uniq -c | sort -rn
+shopt -s nullglob
+segs=(/tmp/flake-run-*.seg)
+shopt -u nullglob
+if [ "${#segs[@]}" -eq 0 ]; then
+  echo "No '=== Run N ===' segments found in $FAIL_LOG — the loop in Step 2 may not have run, or the log is empty. Nothing to count." >&2
+else
+  for seg in "${segs[@]}"; do
+    # Example pattern for jest/bun-style output — adapt to the runner's format
+    grep -oE "✗ .*|FAIL .*|FAILED .*|× .*" "$seg" | sort -u
+  done | sort | uniq -c | sort -rn
+fi
 ```
+
+Without the `nullglob`/array guard, a bare `for seg in /tmp/flake-run-*.seg`
+errors on "No such file or directory" when zero segments exist (e.g. the
+wrong branch of Step 2 ran, or `$FAIL_LOG` is empty) — the unmatched glob
+pattern is passed to `grep` literally instead of the loop simply not
+iterating.
 
 The count from `uniq -c` here is exactly "number of distinct runs this test
 failed in" — each `seg` file contributes a given test name at most once,
@@ -171,6 +184,23 @@ because of the `sort -u` inside the loop.
 re-executes each test N times inside one process and reports a pass/fail tally
 per test in its own summary output. Read that tally directly instead of
 imposing the run-marker model on it; bun already gives you the k/N count.
+
+**pytest-repeat (`--count=N`):** also no `=== Run N ===` markers — the loop in
+Step 2 only wraps the *shell-loop fallback*, not the pytest-repeat path.
+Unlike bun/jest-style output, pytest emits exactly one `PASSED`/`FAILED`
+summary line per test *execution* (not multiple failure-detail lines per
+run), so counting occurrences directly from the `-v` log is already accurate
+— no run-marker splitting needed:
+
+```bash
+grep -E '(PASSED|FAILED)' /tmp/flake-run.log \
+  | awk '{print $NF, $1}' \
+  | sort | uniq -c | sort -rn
+```
+
+Adapt the column parsing to the pytest version's actual verbose-output
+format (e.g. `test_foo.py::test_bar PASSED` vs `PASSED test_foo.py::test_bar`
+depending on pytest version and plugins) before trusting the extracted counts.
 
 Build two lists:
 - **Flakes** — appeared in 1 to (N-1) runs.

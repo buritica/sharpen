@@ -64,7 +64,11 @@ Before choosing a path, detect whether there is a diff to review:
 
 1. Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
    returns `HEAD` (detached), skip straight to **Step 1: Scan the Project**
-   (whole-project path) — there's no meaningful branch diff to resolve.
+   (whole-project path) — there's no meaningful branch diff to resolve. This
+   is a deliberate difference from `review.md`/`edge-cases.md`/`imagine.md`,
+   which have no whole-project mode to fall back to and so stop outright on
+   detached HEAD instead: this command alone has a real fallback path
+   available, so it uses it rather than refusing to run.
 2. Otherwise resolve `BASE` first, trying each candidate in order until one
    exists — this mirrors the same fallback chain `auto-init-gate-cycle.py`
    uses, since a bare `origin/HEAD` symref isn't always set and a
@@ -78,8 +82,15 @@ Before choosing a path, detect whether there is a diff to review:
      done
    fi
    ```
-   Then run each command in order until one returns output:
-   - `git -C "$WT" diff "$BASE"...HEAD` (branch ahead of origin default)
+   If `$BASE` is still empty here, **skip straight to the next candidate
+   below** — do not run `git -C "$WT" diff "$BASE"...HEAD`. Bash expands an
+   empty `"$BASE"` away, so the command silently becomes `git diff ...HEAD`,
+   which git parses as `HEAD...HEAD`: exit 0, empty output — indistinguishable
+   from "no diff at this priority," the exact signal this fallback list
+   relies on to know when to try the next command. Otherwise run each
+   command in order until one returns output:
+   - `git -C "$WT" diff "$BASE"...HEAD` (branch ahead of origin default, only
+     when `$BASE` resolved)
    - `git -C "$WT" diff --staged` (staged changes)
    - `git -C "$WT" diff` (unstaged changes)
    - `git -C "$WT" diff HEAD~1 2>/dev/null` (fallback)

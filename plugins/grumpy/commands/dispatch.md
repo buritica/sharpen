@@ -34,11 +34,23 @@ list of modes that would be invoked, then stop. Do not run any review.
 
 ```bash
 WT="${WT:-.}"
-# Resolve the default branch instead of assuming "main" (could be master/develop).
-BASE=$(git -C "$WT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
-BASE="${BASE:-$(git -C "$WT" rev-parse --verify -q main >/dev/null 2>&1 && echo main || echo master)}"
-# Priority: branch ahead of base → staged → unstaged → last commit
-git -C "$WT" diff "$BASE...HEAD" 2>/dev/null | head -c 200000
+# Resolve the default branch — this mirrors the same fallback chain
+# auto-init-gate-cycle.py uses, since a bare origin/HEAD symref isn't always
+# set and a master-only repo would otherwise silently break on a hardcoded
+# origin/main guess.
+BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+if [ -z "$BASE" ]; then
+  for candidate in origin/main origin/master main master; do
+    git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+  done
+fi
+# Priority: branch ahead of base → staged → unstaged → last commit. Only run
+# the base-diff when $BASE actually resolved — bash expands an empty "$BASE"
+# away, so "$BASE...HEAD" would silently become "...HEAD" (git parses that as
+# HEAD...HEAD: exit 0, empty output), indistinguishable from "no diff here."
+if [ -n "$BASE" ]; then
+  git -C "$WT" diff "$BASE...HEAD" 2>/dev/null | head -c 200000
+fi
 ```
 
 Try each fallback in order until you get non-empty output:
@@ -55,7 +67,7 @@ If all are empty: "Nothing to review. Stage a change or commit something first."
 Capture the list of changed files:
 
 ```bash
-git -C "$WT" diff --name-only "$BASE...HEAD" 2>/dev/null \
+{ [ -n "$BASE" ] && git -C "$WT" diff --name-only "$BASE...HEAD" 2>/dev/null; } \
   || git -C "$WT" diff --name-only --staged \
   || git -C "$WT" diff --name-only \
   || git -C "$WT" diff --name-only HEAD~1
