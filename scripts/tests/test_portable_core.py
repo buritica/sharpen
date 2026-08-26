@@ -32,7 +32,9 @@ class SchemaDocumentTest(unittest.TestCase):
     def test_schema_ids_and_versions_are_stable(self):
         for name in ("capability-manifest", "review-report"):
             schema = load(f"schemas/{name}.v1.schema.json")
-            self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+            self.assertEqual(
+                schema["$schema"], "https://json-schema.org/draft/2020-12/schema"
+            )
             self.assertEqual(
                 schema["$id"], f"https://sharpen.dev/schemas/{name}.v1.schema.json"
             )
@@ -51,7 +53,16 @@ class CapabilityManifestTest(unittest.TestCase):
         self.assertIsInstance(capabilities, list)
         self.assertTrue(capabilities)
         self.assertEqual(len(capabilities), len(set(capabilities)))
-        allowed = {"plan", "review", "imagine", "fix", "test", "lint", "typecheck", "ship"}
+        allowed = {
+            "plan",
+            "review",
+            "imagine",
+            "fix",
+            "test",
+            "lint",
+            "typecheck",
+            "ship",
+        }
         self.assertTrue(set(capabilities) <= allowed)
         assert_extension_keys(self, manifest)
 

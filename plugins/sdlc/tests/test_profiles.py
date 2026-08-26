@@ -144,8 +144,12 @@ class LegacyStoreCompatibilityTest(unittest.TestCase):
 
             loaded = gs.load_store(store_path)
             self.assertNotIn("profile", loaded["feat/x"])
-            self.assertEqual(gs.required_gates(loaded["feat/x"]), gs.GATES_BY_TIER["small-medium"])
-            self.assertEqual(gs.completed_gates(loaded["feat/x"]), gs.GATES_BY_TIER["small-medium"])
+            self.assertEqual(
+                gs.required_gates(loaded["feat/x"]), gs.GATES_BY_TIER["small-medium"]
+            )
+            self.assertEqual(
+                gs.completed_gates(loaded["feat/x"]), gs.GATES_BY_TIER["small-medium"]
+            )
             self.assertEqual(gs.missing_gates(loaded["feat/x"]), [])
 
             repo = make_repo()
@@ -186,7 +190,9 @@ class ProfileInitCliTest(unittest.TestCase):
         self.assertNotIn("capabilities", cycle)
 
     def test_profile_without_capabilities_file_fails_without_writing(self):
-        result = run_cli(["--init", "tiny", "--profile", "review"], self.repo, self.gates_path)
+        result = run_cli(
+            ["--init", "tiny", "--profile", "review"], self.repo, self.gates_path
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("--profile requires --capabilities-file", result.stderr.decode())
         self.assertFalse(os.path.exists(self.gates_path))

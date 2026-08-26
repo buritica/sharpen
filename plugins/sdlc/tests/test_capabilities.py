@@ -44,9 +44,7 @@ class ManifestValidationTest(unittest.TestCase):
         for value in ("", "   ", None):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "provider.name"):
-                    capabilities.validate_manifest(
-                        manifest(provider={"name": value})
-                    )
+                    capabilities.validate_manifest(manifest(provider={"name": value}))
 
     def test_duplicate_capability_fails(self):
         with self.assertRaisesRegex(ValueError, "duplicates"):

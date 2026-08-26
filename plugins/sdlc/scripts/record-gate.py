@@ -48,9 +48,7 @@ def _init_with_route(
     where this worktree's skill gates land, and an unannounced move is the exact
     failure this whole channel was built to stop.
     """
-    bd = gs.init_gates(
-        data, branch, tier, profile=profile, capabilities=capabilities
-    )
+    bd = gs.init_gates(data, branch, tier, profile=profile, capabilities=capabilities)
     dropped = gs.clear_route(data, route_to_clear) if route_to_clear else []
     if route_to_set:
         gs.set_route(data, branch, route_to_set)

@@ -51,7 +51,9 @@ def _manifest_path(cwd=None):
         return override
     try:
         common = _git(["rev-parse", "--git-common-dir"], cwd=cwd)
-        root = os.path.dirname(os.path.realpath(os.path.join(cwd or os.getcwd(), common)))
+        root = os.path.dirname(
+            os.path.realpath(os.path.join(cwd or os.getcwd(), common))
+        )
     except (OSError, subprocess.CalledProcessError):
         root = os.path.realpath(cwd or os.getcwd())
     return os.path.join(root, ".claude", "data", MANIFEST_NAME)
@@ -102,7 +104,9 @@ def main():
         path = _manifest_path()
         write_manifest(path, build_manifest(detect_capabilities()))
     except (OSError, ValueError) as e:
-        sys.stderr.write(f"[gate] session-start: could not write capability manifest: {e}\n")
+        sys.stderr.write(
+            f"[gate] session-start: could not write capability manifest: {e}\n"
+        )
     return 0
 
 
