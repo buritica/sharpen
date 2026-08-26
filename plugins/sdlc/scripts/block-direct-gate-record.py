@@ -3,8 +3,15 @@
 PreToolUse hook: block direct `record-gate.py --record` for skill-gated gates.
 
 Skill-gated gates (simplify, grumpy-*) can ONLY be recorded by the auto-record
-hook after the actual skill runs. Bash-verifiable gates (tests/lint/typecheck)
-stay manually recordable.
+hook after the actual skill runs, or via `record-gate.py --attest <gate>
+--reason <text>` (gate_store.attest_gate) — a deliberately separate, loud,
+reason-required path for the reported case (sharpen#11) where the skill
+genuinely ran but a re-invoked Skill tool call returned a cached "already
+loaded" response and PostToolUse failed to fire for it. `--attest` is not
+blocked here: it is the sanctioned exception, not the bypass this hook exists
+to catch, and it marks its own stamp as unverified in `--status`/`--oneline`
+rather than looking like a hook-verified one.
+Bash-verifiable gates (tests/lint/typecheck) stay manually recordable.
 
 Pure stdlib. @fires-on Bash tool, @blocking
 """

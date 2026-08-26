@@ -19,6 +19,24 @@ past your own process, not against an adversary. Below, we at least refuse to
 stamp when the tool call itself reported an error — a skill that errored plainly
 did not run.
 
+**Known gap: this hook can only fire on a genuine tool call.** In a long
+session, re-invoking a skill already loaded earlier in the conversation can
+make the Skill tool return "already loaded above, instructions unchanged"
+instead of dispatching fresh. Reported behavior (sharpen#11) is that when this
+happens with no real tool call underneath it, PostToolUse does not fire, so
+this hook does not run, even though the skill's instructions genuinely
+executed — though it is not yet fully understood how consistently that holds
+across harness versions and sessions; treat "the hook didn't fire" as a
+symptom to investigate, not a guarantee tied to this exact wording. Either
+way, there is nothing this hook itself can do about it: if the underlying tool
+call never happened, this script never runs to detect anything. The documented
+ways through: re-run the skill from a fresh subagent (a clean context has no
+cached instructions to short-circuit — see /sdlc:gate's --worktree/--route-from
+routing for wiring its gate to the right branch), or, last resort,
+`record-gate.py --attest <gate> --reason <text>` (gate_store.attest_gate) — a
+separate, reason-required path that marks its stamp as human-attested rather
+than hook-verified.
+
 Branch resolution, in order:
   1. An explicit route (gate_store.ROUTE_KEY) from this worktree — written by
      `/sdlc:gate --worktree <path> --init`. Wins outright; see the note in

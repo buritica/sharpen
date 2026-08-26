@@ -133,6 +133,14 @@ def skill_gated_message(gate):
             "complete: install it, or re-init as `tiny` if the change genuinely "
             "qualifies (≤3 lines, no executable code)."
         )
+        # Deliberately NOT mentioning --attest here. This message fires on
+        # every manual --record of a skill-gated gate, including the very
+        # first attempt before the skill has ever run — surfacing the
+        # attestation escape hatch in that hot path would read as "here's
+        # your actual next step" rather than the rare, reasoned last resort
+        # it's meant to be (see gate.md's own section on it). It stays
+        # documented there and in attest_gate's docstring, not advertised at
+        # the exact moment an agent is looking for the fastest way through.
     )
 
 
@@ -559,6 +567,78 @@ def record_gate(data, branch, gate, authorized=False):
     return bd
 
 
+def attest_gate(data, branch, gate, reason):
+    """Stamp a skill-gated `gate` on human attestation, not a hook observation.
+
+    Last-resort escape hatch for a reported gap (sharpen#11): in a long
+    session, the Skill tool can return "already loaded above, instructions
+    unchanged" for a skill invoked again — a Claude Code caching behavior —
+    and PostToolUse can fail to fire for that call, so auto-record-skill-gate.py
+    doesn't run even though the skill's instructions genuinely executed (see
+    that script's docstring; how consistently this reproduces isn't fully
+    pinned down). The documented way around it is a fresh subagent dispatch
+    (a clean context re-runs the Skill tool for real); this exists for when
+    that route was already tried, or genuinely isn't practical.
+
+    Deliberately not the same code path as the hook's `authorized=True`: this
+    requires a human-legible `reason` and marks the stamp in `attestations` so
+    `--status`/`--oneline` render it with a different marker than a
+    hook-verified gate. It attests the operator's claim that the skill ran,
+    not this process's own observation of it — the distinction the reader of
+    `--status` needs in order to judge it, same reasoning as `authorized=True`
+    itself: any bypass has to say so out loud, where it will be seen.
+
+    That distinction is for the reader, not the enforcer: an attestation
+    writes the same timestamp into `gates` that a hook-verified stamp would,
+    so `missing_gates()` (and therefore `gh pr create` via
+    enforce-sdlc-gates.py) treats the two identically. `attestations` is
+    metadata for a human reading `--status`/`--oneline`, not a weaker gate.
+
+    Refuses on a bash-verifiable gate (`tests`, `lint`, `typecheck`): those
+    already have a legitimate manual `--record`, so an attestation would only
+    be a second, weaker way to do the same thing.
+
+    Refuses when `gate` is already stamped, even by an attestation. Without
+    this, attesting an already hook-verified gate would silently overwrite a
+    genuine timestamp with a fabricated one and downgrade real verification
+    history to merely-attested — the opposite of what this function is for.
+    A gate that's already done needs no attestation; if it's wrong, `--init`
+    resets it the same as any other gate.
+    """
+    if gate not in SKILL_FOR_GATE:
+        raise ValueError(
+            f'"{gate}" is not skill-gated, so it has no attestation path — '
+            f"record it directly instead: --record {gate}\n\n" + gate_lists_hint()
+        )
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(
+            "--attest requires --reason \"<why the skill's run could not be "
+            'observed>" — the whole point is that the bypass is legible, not silent'
+        )
+    bd = data.get(branch)
+    if bd is None:
+        raise ValueError(
+            f'No gate cycle for branch "{branch}". Run: record-gate.py --init <tier>'
+        )
+    if bd.get("gates", {}).get(gate):
+        raise ValueError(
+            f'"{gate}" is already recorded for "{branch}" — nothing to attest. '
+            "If it's wrong, --init resets the cycle."
+        )
+    bd = record_gate(data, branch, gate, authorized=True)
+    stamp = bd["gates"][gate]
+    bd.setdefault("attestations", {})[gate] = {"reason": reason.strip(), "at": stamp}
+    return bd
+
+
+def _gate_marker(stamped, attested):
+    """The one shared "attested vs. hook-verified vs. missing" classification,
+    so format_status and format_oneline can't render it two different ways."""
+    if stamped and attested:
+        return "⚠"
+    return "✓" if stamped else "✗"
+
+
 def required_gates(branch_data):
     return GATES_BY_TIER.get(branch_data.get("tier", "small-medium"), ALL_GATE_NAMES)
 
@@ -643,9 +723,23 @@ def format_status(branch_data, branch=None):
         lines.append(f"Driven from: {', '.join(sources)}")
     lines.append("")
     gates = branch_data.get("gates", {})
+    attestations = branch_data.get("attestations", {})
     for g in required_gates(branch_data):
         ts = gates.get(g)
-        lines.append(f"  ✓ {g} — {ts}" if ts else f"  ✗ {g}")
+        att = attestations.get(g)
+        mark = _gate_marker(ts, att)
+        if ts and att:
+            # Tolerates a hand-edited store where `attestations[g]` isn't the
+            # shape attest_gate writes (missing/non-dict) — same posture as
+            # route_sources for a hand-edited scalar: degrade the message,
+            # don't throw.
+            reason = att.get("reason") if isinstance(att, dict) else None
+            detail = f": {reason}" if reason else ""
+            lines.append(f"  {mark} {g} — {ts} (attested, not hook-verified{detail})")
+        elif ts:
+            lines.append(f"  {mark} {g} — {ts}")
+        else:
+            lines.append(f"  {mark} {g}")
     missing = missing_gates(branch_data)
     lines += [
         "",
@@ -667,8 +761,9 @@ def format_oneline(branch_data):
     if not missing_gates(branch_data):
         return f"SDLC {label}: all complete"
     gates = branch_data.get("gates", {})
+    attestations = branch_data.get("attestations", {})
     parts = []
     for g in required_gates(branch_data):
         short = g.replace("grumpy-", "g:").replace("fix-post-", "fix:")
-        parts.append(("✓" if gates.get(g) else "✗") + short)
+        parts.append(_gate_marker(gates.get(g), attestations.get(g)) + short)
     return f"SDLC {label}: {' '.join(parts)}"

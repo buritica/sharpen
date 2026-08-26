@@ -22,6 +22,36 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --unroute
 
 Run `--unroute` when you finish gating `$WT` and keep working in this session — otherwise a later `/grumpy:review` here still records against `$WT`'s branch. `--status` prints `Driven from: <path>` whenever a route is active; check it if a gate lands somewhere unexpected. A worktree drives at most one branch, but two sessions may drive the same target and both record there.
 
+### A skill-gated gate that won't stamp in a long session
+
+If `/simplify` or a `/grumpy:*` skill genuinely ran — real findings, real
+artifacts written — but its gate never landed in `--status`, suspect Skill-tool
+instruction caching before assuming the hook is broken: re-invoking a skill
+already loaded earlier in a long session can make the Skill tool return
+"already loaded above, instructions unchanged" instead of dispatching fresh.
+Reported behavior (sharpen#11) is that `auto-record-skill-gate.py`'s
+PostToolUse hook does not fire for that cached response, since it only fires
+on a genuine dispatch — but this hasn't been pinned down as fully reliable
+across sessions, so a stamp that lands anyway on a re-invocation isn't a sign
+the hook is misbehaving.
+
+Fix it forward, in order:
+
+1. **Re-run the skill from a fresh subagent.** A clean context has no cached
+   instructions to short-circuit, so the Skill tool dispatches for real and
+   the hook fires normally. If that subagent isn't the worktree driving the
+   branch's cycle, route it first (`--route-from`, as above) so its stamp
+   lands on the right branch.
+2. **Last resort:** `record-gate.py --attest <gate> --reason "<text>"`.
+   This stamps the gate on human attestation instead of a hook observation —
+   it requires a reason and marks itself in `--status`/`--oneline` with `⚠`
+   rather than `✓`, so a reader can tell it apart from a hook-verified stamp.
+   That distinction is for the reader, not the enforcer: `gh pr create`
+   unblocks on an attested gate exactly as it would on a hook-verified one —
+   `enforce-sdlc-gates.py` only checks whether the gate is stamped, not how.
+   Use it only when re-dispatching genuinely isn't practical, and say in the
+   PR description that a gate was attested rather than hook-verified, and why.
+
 ## Prerequisites check
 
 Before initializing the gate cycle, detect which optional capabilities are available and announce the mode.

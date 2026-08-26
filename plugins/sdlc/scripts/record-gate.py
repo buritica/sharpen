@@ -22,6 +22,10 @@ Usage:
   record-gate.py --attach-review <path>
                                       # attach a validated portable review
                                       # report without recording a gate
+  record-gate.py --attest <gate> --reason "<text>"
+                                      # last-resort: stamp a skill-gated gate
+                                      # on human attestation instead of the
+                                      # auto-record hook (see gate_store.attest_gate)
 
 Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
             (resolved via `git rev-parse --git-common-dir`, shared per-repo;
@@ -97,6 +101,7 @@ def main(argv):
     requested_profile = None
     capabilities_file = None
     attach_review_file = None
+    reason = None
     rest = []
     i = 0
     while i < len(argv):
@@ -120,6 +125,15 @@ def main(argv):
             attach_review_file = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--reason" and i + 1 < len(argv):
+            reason = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--attest" and i + 1 < len(argv):
+            rest.append("--attest")
+            rest.append(argv[i + 1])
+            i += 2
+            continue
         rest.append(argv[i])
         i += 1
 
@@ -131,6 +145,19 @@ def main(argv):
         return 1
     if attach_review_file and requested_profile:
         _log("[gate] error: --attach-review does not accept --profile")
+        return 1
+    if command != "--attest" and reason is not None:
+        _log("[gate] error: --reason is only valid with --attest")
+        return 1
+    if "--attest" in rest and command != "--attest":
+        # Without this, `--init <tier> --attest <gate>` parses to command
+        # "--init" with the "--attest <gate>" tail silently absorbed as
+        # unused positionals: no error, no attestation, exit 0 — the kind of
+        # silent no-op this whole escape hatch exists to NOT be.
+        _log(
+            "[gate] error: --attest does not combine with other commands "
+            f"(got: {' '.join(rest)})"
+        )
         return 1
     path = gs.default_store_path()
 
@@ -250,6 +277,29 @@ def main(argv):
                 else f"Remaining: {', '.join(remaining)}"
             )
             _log(f"[gate] ✓ {gate} recorded for {branch}. {done}")
+        elif command == "--attest":
+            if len(rest) < 2:
+                _log('Usage: --attest <gate> --reason "<text>"')
+                return 1
+            gate = rest[1]
+            # No reason pre-check here: gate_store.attest_gate raises ValueError
+            # for a missing/blank reason, and the except clause below already
+            # turns that into the same "[gate] error: ..." + exit 1 every other
+            # command's store-level refusal produces — a second, separately
+            # worded copy of that check would only be able to drift from it.
+            bd = gs.update_store(
+                path, lambda d: gs.attest_gate(d, branch, gate, reason)
+            )
+            remaining = gs.missing_gates(bd)
+            done = (
+                "All gates complete."
+                if not remaining
+                else f"Remaining: {', '.join(remaining)}"
+            )
+            _log(
+                f"[gate] ⚠ {gate} attested (not hook-verified) for {branch}: "
+                f"{reason.strip()}. {done}"
+            )
         elif command == "--status":
             data = gs.load_store(path)
             out = gs.format_status(data.get(branch), branch)
@@ -276,8 +326,9 @@ def main(argv):
         else:
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "
-                "--status | --oneline | --unroute] [--branch <name>] "
-                "[--route-from <path>] [--profile <name> --capabilities-file <path>] "
+                "--attest <gate> --reason <text> | --status | --oneline | "
+                "--unroute] [--branch <name>] [--route-from <path>] "
+                "[--profile <name> --capabilities-file <path>] "
                 "[--attach-review <path>]"
             )
             return 1
