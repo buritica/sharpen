@@ -54,7 +54,7 @@ class TestCiPassJob(unittest.TestCase):
         )
 
     def test_ci_pass_needs_validation_jobs(self):
-        for job in ("lint", "test", "marketplace"):
+        for job in ("lint", "test", "marketplace", "gates"):
             pattern = rf"needs:.*?{re.escape(job)}"
             self.assertIsNotNone(
                 re.search(pattern, self.block, re.DOTALL), f"ci-pass must need '{job}'"
