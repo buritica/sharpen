@@ -600,6 +600,18 @@ def format_status(branch_data, branch=None):
             lines.append(f"Profile: {profile} ({', '.join(capabilities)})")
         else:
             lines.append(f"Profile: {profile}")
+    report = branch_data.get("review_report")
+    if isinstance(report, dict):
+        provenance = report.get("provenance", {})
+        location = provenance.get("kind", "unknown")
+        if provenance.get("kind") == "git-range":
+            location += f" {provenance.get('base')}...{provenance.get('head')}"
+        findings = report.get("findings")
+        finding_count = len(findings) if isinstance(findings, list) else 0
+        lines.append(
+            f"Review report: {report.get('status', 'unknown')} "
+            f"({location}; {finding_count} finding(s))"
+        )
     sources = route_sources(branch_data)
     if sources:
         # A wrong route is the failure mode that used to be invisible; print it.
@@ -624,6 +636,9 @@ def format_oneline(branch_data):
     label = branch_data.get("tier")
     if profile:
         label = f"{label}/{profile}"
+    report = branch_data.get("review_report")
+    if isinstance(report, dict) and report.get("status"):
+        label = f"{label}/review:{report['status']}"
     if not missing_gates(branch_data):
         return f"SDLC {label}: all complete"
     gates = branch_data.get("gates", {})

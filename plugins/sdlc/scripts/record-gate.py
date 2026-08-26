@@ -19,6 +19,9 @@ Usage:
   record-gate.py --capabilities-file <path>
                                       # with --init: resolve/store declared
                                       # portable capabilities
+  record-gate.py --attach-review <path>
+                                      # attach a validated portable review
+                                      # report without recording a gate
 
 Store path: $SDLC_GATES_PATH, or <main-checkout>/.claude/data/gates.json
             (resolved via `git rev-parse --git-common-dir`, shared per-repo)
@@ -28,6 +31,7 @@ import sys
 
 import capabilities
 import gate_store as gs
+import review_report
 
 
 def _log(msg):
@@ -91,6 +95,7 @@ def main(argv):
     route_from = None
     requested_profile = None
     capabilities_file = None
+    attach_review_file = None
     rest = []
     i = 0
     while i < len(argv):
@@ -110,10 +115,22 @@ def main(argv):
             capabilities_file = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--attach-review" and i + 1 < len(argv):
+            attach_review_file = argv[i + 1]
+            i += 2
+            continue
         rest.append(argv[i])
         i += 1
 
     command = rest[0] if rest else None
+    if attach_review_file and command is not None:
+        _log(
+            "[gate] error: --attach-review does not modify or combine with gate commands"
+        )
+        return 1
+    if attach_review_file and requested_profile:
+        _log("[gate] error: --attach-review does not accept --profile")
+        return 1
     path = gs.default_store_path()
 
     if command == "--unroute":
@@ -143,7 +160,26 @@ def main(argv):
         return 1
 
     try:
-        if command == "--init":
+        if attach_review_file:
+            report = review_report.load_report(attach_review_file)
+            bd = gs.update_store(
+                path, lambda d: review_report.attach_report(d, branch, report)
+            )
+            attached = bd["review_report"]
+            provenance = attached["provenance"]
+            provenance_note = provenance["kind"]
+            if provenance["kind"] == "git-range":
+                provenance_note += f" {provenance['base']}...{provenance['head']}"
+            _log(
+                f"[gate] attached {attached['status']} review report for {branch} "
+                f"({provenance_note}; {len(attached['findings'])} finding(s))"
+            )
+            if attached["status"] == "fail":
+                _log(
+                    "[gate] note: a failing review report is evidence only; "
+                    "it does not change recorded gates"
+                )
+        elif command == "--init":
             tier = rest[1] if len(rest) > 1 else None
             profile = None
             capability_snapshot = None
@@ -240,7 +276,8 @@ def main(argv):
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "
                 "--status | --oneline | --unroute] [--branch <name>] "
-                "[--route-from <path>] [--profile <name> --capabilities-file <path>]"
+                "[--route-from <path>] [--profile <name> --capabilities-file <path>] "
+                "[--attach-review <path>]"
             )
             return 1
     except (ValueError, gs.StoreCorruptError) as e:
