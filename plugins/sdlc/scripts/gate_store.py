@@ -60,6 +60,11 @@ class StoreCorruptError(Exception):
 
 TIERS = ("tiny", "small-medium", "significant")
 
+# Portable profile names accepted on stored cycle metadata. This is storage
+# validation only; profile-to-gate mapping is a separate runtime decision and
+# deliberately does not change required_gates() here.
+PROFILE_NAMES = ("baseline", "review", "adversarial")
+
 # Key under a branch's cycle holding the worktree root that drives it. See the
 # module docstring — this is the cross-worktree routing channel.
 ROUTE_KEY = "routed_from"
@@ -313,13 +318,20 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_gates(data, branch, tier, tier_reason=None):
-    """`tier_reason` records WHY this tier was picked, e.g. by
+def init_gates(data, branch, tier, tier_reason=None, profile=None, capabilities=None):
+    """Initialize a branch cycle while preserving legacy state shape by default.
+
+    `tier_reason` records WHY this tier was picked, e.g. by
     auto-init-gate-cycle.py's docs-only detection — absence of the key is how
     a reader (format_status, a human editing the store) tells "manually
     chosen" from "auto-detected"; a manual --init passes no reason and the
     key is simply not written, so a plain init produces a byte-identical
-    entry to before this field existed."""
+    entry to before this field existed.
+
+    `profile` and `capabilities` are optional portable-core metadata. They are
+    written only when a caller explicitly resolves a manifest, so legacy init
+    behavior remains unchanged and pre-profile cycles continue to load.
+    """
     if branch in ("main", "master"):
         raise ValueError(
             f'Refusing to initialize gate cycle for "{branch}". '
@@ -327,7 +339,17 @@ def init_gates(data, branch, tier, tier_reason=None):
         )
     if tier not in TIERS:
         raise ValueError(f'Invalid tier "{tier}". Valid: {", ".join(TIERS)}')
+    if profile is not None and profile not in PROFILE_NAMES:
+        raise ValueError(
+            f'Invalid profile "{profile}". Valid: {", ".join(PROFILE_NAMES)}'
+        )
+    if capabilities is not None and not isinstance(capabilities, list):
+        raise ValueError("capabilities must be a list of capability names")
     entry = {"tier": tier, "created_at": _now(), "gates": {}}
+    if profile is not None:
+        entry["profile"] = profile
+    if capabilities is not None:
+        entry["capabilities"] = sorted(capabilities)
     if tier_reason:
         entry["tier_reason"] = tier_reason
     # `--init` doubles as the post-gate reset, so it clears every timestamp. The
@@ -571,6 +593,13 @@ def format_status(branch_data, branch=None):
     tier_reason = branch_data.get("tier_reason")
     if tier_reason:
         lines.append(f"  reason: {tier_reason}")
+    profile = branch_data.get("profile")
+    if profile:
+        capabilities = branch_data.get("capabilities")
+        if capabilities:
+            lines.append(f"Profile: {profile} ({', '.join(capabilities)})")
+        else:
+            lines.append(f"Profile: {profile}")
     sources = route_sources(branch_data)
     if sources:
         # A wrong route is the failure mode that used to be invisible; print it.
@@ -591,11 +620,15 @@ def format_status(branch_data, branch=None):
 def format_oneline(branch_data):
     if not branch_data:
         return "No SDLC gate cycle active"
+    profile = branch_data.get("profile")
+    label = branch_data.get("tier")
+    if profile:
+        label = f"{label}/{profile}"
     if not missing_gates(branch_data):
-        return f"SDLC {branch_data.get('tier')}: all complete"
+        return f"SDLC {label}: all complete"
     gates = branch_data.get("gates", {})
     parts = []
     for g in required_gates(branch_data):
         short = g.replace("grumpy-", "g:").replace("fix-post-", "fix:")
         parts.append(("✓" if gates.get(g) else "✗") + short)
-    return f"SDLC {branch_data.get('tier')}: {' '.join(parts)}"
+    return f"SDLC {label}: {' '.join(parts)}"

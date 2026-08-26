@@ -29,6 +29,10 @@ That split also kills the "hook or CI?" argument. CI enforces. Everything else e
 
 This is the part that matters. Template-shaped tooling has to name something concrete, so it only ever fits repos shaped like the author's.
 
+## Portable core protocol
+
+The current packages are Claude Code plugins, but their future cross-agent contract is documented in [Portable core protocol](docs/portable-core.md): neutral capability manifests, structured review evidence, and adapter boundaries for model, forge, CI, and host lifecycle integrations.
+
 ## Gates you can't skip quietly
 
 The chain records to a JSON store keyed by branch. Review gates record only when their skill actually runs: `record-gate.py --record grumpy-review` is refused by the hook, and again by the store behind it. While gates are missing, `gh pr create` is blocked. It's opt-out per branch, so no cycle means no enforcement.

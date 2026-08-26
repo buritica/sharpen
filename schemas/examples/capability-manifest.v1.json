@@ -1,0 +1,13 @@
+{
+  "protocol_version": "1",
+  "provider": {
+    "name": "claude-code",
+    "agent": "grumpy",
+    "model": "provider-configured"
+  },
+  "capabilities": ["plan", "review", "imagine", "fix", "test", "lint", "typecheck", "ship"],
+  "x-host-command-map": {
+    "review": "/grumpy:review",
+    "imagine": "/grumpy:imagine"
+  }
+}

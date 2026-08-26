@@ -1006,9 +1006,37 @@ class AutoInitTest(unittest.TestCase):
         self.repo = make_repo()
         self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
 
-    def _commit(self, cmd="git commit --allow-empty -m 'x'", repo=None, gp=None):
+    def _commit(
+        self,
+        cmd="git commit --allow-empty -m 'x'",
+        repo=None,
+        gp=None,
+        extra_env=None,
+    ):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
-        return run_hook(AUTO_INIT, payload, repo or self.repo, gp or self.gp)
+        env = dict(os.environ, SDLC_GATES_PATH=gp or self.gp)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["python3", AUTO_INIT],
+            input=json.dumps(payload).encode(),
+            capture_output=True,
+            cwd=repo or self.repo,
+            env=env,
+        )
+
+    def _write_manifest(self, capabilities):
+        path = os.path.join(self.repo, "capabilities.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "protocol_version": "1",
+                    "provider": {"name": "claude-code"},
+                    "capabilities": capabilities,
+                },
+                f,
+            )
+        return path
 
     def test_failed_commit_stamps_nothing_and_claims_nothing(self):
         # PostToolUse fires on failed tool calls too. Every message this hook
@@ -1051,6 +1079,42 @@ class AutoInitTest(unittest.TestCase):
         data = read_json(self.gp)
         self.assertIn("feat/x", data)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
+        self.assertNotIn("profile", data["feat/x"])
+
+    def test_git_commit_with_capability_manifest_stores_resolved_profile(self):
+        manifest = self._write_manifest(
+            ["test", "lint", "typecheck", "review", "imagine", "fix"]
+        )
+        r = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn("portable profile adversarial", r.stderr.decode())
+        cycle = read_json(self.gp)["feat/x"]
+        self.assertEqual(cycle["tier"], "small-medium")
+        self.assertEqual(cycle["profile"], "adversarial")
+        self.assertEqual(
+            cycle["capabilities"],
+            ["fix", "imagine", "lint", "review", "test", "typecheck"],
+        )
+
+    def test_capability_manifest_does_not_rewrite_existing_cycle(self):
+        first = self._commit()
+        self.assertEqual(first.returncode, 2, first.stderr.decode())
+        before = read_json(self.gp)["feat/x"]
+        manifest = self._write_manifest(["test", "lint", "typecheck"])
+        second = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(second.returncode, 0, second.stderr.decode())
+        self.assertEqual(read_json(self.gp)["feat/x"], before)
+
+    def test_malformed_capability_manifest_preserves_legacy_auto_init(self):
+        manifest = os.path.join(self.repo, "bad-capabilities.json")
+        with open(manifest, "w", encoding="utf-8") as f:
+            f.write("not json")
+        r = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        cycle = read_json(self.gp)["feat/x"]
+        self.assertEqual(cycle["tier"], "small-medium")
+        self.assertNotIn("profile", cycle)
+        self.assertNotIn("capabilities", cycle)
 
     def _repo_off_main(self, branch="feat/docs"):
         # make_repo(branch="main") already does init/config/an initial commit

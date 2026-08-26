@@ -14,6 +14,11 @@ Usage:
   record-gate.py --branch <name>        # override auto-detected branch
   record-gate.py --route-from <path>    # with --init: route <path>'s skill
                                         # gates to --branch (cross-worktree)
+  record-gate.py --profile <name>       # with --init: record an explicit
+                                        # portable profile
+  record-gate.py --capabilities-file <path>
+                                      # with --init: resolve/store declared
+                                      # portable capabilities
 
 Store path: $SDLC_GATES_PATH, or <main-checkout>/.claude/data/gates.json
             (resolved via `git rev-parse --git-common-dir`, shared per-repo)
@@ -21,6 +26,7 @@ Store path: $SDLC_GATES_PATH, or <main-checkout>/.claude/data/gates.json
 
 import sys
 
+import capabilities
 import gate_store as gs
 
 
@@ -28,7 +34,9 @@ def _log(msg):
     sys.stderr.write(msg + "\n")
 
 
-def _init_with_route(data, branch, tier, route_to_set, route_to_clear):
+def _init_with_route(
+    data, branch, tier, route_to_set, route_to_clear, profile=None, capabilities=None
+):
     """Init the cycle, apply this invocation's routing decision, and report the
     branches it stopped driving as `(branch_data, dropped)`.
 
@@ -40,7 +48,7 @@ def _init_with_route(data, branch, tier, route_to_set, route_to_clear):
     where this worktree's skill gates land, and an unannounced move is the exact
     failure this whole channel was built to stop.
     """
-    bd = gs.init_gates(data, branch, tier)
+    bd = gs.init_gates(data, branch, tier, profile=profile, capabilities=capabilities)
     dropped = gs.clear_route(data, route_to_clear) if route_to_clear else []
     if route_to_set:
         gs.set_route(data, branch, route_to_set)
@@ -81,6 +89,8 @@ def _resolve_routing(branch, route_from):
 def main(argv):
     branch_override = None
     route_from = None
+    requested_profile = None
+    capabilities_file = None
     rest = []
     i = 0
     while i < len(argv):
@@ -90,6 +100,14 @@ def main(argv):
             continue
         if argv[i] == "--route-from" and i + 1 < len(argv):
             route_from = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--profile" and i + 1 < len(argv):
+            requested_profile = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--capabilities-file" and i + 1 < len(argv):
+            capabilities_file = argv[i + 1]
             i += 2
             continue
         rest.append(argv[i])
@@ -127,6 +145,22 @@ def main(argv):
     try:
         if command == "--init":
             tier = rest[1] if len(rest) > 1 else None
+            profile = None
+            capability_snapshot = None
+            if requested_profile and not capabilities_file:
+                raise ValueError(
+                    "--profile requires --capabilities-file so the resolver can "
+                    "verify declared capabilities"
+                )
+            if capabilities_file:
+                manifest = capabilities.load_manifest(capabilities_file)
+                decision = capabilities.resolve_profile(
+                    manifest["capabilities"], requested_profile
+                )
+                if decision["decision"] != "selected":
+                    raise ValueError(decision["reason"])
+                profile = decision["resolved_profile"]
+                capability_snapshot = manifest["capabilities"]
             # Resolved before update_store takes the repo-wide flock.
             route_to_set, route_to_clear = _resolve_routing(branch, route_from)
             existing = gs.load_store(path).get(branch)
@@ -134,10 +168,20 @@ def main(argv):
             bd, dropped = gs.update_store(
                 path,
                 lambda d: _init_with_route(
-                    d, branch, tier, route_to_set, route_to_clear
+                    d,
+                    branch,
+                    tier,
+                    route_to_set,
+                    route_to_clear,
+                    profile=profile,
+                    capabilities=capability_snapshot,
                 ),
             )
-            _log(f"[gate] initialized {tier} cycle for {branch} at {bd['created_at']}")
+            profile_note = f" with profile {profile}" if profile else ""
+            _log(
+                f"[gate] initialized {tier} cycle for {branch}{profile_note} "
+                f"at {bd['created_at']}"
+            )
             if dropped:
                 _log(
                     f"[gate] this worktree no longer drives gates for "
@@ -196,7 +240,7 @@ def main(argv):
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "
                 "--status | --oneline | --unroute] [--branch <name>] "
-                "[--route-from <path>]"
+                "[--route-from <path>] [--profile <name> --capabilities-file <path>]"
             )
             return 1
     except (ValueError, gs.StoreCorruptError) as e:
