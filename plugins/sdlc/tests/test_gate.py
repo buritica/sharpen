@@ -296,6 +296,31 @@ class EnforceTest(unittest.TestCase):
         r = run_hook(ENFORCE, self.payload("ls -la"), self.repo, self.gp)
         self.assertEqual(r.returncode, 0)
 
+    def test_an_attested_gate_unblocks_exactly_like_a_hook_verified_one(self):
+        # The whole point of attest_gate: enforcement reads `gates`, never
+        # `attestations`, so a PR with one attested gate must sail through
+        # identically to one where every gate was hook-verified.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        for g in gs.BASH_GATES:
+            run_cli(["--record", g], self.repo, self.gp)
+        for g in gs.SKILL_FOR_GATE:
+            if g != "simplify":
+                seed_gate(self.gp, "feat/x", g)
+        r = run_cli(
+            [
+                "--attest",
+                "simplify",
+                "--reason",
+                "Skill tool returned cached instructions",
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        r = run_hook(ENFORCE, self.payload(), self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.decode(), "")
+
     def test_head_flag_forms_that_are_not_store_keys(self):
         # gh accepts `--head owner:branch` for a fork and a full ref. Neither
         # is how the store is keyed, so left raw they miss the cycle and read
@@ -1718,6 +1743,126 @@ class StoreGuardTest(unittest.TestCase):
         )
 
 
+class AttestGateTest(unittest.TestCase):
+    """gate_store.attest_gate: the reasoned, human-attested bypass."""
+
+    def test_attests_a_skill_gated_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "skill ran, Skill tool cached")
+        self.assertIn("simplify", d["feat/x"]["gates"])
+        self.assertEqual(
+            d["feat/x"]["attestations"]["simplify"]["reason"],
+            "skill ran, Skill tool cached",
+        )
+
+    def test_refuses_a_bash_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "tests", "because")
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_refuses_an_empty_reason(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        for bad in ("", "   ", None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                gs.attest_gate(d, "feat/x", "simplify", bad)
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_refuses_a_gate_not_required_by_the_tier(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "tiny")
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "because")
+
+    def test_status_marks_an_attested_gate_differently(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "skill ran, Skill tool cached")
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn("⚠ simplify", out)
+        self.assertIn("skill ran, Skill tool cached", out)
+        self.assertNotIn("✓ simplify", out)
+
+    def test_oneline_marks_an_attested_gate_differently(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        out = gs.format_oneline(d["feat/x"])
+        self.assertIn("⚠", out)
+
+    def test_reset_via_init_clears_attestations_too(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        gs.init_gates(d, "feat/x", "small-medium")
+        self.assertEqual(d["feat/x"].get("attestations", {}), {})
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_status_still_prints_the_timestamp_on_an_attested_line(self):
+        # The attested branch of format_status must not drop `{ts}` while
+        # adding the reason — a regression here reads fine at a glance but
+        # silently loses when the gate was actually stamped.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        ts = d["feat/x"]["gates"]["simplify"]
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn(ts, out)
+
+    def test_refuses_to_overwrite_a_hook_verified_gate(self):
+        # Without this, attesting an already-stamped gate would clobber a
+        # genuine hook-verified timestamp with a fabricated one and downgrade
+        # real verification history to merely-attested.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.record_gate(d, "feat/x", "simplify", authorized=True)
+        original_ts = d["feat/x"]["gates"]["simplify"]
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "because")
+        self.assertEqual(d["feat/x"]["gates"]["simplify"], original_ts)
+        self.assertEqual(d["feat/x"].get("attestations", {}), {})
+
+    def test_refuses_to_re_attest_an_already_attested_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "first reason")
+        original_ts = d["feat/x"]["gates"]["simplify"]
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "second reason")
+        self.assertEqual(d["feat/x"]["gates"]["simplify"], original_ts)
+        self.assertEqual(
+            d["feat/x"]["attestations"]["simplify"]["reason"], "first reason"
+        )
+
+    def test_status_tolerates_a_malformed_attestations_entry(self):
+        # A hand-edited store where `attestations[g]` isn't the shape
+        # attest_gate writes must degrade the message, not throw — same
+        # posture as route_sources for a hand-edited scalar elsewhere in
+        # this module.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.record_gate(d, "feat/x", "simplify", authorized=True)
+        d["feat/x"]["attestations"] = {"simplify": "not-a-dict"}
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn("⚠ simplify", out)
+
+
+class GateMarkerTest(unittest.TestCase):
+    """gate_store._gate_marker: the one shared attested/verified/missing check."""
+
+    def test_stamped_and_attested_is_the_warning_marker(self):
+        self.assertEqual(gs._gate_marker("2026-01-01", {"reason": "x"}), "⚠")
+
+    def test_stamped_only_is_the_check_marker(self):
+        self.assertEqual(gs._gate_marker("2026-01-01", None), "✓")
+
+    def test_neither_is_the_cross_marker(self):
+        self.assertEqual(gs._gate_marker(None, None), "✗")
+
+
 class CliSkillGatedGuardTest(unittest.TestCase):
     """record-gate.py surfaces the store's refusal instead of recording."""
 
@@ -1799,6 +1944,100 @@ class CliSkillGatedGuardTest(unittest.TestCase):
             self.gp,
         )
         self.assertTrue(read_json(self.gp)["feat/x"]["gates"]["simplify"])
+
+
+class CliAttestTest(unittest.TestCase):
+    """record-gate.py --attest: the CLI surface for the reasoned bypass."""
+
+    def setUp(self):
+        self.repo = make_repo()
+        self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+
+    def test_attests_with_a_reason(self):
+        r = run_cli(
+            [
+                "--attest",
+                "simplify",
+                "--reason",
+                "Skill tool returned cached instructions",
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        data = read_json(self.gp)
+        self.assertTrue(data["feat/x"]["gates"]["simplify"])
+        self.assertEqual(
+            data["feat/x"]["attestations"]["simplify"]["reason"],
+            "Skill tool returned cached instructions",
+        )
+
+    def test_refuses_without_a_reason(self):
+        r = run_cli(["--attest", "simplify"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_reason_flag_rejected_outside_attest(self):
+        r = run_cli(["--record", "tests", "--reason", "nope"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--reason is only valid with --attest", r.stderr.decode())
+
+    def test_not_blocked_by_the_direct_record_guard(self):
+        # --attest is the sanctioned exception, not the spelling block-direct
+        # exists to catch — it must sail through unblocked.
+        r = run_hook(
+            BLOCK,
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": f'python3 "{RECORD}" --attest simplify --reason because'
+                },
+            },
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0)
+
+    def test_refuses_a_bash_gate(self):
+        r = run_cli(["--attest", "tests", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("record it directly", r.stderr.decode())
+
+    def test_refuses_an_empty_string_reason(self):
+        # Distinct from the flag being omitted entirely: this is a present
+        # but blank `--reason ""`, exercised through the CLI rather than only
+        # at the store level.
+        r = run_cli(["--attest", "simplify", "--reason", ""], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_refuses_a_gate_not_required_by_the_tier(self):
+        run_cli(["--init", "tiny"], self.repo, self.gp)
+        r = run_cli(["--attest", "simplify", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_combined_with_init_is_rejected_not_silently_dropped(self):
+        # --init wins as `rest[0]` and would otherwise silently swallow the
+        # trailing --attest <gate> as unused positionals — exit 0, no
+        # attestation, no error. Must be a hard refusal instead.
+        r = run_cli(
+            ["--init", "small-medium", "--attest", "simplify"], self.repo, self.gp
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not combine", r.stderr.decode())
+
+    def test_combined_with_record_is_rejected_not_silently_dropped(self):
+        r = run_cli(["--record", "tests", "--attest", "simplify"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not combine", r.stderr.decode())
+
+    def test_refuses_to_overwrite_an_already_recorded_gate(self):
+        seed_gate(self.gp, "feat/x", "simplify")
+        r = run_cli(["--attest", "simplify", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(read_json(self.gp)["feat/x"].get("attestations", {}), {})
 
 
 class BlockAutoRecordDrivingTest(unittest.TestCase):
