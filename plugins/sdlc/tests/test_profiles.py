@@ -154,6 +154,134 @@ class LegacyStoreCompatibilityTest(unittest.TestCase):
             self.assertEqual(result.stdout.decode(), "")
 
 
+class ProfileInitCliTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = make_repo()
+        self.gates_path = os.path.join(self.repo, ".claude", "data", "gates.json")
+
+    def write_manifest(self, capabilities, name="manifest.json"):
+        path = os.path.join(self.repo, name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "protocol_version": "1",
+                    "provider": {"name": "test-host"},
+                    "capabilities": capabilities,
+                    "x-source": "test",
+                },
+                f,
+            )
+        return path
+
+    def read_cycle(self):
+        with open(self.gates_path, encoding="utf-8") as f:
+            return json.load(f)["feat/x"]
+
+    def test_legacy_init_state_shape_still_has_no_profile_metadata(self):
+        result = run_cli(["--init", "tiny"], self.repo, self.gates_path)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        cycle = self.read_cycle()
+        self.assertEqual(cycle["tier"], "tiny")
+        self.assertNotIn("profile", cycle)
+        self.assertNotIn("capabilities", cycle)
+
+    def test_profile_without_capabilities_file_fails_without_writing(self):
+        result = run_cli(["--init", "tiny", "--profile", "review"], self.repo, self.gates_path)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("--profile requires --capabilities-file", result.stderr.decode())
+        self.assertFalse(os.path.exists(self.gates_path))
+
+    def test_valid_manifest_with_explicit_review_writes_sorted_snapshot(self):
+        manifest = self.write_manifest(
+            ["typecheck", "fix", "review", "lint", "imagine", "test"]
+        )
+        result = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--profile",
+                "review",
+                "--capabilities-file",
+                manifest,
+            ],
+            self.repo,
+            self.gates_path,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        cycle = self.read_cycle()
+        self.assertEqual(cycle["profile"], "review")
+        self.assertEqual(
+            cycle["capabilities"],
+            ["fix", "imagine", "lint", "review", "test", "typecheck"],
+        )
+
+    def test_manifest_only_init_selects_highest_complete_profile(self):
+        manifest = self.write_manifest(
+            ["test", "lint", "typecheck", "review", "imagine", "fix"]
+        )
+        result = run_cli(
+            ["--init", "tiny", "--capabilities-file", manifest],
+            self.repo,
+            self.gates_path,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.read_cycle()["profile"], "adversarial")
+
+    def test_unavailable_request_does_not_write_or_reset_existing_cycle(self):
+        initial = run_cli(["--init", "tiny"], self.repo, self.gates_path)
+        self.assertEqual(initial.returncode, 0, initial.stderr.decode())
+        record = run_cli(["--record", "tests"], self.repo, self.gates_path)
+        self.assertEqual(record.returncode, 0, record.stderr.decode())
+        before = self.read_cycle()
+
+        manifest = self.write_manifest(["test", "lint", "typecheck"])
+        result = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--profile",
+                "adversarial",
+                "--capabilities-file",
+                manifest,
+            ],
+            self.repo,
+            self.gates_path,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing: review, imagine, fix", result.stderr.decode())
+        self.assertEqual(self.read_cycle(), before)
+
+    def test_legacy_status_unchanged_and_profiled_status_includes_profile(self):
+        legacy = run_cli(["--init", "tiny"], self.repo, self.gates_path)
+        self.assertEqual(legacy.returncode, 0, legacy.stderr.decode())
+        status = run_cli(["--status"], self.repo, self.gates_path)
+        self.assertEqual(status.returncode, 0, status.stderr.decode())
+        self.assertIn("Tier: tiny", status.stdout.decode())
+        self.assertNotIn("Profile:", status.stdout.decode())
+
+        manifest = self.write_manifest(["test", "lint", "typecheck", "review"])
+        profiled = run_cli(
+            [
+                "--init",
+                "tiny",
+                "--capabilities-file",
+                manifest,
+            ],
+            self.repo,
+            self.gates_path,
+        )
+        self.assertEqual(profiled.returncode, 0, profiled.stderr.decode())
+        status = run_cli(["--status"], self.repo, self.gates_path)
+        self.assertEqual(status.returncode, 0, status.stderr.decode())
+        self.assertIn(
+            "Profile: review (lint, review, test, typecheck)",
+            status.stdout.decode(),
+        )
+        oneline = run_cli(["--oneline"], self.repo, self.gates_path)
+        self.assertEqual(oneline.returncode, 0, oneline.stderr.decode())
+        self.assertIn("SDLC tiny/review:", oneline.stdout.decode())
+
+
 class CurrentEnforcementContractTest(unittest.TestCase):
     def setUp(self):
         self.repo = make_repo()
