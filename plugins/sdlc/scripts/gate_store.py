@@ -166,6 +166,43 @@ def detect_branch(cwd=None):
         return None
 
 
+def branch_exists(branch, cwd=None):
+    """Does `branch` name a real ref (local, or a remote-tracking branch) in
+    the repo at `cwd`?
+
+    `--branch <name>` lets a caller record gates for a branch it isn't
+    currently on (the documented cross-worktree pattern), but that trust is
+    unconditional: nothing has ever verified the name is real in the repo
+    `cwd` resolves to. Pair this with a repo-mismatch check at `--init` —
+    `--branch` alone can't tell "this worktree, a different branch" from
+    "this string, a repo that's never heard of it" — see gate.md's "cannot
+    target a different repository" section (sharpen#16) — and only the
+    second one is a mistake worth stopping for.
+
+    Checks `refs/remotes/*/<branch>` too, not just `refs/heads/<branch>`: a
+    branch fetched but never locally checked out (a fresh clone, a PR branch
+    a CI job pulled without `git checkout -b`) is still a genuine branch in
+    this repo, not the "never heard of it" case this guard exists to catch —
+    treating it as nonexistent would be a false refusal of a real topology.
+    """
+    try:
+        # No --quiet: `_git` already sends stderr to DEVNULL, and success/
+        # failure here is read from the exit code (CalledProcessError), never
+        # git's own output, so --quiet would only suppress a message nobody
+        # was going to see anyway.
+        _git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=cwd)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    try:
+        out = _git(
+            "for-each-ref", "--format=%(refname)", f"refs/remotes/*/{branch}", cwd=cwd
+        )
+        return bool(out.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
 # Pulling the working directory out of a command string used to live here as a
 # pair of regexes. It is shell parsing, not storage, and scoping it to the
 # invocation matters (a `cd` quoted inside a PR body must not redirect which

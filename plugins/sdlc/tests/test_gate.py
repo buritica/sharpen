@@ -33,6 +33,13 @@ auto = importlib.util.module_from_spec(  # the hook's filename has dashes
 )
 auto.__spec__.loader.exec_module(auto)
 
+record_gate_mod = importlib.util.module_from_spec(  # ditto, for unit-level access
+    importlib.util.spec_from_file_location(
+        "record_gate_cli", os.path.join(SCRIPTS, "record-gate.py")
+    )
+)
+record_gate_mod.__spec__.loader.exec_module(record_gate_mod)
+
 RECORD = os.path.join(SCRIPTS, "record-gate.py")
 ENFORCE = os.path.join(SCRIPTS, "enforce-sdlc-gates.py")
 BLOCK = os.path.join(SCRIPTS, "block-direct-gate-record.py")
@@ -1670,6 +1677,205 @@ class SharedWorktreeStoreTest(unittest.TestCase):
         # surfacing too — the adoption path, not an explicit route.
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn(" on feat/b", r.stderr.decode())
+
+
+class BranchExistsTest(unittest.TestCase):
+    """gate_store.branch_exists: the check --init's --branch guard relies on."""
+
+    def setUp(self):
+        self.repo = make_repo(branch="feat/x")
+
+    def test_true_for_the_checked_out_branch(self):
+        self.assertTrue(gs.branch_exists("feat/x", cwd=self.repo))
+
+    def test_true_for_another_real_branch(self):
+        git(self.repo, "branch", "gated/y")
+        self.assertTrue(gs.branch_exists("gated/y", cwd=self.repo))
+
+    def test_false_for_a_branch_that_does_not_exist(self):
+        self.assertFalse(gs.branch_exists("does-not-exist", cwd=self.repo))
+
+    def test_false_when_cwd_is_not_a_repo_at_all(self):
+        self.assertFalse(gs.branch_exists("feat/x", cwd=tempfile.mkdtemp()))
+
+    def test_true_for_a_remote_tracking_branch_never_checked_out_locally(self):
+        # A fresh clone or a CI checkout that fetched a branch without ever
+        # making a local `refs/heads/` entry for it is a real, genuine
+        # branch — not the "this repo has never heard of it" case the guard
+        # exists to catch. Simulated with update-ref since spinning up an
+        # actual second remote for one assertion would be pure ceremony.
+        git(self.repo, "update-ref", "refs/remotes/origin/feature/only-remote", "HEAD")
+        self.assertTrue(gs.branch_exists("feature/only-remote", cwd=self.repo))
+
+    def test_false_for_a_name_that_matches_neither_local_nor_remote(self):
+        git(self.repo, "update-ref", "refs/remotes/origin/some-other-branch", "HEAD")
+        self.assertFalse(gs.branch_exists("does-not-exist", cwd=self.repo))
+
+
+class InitBranchOverrideGuardTest(unittest.TestCase):
+    """--init --branch <name> must refuse a name this repo has never heard of
+    (sharpen#16) — the failure mode that otherwise creates a phantom cycle
+    entry nothing downstream can ever complete."""
+
+    def setUp(self):
+        self.repo = make_repo(branch="feat/x")
+        self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
+
+    def test_refuses_a_nonexistent_branch(self):
+        r = run_cli(
+            ["--init", "small-medium", "--branch", "does-not-exist"],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not exist", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+    def test_allows_a_real_branch_via_override(self):
+        git(self.repo, "branch", "gated/y")
+        r = run_cli(
+            ["--init", "small-medium", "--branch", "gated/y"], self.repo, self.gp
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("gated/y", read_json(self.gp))
+
+    def test_no_override_skips_the_check_entirely(self):
+        # A detected branch (no --branch) is trivially real — no git spawn
+        # needed to confirm it, and none should happen.
+        r = run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_empty_string_branch_falls_back_to_the_detected_branch(self):
+        # `--branch ""` is technically an override, but an empty string is
+        # falsy, so the guard skips it — and `branch` itself already fell
+        # back to the real current branch before reaching this check, not to
+        # the empty string. Confirms that degrades to the SAFE behavior
+        # rather than silently bypassing the guard on a bad name.
+        r = run_cli(["--init", "small-medium", "--branch", ""], self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("feat/x", read_json(self.gp))
+
+    def test_bogus_branch_and_route_from_together_reports_the_branch_first(self):
+        # Both guards exist for the same root cause (sharpen#16) but close
+        # different entry points. Confirms they compose: a call wrong in both
+        # ways is refused, and by the branch check specifically — it runs
+        # before routing is ever resolved — not silently by whichever guard
+        # happens to run last.
+        other_repo = make_repo(branch="main")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "does-not-exist",
+                "--route-from",
+                other_repo,
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not exist", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+
+class CrossRepoRouteFromTest(unittest.TestCase):
+    """--route-from must refuse a path in a genuinely different repository
+    (sharpen#16) rather than silently accepting a route the auto-record hook
+    can never act on: the hook resolves its own git state from the SOURCE
+    repo's cwd, which has no idea the target repo's branches even exist."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+
+    def test_refuses_a_route_from_an_unrelated_repo(self):
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("different repository", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+    def test_fails_closed_when_target_common_dir_is_unresolvable(self):
+        # An earlier version only refused on a CONFIRMED mismatch
+        # (`target_common and source_common and target_common != source_common`),
+        # which silently accepted the route whenever either side's
+        # git-common-dir lookup came back None — reopening the exact class of
+        # bug sharpen#16 reported, just through the "couldn't tell" door
+        # instead of the "confirmed different" one. Unit-level, monkeypatched:
+        # constructing this via two real repos on disk isn't practical, since
+        # `canonical_worktree_root` (show-toplevel) and `git_common_dir`
+        # succeed or fail together in any real repo.
+        original = gs.git_common_dir
+        calls = []
+
+        def fake(cwd=None):
+            calls.append(cwd)
+            return None if cwd is None else original(cwd)
+
+        gs.git_common_dir = fake
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                record_gate_mod._resolve_routing("feat/target", self.source)
+            self.assertIn("could not be resolved", str(ctx.exception))
+        finally:
+            gs.git_common_dir = original
+        self.assertIn(None, calls)  # confirms the target-side call actually ran
+
+    def test_fails_closed_when_source_common_dir_is_unresolvable(self):
+        original = gs.git_common_dir
+
+        def fake(cwd=None):
+            return None if cwd == self.source else original(cwd)
+
+        gs.git_common_dir = fake
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                record_gate_mod._resolve_routing("feat/target", self.source)
+            self.assertIn("could not be resolved", str(ctx.exception))
+        finally:
+            gs.git_common_dir = original
+
+    def test_still_allows_routing_from_a_different_worktree_of_the_same_repo(self):
+        # The existing, documented, supported case: --route-from a linked
+        # worktree of THIS SAME repo must keep working unchanged.
+        other_wt = tempfile.mkdtemp()
+        shutil.rmtree(other_wt)
+        git(self.target, "worktree", "add", "-b", "feat/other", other_wt)
+        try:
+            r = run_cli(
+                [
+                    "--init",
+                    "small-medium",
+                    "--branch",
+                    "feat/target",
+                    "--route-from",
+                    other_wt,
+                ],
+                self.target,
+                self.gp,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr.decode())
+            self.assertIn(
+                os.path.realpath(other_wt),
+                read_json(self.gp)["feat/target"]["routed_from"],
+            )
+        finally:
+            subprocess.run(
+                ["git", "-C", self.target, "worktree", "remove", "-f", other_wt],
+                capture_output=True,
+            )
 
 
 class StoreGuardTest(unittest.TestCase):
