@@ -76,11 +76,29 @@ jobs:
     with:
       command: "python3 scripts/check-marketplace.py"
 
+  # Portable gate enforcement: validates the PR head's gate cycle and review
+  # report against the commit being merged. This is the cross-clone authority
+  # the local hook cannot be — forked PRs and agents without local hooks are
+  # held to the same standard here.
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Validate gate cycle
+        run: python3 plugins/sdlc/scripts/ci-validate.py
+        env:
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          SDLC_GATES_PATH: .sharpen/data/gates.json
+
   # Aggregator: always runs, fails if any validation job failed, was
   # cancelled, or timed out. Treats skipped (path-gated) as passing so
   # docs-only PRs satisfy this required check without hanging on skipped jobs.
   ci-pass:
-    needs: [changes, lint, test, marketplace]
+    needs: [changes, lint, test, marketplace, gates]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
