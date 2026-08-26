@@ -4,6 +4,7 @@ node_modules/
 __pycache__/
 
 # SDLC gate state (per-worktree JSON, generated locally by plugins/sdlc/scripts)
+.sharpen/data/
 .claude/data/
 # Per-branch agent artifacts (generated locally; scratch, never committed)
 .claude/grumpy/

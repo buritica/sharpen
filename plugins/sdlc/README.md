@@ -87,7 +87,7 @@ Docs-only changes (no executable files, any size): test + lint + typecheck, all 
 
 ## Gate tracking (JSON, pure python — no bun)
 
-`/sdlc:gate` records gate state to one JSON file **shared across every worktree of the repo**, keyed by branch: `<main-checkout>/.claude/data/gates.json` (override with `$SDLC_GATES_PATH`). The path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree and any cwd inside the repo reads and writes the same file. A cycle recorded in one worktree is therefore visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key — no `$SDLC_*` pinning footgun.
+`/sdlc:gate` records gate state to one JSON file **shared across every worktree of the repo**, keyed by branch: `<main-checkout>/.sharpen/data/gates.json` (override with `$SDLC_GATES_PATH`). The path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree and any cwd inside the repo reads and writes the same file. Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. A cycle recorded in one worktree is therefore visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key — no `$SDLC_*` pinning footgun.
 
 The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
 

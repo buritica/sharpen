@@ -153,14 +153,7 @@ def has_project_overlay(cwd=None):
 
 def _capability_manifest_path(cwd=None):
     """Where the Claude SessionStart adapter writes this repo's manifest."""
-    override = os.environ.get(CAPABILITY_MANIFEST_ENV)
-    if override:
-        return override
-    common = _git_output(["rev-parse", "--git-common-dir"], cwd=cwd)
-    if not common:
-        return None
-    root = os.path.dirname(os.path.realpath(os.path.join(cwd or os.getcwd(), common)))
-    return os.path.join(root, ".claude", "data", CAPABILITY_MANIFEST_NAME)
+    return gs.state_file_path(CAPABILITY_MANIFEST_NAME, CAPABILITY_MANIFEST_ENV, cwd)
 
 
 def _resolve_portable_profile(cwd=None):

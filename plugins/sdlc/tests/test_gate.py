@@ -1510,8 +1510,9 @@ class WorkdirResolutionTest(unittest.TestCase):
         )
 
     def test_auto_init_follows_wrapped_cd_to_the_right_repo(self):
-        gp = os.path.join(self.repo, ".claude", "data", "gates.json")
-        os.remove(gp)  # start clean so the stamp below is unambiguous
+        gp = gs.default_store_path(self.repo)
+        if os.path.exists(gp):
+            os.remove(gp)  # start clean so the stamp below is unambiguous
         subprocess.run(
             ["python3", AUTO_INIT],
             input=json.dumps(
@@ -1543,7 +1544,7 @@ class SharedWorktreeStoreTest(unittest.TestCase):
         self.wt = os.path.join(self._wt_parent, "wt-b")
         git(self.main, "worktree", "add", "-b", "feat/b", self.wt)
         # the shared store must land in the MAIN checkout, not the linked worktree
-        self.shared = os.path.join(self.main, ".claude", "data", "gates.json")
+        self.shared = os.path.join(self.main, ".sharpen", "data", "gates.json")
 
     def tearDown(self):
         # Deregister the linked worktree before nuking dirs — avoids leaving a
@@ -1601,7 +1602,7 @@ class SharedWorktreeStoreTest(unittest.TestCase):
             os.path.exists(self.shared), "store should land in main checkout"
         )
         self.assertFalse(
-            os.path.exists(os.path.join(self.wt, ".claude", "data", "gates.json")),
+            os.path.exists(os.path.join(self.wt, ".sharpen", "data", "gates.json")),
             "store must NOT be written inside the linked worktree",
         )
         self.assertIn("feat/b", read_json(self.shared))
@@ -1976,6 +1977,30 @@ class AutoRecordAmbiguityTest(unittest.TestCase):
         self.assertIn('branch "feat/b"', res["reason"])
         self.assertIn("git worktree list", res["reason"])
         self.assertEqual(data["feat/a"]["gates"], {})
+
+
+class PortableStateRootTest(unittest.TestCase):
+    def test_default_store_prefers_neutral_sharpen_data(self):
+        repo = make_repo(branch="feat/a")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        self.assertEqual(
+            gs.default_store_path(repo),
+            os.path.realpath(os.path.join(repo, ".sharpen", "data", "gates.json")),
+        )
+
+    def test_legacy_claude_data_store_remains_active_until_neutral_exists(self):
+        repo = make_repo(branch="feat/a")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        legacy_dir = os.path.join(repo, ".claude", "data")
+        os.makedirs(legacy_dir)
+        legacy = os.path.join(legacy_dir, "gates.json")
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(legacy))
+        neutral_dir = os.path.join(repo, ".sharpen", "data")
+        os.makedirs(neutral_dir)
+        self.assertEqual(
+            gs.default_store_path(repo),
+            os.path.realpath(os.path.join(neutral_dir, "gates.json")),
+        )
 
 
 class StoreHousekeepingTest(unittest.TestCase):
