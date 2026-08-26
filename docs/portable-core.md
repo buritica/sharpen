@@ -72,4 +72,4 @@ The gate store and capability-manifest adapter now resolve shared data in this o
 
 ## Enforcement model
 
-Local hooks are useful feedback, but they cannot be the cross-clone authority: forked pull requests and agents without equivalent hooks do not share local state. A future CI adapter should validate these artifacts against the PR head commit and make that result part of the repository's one required check. The existing GitHub `ci-pass` pattern remains the intended enforcement shape; only its evidence source becomes portable.
+Local hooks are useful feedback, but they cannot be the cross-clone authority: forked pull requests and agents without equivalent hooks do not share local state. The portable CI adapter is [`plugins/sdlc/scripts/ci-validate.py`](../plugins/sdlc/scripts/ci-validate.py): it reads the gate store for the PR head branch, verifies all required gates are complete, and checks that any attached review report's provenance matches the PR head SHA. It runs as a `gates` job in the repository's CI workflow and is part of the one required check (`ci-pass`). Forked PRs and agents without local hooks are held to the same standard here.
