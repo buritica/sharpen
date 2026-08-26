@@ -56,16 +56,19 @@ The report records the executing agent/model only when the host can supply it. I
 
 ## State root migration
 
-New portable implementations should use `.sharpen/`, for example:
+Portable state uses `.sharpen/` for new shared data:
 
 ```text
 .sharpen/
   data/gates.json
+  data/capabilities.claude.json
   sdlc/<branch>/plan.md
   reviews/<branch>/review.json
 ```
 
-Existing `.claude/data/`, `.claude/sdlc/`, and `.claude/grumpy/` state remains the current implementation and is not moved by this protocol. A future migration must read the old locations, write the neutral locations atomically, and preserve a documented rollback path.
+The gate store and capability-manifest adapter now resolve shared data in this order: an explicit environment override, `.sharpen/data/`, then existing `.claude/data/` as a compatibility fallback. Existing installs therefore keep reading and writing active state until `.sharpen/data/` exists; fresh state starts in the neutral root.
+
+`.claude/sdlc/` and `.claude/grumpy/` remain adapter-local scratch/artifact locations and are not moved by this step. A full migration must still read the old locations, write neutral locations atomically, and preserve a documented rollback path.
 
 ## Enforcement model
 
