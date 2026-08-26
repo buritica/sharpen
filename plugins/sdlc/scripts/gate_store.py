@@ -13,8 +13,10 @@ keeps two branches checked out in two worktrees isolated from each other.
 
 Store path (precedence):
   1. $SDLC_GATES_PATH env var
-  2. <main-checkout>/.claude/data/gates.json  (dirname of the common .git dir)
-  3. <cwd>/.claude/data/gates.json   (git resolution failed)
+  2. <main-checkout>/.sharpen/data/gates.json  (dirname of the common .git dir)
+  3. <main-checkout>/.claude/data/gates.json   (legacy, read fallback)
+  4. <cwd>/.sharpen/data/gates.json            (git resolution failed)
+  5. <cwd>/.claude/data/gates.json             (legacy git-resolution fallback)
 
 Schema:
   {
@@ -183,33 +185,56 @@ def git_common_dir(cwd=None):
     return os.path.realpath(os.path.join(cwd or os.getcwd(), common))
 
 
+def state_data_root(cwd=None):
+    """Return the shared data root, preferring neutral `.sharpen/data`.
+
+    Existing installs may only have `.claude/data`; keep reading that location
+    when it already exists so upgrading does not make active cycles or
+    capability manifests disappear. New state is written to `.sharpen/data`.
+    """
+    common = git_common_dir(cwd)
+    if common:
+        # dirname(common .git dir) == the main checkout root, identical for every
+        # linked worktree → one shared, branch-keyed state root.
+        root = os.path.dirname(common)
+    else:
+        root = os.path.realpath(cwd or os.getcwd())
+    legacy = os.path.join(root, ".claude", "data")
+    neutral = os.path.join(root, ".sharpen", "data")
+    if os.path.exists(neutral) or not os.path.exists(legacy):
+        return neutral
+    return legacy
+
+
+def state_file_path(filename, env_var, cwd=None):
+    """Resolve a portable state file with an explicit env override first."""
+    env = os.environ.get(env_var)
+    if env:
+        return env
+    return os.path.join(state_data_root(cwd), filename)
+
+
 def default_store_path(cwd=None):
     env = os.environ.get("SDLC_GATES_PATH")
     if env:
         return env
     common = git_common_dir(cwd)
-    if common:
-        # dirname(common .git dir) == the main checkout root, identical for every
-        # linked worktree → one shared, branch-keyed store.
-        return os.path.join(os.path.dirname(common), ".claude", "data", "gates.json")
-    # git resolution failed (not a repo, broken .git, git missing). Fall back to a
-    # cwd-relative store — realpath'd for the same single-inode guarantee as the
-    # happy path — and leave a breadcrumb, since a silent fallback here is the
-    # likeliest cause of a later "my gate didn't record / wasn't enforced" report.
-    # `cwd`, not os.getcwd(): callers pass the workdir they resolved out of the
-    # command (`cd X && …`, `git -C X`). Using the process's own cwd here sends
-    # the recorder and the enforcer to different files without saying so.
-    fallback = os.path.realpath(
-        os.path.join(cwd or os.getcwd(), ".claude", "data", "gates.json")
-    )
-    # Name the path: "which file did it actually pick" is the whole question
-    # when someone reports a gate that recorded but wasn't enforced.
-    sys.stderr.write(
-        "[gate] warning: could not resolve the repo's shared git dir; "
-        f"falling back to a cwd-local gate store at {fallback}. Gates recorded "
-        "here won't be visible from other worktrees/cwds.\n"
-    )
-    return fallback
+    if not common:
+        # git resolution failed (not a repo, broken .git, git missing). Fall back
+        # to a cwd-relative store and leave a breadcrumb, since a silent fallback
+        # here is the likeliest cause of a later "my gate didn't record / wasn't
+        # enforced" report. `cwd`, not os.getcwd(): callers pass the workdir they
+        # resolved out of the command (`cd X && …`, `git -C X`). Using the
+        # process's own cwd here sends the recorder and the enforcer to different
+        # files without saying so.
+        fallback = state_file_path("gates.json", "SDLC_GATES_PATH", cwd)
+        sys.stderr.write(
+            "[gate] warning: could not resolve the repo's shared git dir; "
+            f"falling back to a cwd-local gate store at {fallback}. Gates recorded "
+            "here won't be visible from other worktrees/cwds.\n"
+        )
+        return fallback
+    return state_file_path("gates.json", "SDLC_GATES_PATH", cwd)
 
 
 def load_store(path):

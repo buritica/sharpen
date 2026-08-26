@@ -11,8 +11,9 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = os.path.join(HERE, "..", "scripts")
+SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
 SCRIPT = os.path.join(SCRIPTS, "claude-session-start.py")
+sys.path.insert(0, SCRIPTS)
 
 spec = importlib.util.spec_from_file_location("claude_session_start", SCRIPT)
 session_start = importlib.util.module_from_spec(spec)
@@ -66,15 +67,20 @@ class SessionStartCliTest(unittest.TestCase):
         self.repo = make_repo()
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
         self.manifest_path = os.path.join(
-            self.repo, ".claude", "data", "capabilities.claude.json"
+            self.repo, ".sharpen", "data", "capabilities.claude.json"
         )
+
+    def clean_env(self):
+        env = dict(os.environ)
+        env.pop("SDLC_CAPABILITIES_PATH", None)
+        return env
 
     def run_adapter(self, env=None):
         return subprocess.run(
             ["python3", SCRIPT],
             capture_output=True,
             cwd=self.repo,
-            env=env or dict(os.environ, SDLC_CAPABILITIES_PATH=self.manifest_path),
+            env=env or self.clean_env(),
         )
 
     def test_writes_valid_manifest_without_blocking_session(self):
@@ -86,6 +92,20 @@ class SessionStartCliTest(unittest.TestCase):
         self.assertEqual(manifest["protocol_version"], "1")
         self.assertEqual(manifest["provider"]["name"], "claude-code")
         self.assertIn("test", manifest["capabilities"])
+
+    def test_existing_claude_manifest_root_remains_active_until_neutral_exists(self):
+        legacy_dir = os.path.join(self.repo, ".claude", "data")
+        os.makedirs(legacy_dir)
+        legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertTrue(os.path.exists(legacy_path))
+        self.assertFalse(os.path.exists(self.manifest_path))
+
+        os.makedirs(os.path.dirname(self.manifest_path))
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertTrue(os.path.exists(self.manifest_path))
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")

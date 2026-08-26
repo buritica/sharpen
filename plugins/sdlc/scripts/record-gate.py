@@ -23,8 +23,9 @@ Usage:
                                       # attach a validated portable review
                                       # report without recording a gate
 
-Store path: $SDLC_GATES_PATH, or <main-checkout>/.claude/data/gates.json
-            (resolved via `git rev-parse --git-common-dir`, shared per-repo)
+Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
+            (resolved via `git rev-parse --git-common-dir`, shared per-repo;
+             existing .claude/data/gates.json remains active until .sharpen exists)
 """
 
 import sys
@@ -286,7 +287,7 @@ def main(argv):
     except OSError as e:
         _log(
             "[gate] error: could not lock or write gate store "
-            f"(is .claude/data on a filesystem without flock support?): {e}"
+            f"(is the gate state dir on a filesystem without flock support?): {e}"
         )
         return 1
     return 0
