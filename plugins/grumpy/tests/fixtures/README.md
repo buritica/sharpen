@@ -18,15 +18,21 @@ output is non-deterministic) — this is a manual check to run whenever
 
 1. Spawn one agent per prompt variant against `sample.diff`, capture its raw
    output.
-2. Normalize each agent's findings into a JSON list of
-   `{"severity": "...", "file": "...", "text": "..."}` objects.
-3. Score each with:
+2. Score the new (pipe-format) variant's raw output directly — save it to a
+   file and run:
    ```sh
-   python3 scripts/eval-grumpy-findings.py <candidates.json> --label "<name>"
+   python3 scripts/eval-grumpy-findings.py <raw-output.txt> --label "<name>"
    ```
-4. Compare `recall` (must stay at 100% — a dropped planted issue is a
+   `.txt`/non-`.json` files are parsed as `SEVERITY|file:line|text|FACT|DOMAIN`
+   lines (`--format pipe` to force it); CONTEXT/HANDLED/malformed lines are
+   skipped automatically, same as the real aggregator is instructed to do.
+   For the old verbose-markdown variant (or any format eval-grumpy-findings.py
+   doesn't parse), normalize by hand into a JSON list of
+   `{"severity": "...", "file": "...", "text": "..."}` objects instead and
+   score that (`.json` files are auto-detected).
+3. Compare `recall` (must stay at 100% — a dropped planted issue is a
    regression) and `output size` (the metric this change is meant to
    improve).
 
-`scripts/tests/test_eval_grumpy_findings.py` covers the scorer's matching
-logic itself with fixed inputs — it doesn't call an LLM.
+`scripts/tests/test_eval_grumpy_findings.py` covers the scorer's matching and
+pipe-line-parsing logic with fixed inputs — it doesn't call an LLM.

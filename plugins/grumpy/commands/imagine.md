@@ -320,6 +320,14 @@ Step 3 report below. **Aggregate signal over volume** — when combining agent
 outputs, deduplicate overlapping findings (same file:line + similar
 description). One well-placed ⚠️ beats the same concern repeated by two agents.
 
+A FINDING line's free-text field can itself legitimately contain a `|` (a
+shell pipe, a regex `a|b`, a table cell). Parse each line outside-in, not by
+a flat split on `|`: take SEVERITY and file:line as the first two fields from
+the left, FACT and the last field (transport-name/DOMAIN) as the last two
+fields from the right, and treat everything remaining in the middle as the
+text — don't discard a line as malformed just because it has more than 5
+`|`-separated pieces.
+
 ## Step 3: Aggregate and Deliver the Simulation Report
 
 If any agent's output is missing, errored, or malformed (not valid
@@ -329,12 +337,19 @@ Do not silently omit sections.
 
 Map each FINDING line's SEVERITY to the top-level block (CRIT → 🚨 Bugs Found,
 WARN → ⚠️ Serious Concerns, NOTE → 🤔 Questionable Decisions), grouped by its
-DOMAIN. Agent 4's `silent-failure` DOMAIN findings go to 🚨 Bugs Found;
-`ux-observability` DOMAIN findings go to the 'UX & Observability Notes (Not
-Bugs)' section regardless of severity. HANDLED lines become the Strengths
-section (one bullet each). CONTEXT lines populate the per-domain narrative
-subsections (Transport Simulations, State Transition Simulations, etc.) —
-render each CONTEXT line's fields as the bullets already shown there.
+last field. Two overrides apply regardless of SEVERITY: Agent 4's
+`silent-failure` findings always go to 🚨 Bugs Found, and its
+`ux-observability` findings always go to the 'UX & Observability Notes (Not
+Bugs)' section instead of a severity block. Agent 1's last field is shaped
+`transport:[Name]` (not a bare DOMAIN like the other three agents) — strip
+the `transport:` prefix to get the name and group under that transport's
+subsection; don't print the raw `transport:[Name]` string as a label.
+HANDLED lines become the Strengths section (one bullet each). CONTEXT lines
+populate the per-domain narrative subsections (Transport Simulations, State
+Transition Simulations, etc.) — render each CONTEXT line's fields as the
+bullets already shown there. `first-deploy` has no CONTEXT line format by
+design (it's a compatibility check, not a narrative flow) — its subsection is
+findings-only.
 
 Once all agents complete, combine findings into one report:
 

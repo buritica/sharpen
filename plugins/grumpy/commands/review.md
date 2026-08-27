@@ -182,7 +182,7 @@ preamble, no summary, no markdown headers.
 
 ## Audit discipline
 
-Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line + similar description), and drop any line missing a `file:line` or malformed (wrong number of `|`-fields). Signal over volume — a healthy area gets one sentence, or none.
+Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. A line's free-text field can itself legitimately contain a `|` (a shell pipe, a regex `a|b`), so parse outside-in — SEVERITY and file:line as the first two fields from the left, FACT and ASPECT as the last two from the right, everything remaining in the middle is the text — rather than a flat split that would shift fields on an embedded pipe. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line + similar description), and drop any line missing a `file:line` or that still doesn't resolve to all 5 fields after outside-in parsing. Signal over volume — a healthy area gets one sentence, or none.
 
 ## Step 4: Aggregate and Deliver the Verdict
 

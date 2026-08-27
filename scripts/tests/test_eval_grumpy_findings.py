@@ -59,6 +59,71 @@ class TestMatches(unittest.TestCase):
         }
         self.assertFalse(eval_grumpy_findings.matches(finding, candidate))
 
+    def test_matches_is_case_insensitive_both_sides(self):
+        finding = {
+            "file": "charge.py",
+            "keywords": ["SWALLOW"],
+        }
+        candidate = {"file": "charge.py", "text": "this SWALLOWS the error"}
+        self.assertTrue(eval_grumpy_findings.matches(finding, candidate))
+
+    def test_no_match_on_missing_candidate_keys(self):
+        finding = GOLDEN["findings"][0]
+        self.assertFalse(eval_grumpy_findings.matches(finding, {}))
+
+
+class TestParsePipeLine(unittest.TestCase):
+    def test_parses_a_well_formed_finding_line(self):
+        line = "CRIT|charge.py:18|swallows the error|fact|errors"
+        result = eval_grumpy_findings.parse_pipe_line(line)
+        self.assertEqual(
+            result,
+            {
+                "severity": "CRIT",
+                "file": "charge.py",
+                "text": "swallows the error",
+                "fact": "fact",
+                "domain": "errors",
+            },
+        )
+
+    def test_preserves_a_pipe_character_inside_the_text_field(self):
+        line = "WARN|charge.py:10|retries with a a|b regex, never bounded|judgment|errors"
+        result = eval_grumpy_findings.parse_pipe_line(line)
+        self.assertEqual(result["text"], "retries with a a|b regex, never bounded")
+        self.assertEqual(result["fact"], "judgment")
+        self.assertEqual(result["domain"], "errors")
+
+    def test_rejects_context_and_handled_lines(self):
+        self.assertIsNone(
+            eval_grumpy_findings.parse_pipe_line(
+                "transport:Slack|API calls: 1|UX: fine|Logs: ok|Metrics: ok"
+            )
+        )
+        self.assertIsNone(
+            eval_grumpy_findings.parse_pipe_line("HANDLED|cleanup|always releases locks")
+        )
+
+    def test_rejects_blank_and_malformed_lines(self):
+        self.assertIsNone(eval_grumpy_findings.parse_pipe_line(""))
+        self.assertIsNone(eval_grumpy_findings.parse_pipe_line("   "))
+        self.assertIsNone(eval_grumpy_findings.parse_pipe_line("CRIT|only two fields"))
+
+    def test_parse_pipe_findings_skips_non_finding_lines(self):
+        raw = "\n".join(
+            [
+                "transport:Slack|API calls: 1|UX: fine|Logs: ok|Metrics: ok",
+                "CRIT|charge.py:18|swallows the error|fact|errors",
+                "",
+                "HANDLED|cleanup|always releases locks",
+                "NOTE|charge.py:30|unnecessary factory|judgment|simplify",
+            ]
+        )
+        findings = eval_grumpy_findings.parse_pipe_findings(raw)
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(findings[0]["severity"], "CRIT")
+        self.assertEqual(findings[1]["severity"], "NOTE")
+
 
 class TestScore(unittest.TestCase):
     def test_full_recall(self):
@@ -91,6 +156,11 @@ class TestScore(unittest.TestCase):
         result = eval_grumpy_findings.score(GOLDEN, [])
         self.assertEqual(result["recall"], 0.0)
         self.assertEqual(result["signal_ratio"], 0.0)
+
+    def test_empty_golden_no_crash(self):
+        result = eval_grumpy_findings.score({"findings": []}, [{"file": "x.py", "text": "y"}])
+        self.assertEqual(result["recall"], 0.0)
+        self.assertEqual(result["misses"], [])
 
 
 if __name__ == "__main__":

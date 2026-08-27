@@ -2,14 +2,22 @@
 """Score a grumpy findings run against the golden fixture.
 
 Usage:
-    python3 scripts/eval-grumpy-findings.py <candidate.json> [--golden path] [--label name]
+    python3 scripts/eval-grumpy-findings.py <candidate> [--golden path] [--label name] [--format json|pipe]
 
-<candidate.json> is a JSON list of findings, each shaped like:
-    {"severity": "CRIT", "file": "src/billing/charge.py", "text": "..."}
+<candidate> is either:
+- a JSON list of findings (default, `.json` files auto-detected), each shaped
+  like {"severity": "CRIT", "file": "src/billing/charge.py", "text": "..."}
+- raw pipe-delimited agent output (`--format pipe`, or any non-`.json`
+  file), one finding per line, in the exact contract review.md/imagine.md's
+  agent prompts specify: SEVERITY|file:line|text|FACT|DOMAIN. Lines that
+  aren't FINDING lines (CONTEXT/HANDLED, blank, malformed) are skipped, same
+  as the real aggregator is instructed to do.
 
 Used to compare recall (did the run still catch the planted issues?) and
 output size (a token-cost proxy) between two prompt variants on the same
-fixture diff -- see plugins/grumpy/tests/fixtures/README.md.
+fixture diff -- see plugins/grumpy/tests/fixtures/README.md. Passing raw
+pipe-format output directly (instead of hand-normalizing it to JSON) also
+exercises the actual line-parsing contract the format change introduced.
 """
 
 import argparse
@@ -21,11 +29,45 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_GOLDEN = os.path.join(
     ROOT, "plugins", "grumpy", "tests", "fixtures", "golden.json"
 )
+VALID_SEVERITIES = {"CRIT", "WARN", "NOTE"}
 
 
 def load_json(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def parse_pipe_line(line):
+    """Parse one SEVERITY|file:line|text|FACT|DOMAIN finding line.
+
+    Splits the first two fields from the left and the last two from the
+    right, so a `|` inside the free-text middle field doesn't shift FACT/
+    DOMAIN out of place. Returns None for non-FINDING lines (CONTEXT/
+    HANDLED/blank) or lines that don't have all five fields.
+    """
+    line = line.strip()
+    if not line or "|" not in line:
+        return None
+    try:
+        severity, rest = line.split("|", 1)
+        file_line, rest = rest.split("|", 1)
+        text, fact, domain = rest.rsplit("|", 2)
+    except ValueError:
+        return None
+    severity = severity.strip()
+    if severity not in VALID_SEVERITIES:
+        return None
+    return {
+        "severity": severity,
+        "file": file_line.split(":", 1)[0].strip(),
+        "text": text.strip(),
+        "fact": fact.strip(),
+        "domain": domain.strip(),
+    }
+
+
+def parse_pipe_findings(raw_text):
+    return [f for f in (parse_pipe_line(l) for l in raw_text.splitlines()) if f]
 
 
 def matches(golden_finding, candidate):
@@ -60,13 +102,26 @@ def score(golden, candidates):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("candidate", help="path to a JSON list of findings")
+    parser.add_argument(
+        "candidate", help="path to a JSON findings list, or raw pipe-format agent output"
+    )
     parser.add_argument("--golden", default=DEFAULT_GOLDEN)
     parser.add_argument("--label", default=None)
+    parser.add_argument(
+        "--format",
+        choices=["json", "pipe"],
+        default=None,
+        help="defaults to json for .json files, pipe otherwise",
+    )
     args = parser.parse_args()
 
+    fmt = args.format or ("json" if args.candidate.endswith(".json") else "pipe")
     golden = load_json(args.golden)
-    candidates = load_json(args.candidate)
+    if fmt == "json":
+        candidates = load_json(args.candidate)
+    else:
+        with open(args.candidate, encoding="utf-8") as f:
+            candidates = parse_pipe_findings(f.read())
     result = score(golden, candidates)
 
     label = args.label or os.path.basename(args.candidate)
