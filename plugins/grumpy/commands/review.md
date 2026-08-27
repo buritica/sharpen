@@ -158,17 +158,31 @@ Review these changes focusing on [ASPECT] (base: [DIFF_BASE]):
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
-Return your findings as:
-## Critical Issues 🚨 (production will break)
-## Serious Concerns ⚠️ (will cause problems eventually)
-## Suggestions 💡 (things that make you raise an eyebrow)
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice in your findings. Return ONE line per finding, nothing else,
+in this exact pipe-delimited format:
 
-Each finding must state: what is wrong, where (file:line), and the concrete consequence if left unfixed — not a principle, a thing that breaks or hurts. Label facts vs judgments: e.g. "swallows the error — client.ts:142 [fact]" vs "this abstraction feels wrong [judgment]". Prefer ~15 high-confidence findings over 50 speculative ones; a healthy area gets one sentence, don't invent problems.
+SEVERITY|file:line|what is wrong and the concrete consequence if left unfixed|FACT|ASPECT
+
+- SEVERITY is one of CRIT (production will break), WARN (will cause problems
+  eventually), NOTE (things that make you raise an eyebrow).
+- FACT is `fact` (objectively true — "swallows the error") or `judgment`
+  (your call — "this abstraction feels wrong").
+- ASPECT is the review focus you were given (e.g. `errors`, `tests`).
+
+Example:
+CRIT|client.ts:142|swallows the network error, retry never fires|fact|errors
+NOTE|client.ts:88|this abstraction feels wrong for a single call site|judgment|simplify
+
+Prefer ~15 high-confidence lines over 50 speculative ones. If an area is
+healthy, do not emit a line for it — silence means "nothing found," you do
+not need a line saying so. Do not invent problems. No other output — no
+preamble, no summary, no markdown headers.
 ```
 
 ## Audit discipline
 
-When aggregating the final report: assign the correct severity tier (🚨/⚠️/🤔) to every finding, dedup overlapping findings from different agents, and drop any finding missing a `file:line` or a stated concrete consequence. Signal over volume — a healthy area gets one sentence.
+Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line + similar description), and drop any line missing a `file:line` or malformed (wrong number of `|`-fields). Signal over volume — a healthy area gets one sentence, or none.
 
 ## Step 4: Aggregate and Deliver the Verdict
 

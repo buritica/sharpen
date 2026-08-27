@@ -1,0 +1,62 @@
+{
+  "diff": "sample.diff",
+  "description": "Synthetic diff with 6 planted issues spanning code/errors/tests/comments/simplify aspects, used to compare grumpy review output quality before/after the compact-findings format change.",
+  "findings": [
+    {
+      "id": "swallowed-exception",
+      "severity": "CRIT",
+      "file": "src/billing/charge.py",
+      "line_hint": 18,
+      "keywords": ["except", "pass", "swallow", "silent"],
+      "note": "bare except with `pass` silently discards the gateway error"
+    },
+    {
+      "id": "silent-none-return",
+      "severity": "WARN",
+      "file": "src/billing/charge.py",
+      "line_hint": 21,
+      "keywords": ["none", "retries exhausted", "caller", "distinguish"],
+      "note": "returns None after retries exhausted with no signal to the caller that it failed"
+    },
+    {
+      "id": "undefined-formatter-reference",
+      "severity": "CRIT",
+      "file": "src/billing/charge.py",
+      "line_hint": 30,
+      "keywords": ["chargeresultformatter", "undefined", "nameerror", "not defined"],
+      "note": "ChargeResultFormatter is referenced but never defined or imported"
+    },
+    {
+      "id": "unnecessary-factory",
+      "severity": "NOTE",
+      "file": "src/billing/charge.py",
+      "line_hint": 28,
+      "keywords": ["factory", "unnecessary", "over-engineer", "simplify"],
+      "note": "ChargeResultFormatterFactory is a factory for a single formatter with no variation"
+    },
+    {
+      "id": "stale-misleading-comment",
+      "severity": "WARN",
+      "file": "src/billing/charge.py",
+      "line_hint": 24,
+      "keywords": ["soap", "comment", "stale", "misleading"],
+      "note": "comment claims a legacy SOAP endpoint but the code just calls gateway.refund"
+    },
+    {
+      "id": "no-error-handling-refund",
+      "severity": "WARN",
+      "file": "src/billing/charge.py",
+      "line_hint": 25,
+      "keywords": ["refund_customer", "unhandled", "no try", "error handling"],
+      "note": "refund_customer has no error handling, inconsistent with charge_customer's retry logic"
+    },
+    {
+      "id": "fake-test-assertion",
+      "severity": "NOTE",
+      "file": "src/billing/test_charge.py",
+      "line_hint": 6,
+      "keywords": ["assert true", "smoke", "tests nothing", "fake coverage"],
+      "note": "test_charge_customer_smoke asserts True and never calls charge_customer"
+    }
+  ]
+}

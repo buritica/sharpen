@@ -139,17 +139,22 @@ If no transports are present in the diff, skip the per-transport breakdown. Inst
 - Assess log coverage: can you trace a single request end-to-end from the logs? Are messages specific enough to identify which transport failed? Is request context (user ID, session, transport type) present throughout?
 - Assess metric coverage: are success outcomes counted? Would a regression in this path show up on a dashboard?
 
-Return findings as:
-## Transport: [Name]
-### API Calls
-### User Experience
-### Log Traceability
-### Metric Coverage
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice. Return two blocks, nothing else:
 
-Be specific. Trace actual code paths. No hand-waving. Label facts vs judgments. Include a "## What's Already Handled Well" block before findings. ~15 high-confidence findings; quiet areas get one sentence.
+CONTEXT lines (max 5 total, one per transport if more than one applies) —
+`transport:[Name]|API calls: [sequence/count]|UX: [good/janky, why]|Logs: [traceable? gaps?]|Metrics: [covered? gaps?]`
+
+FINDING lines, one per finding —
+`SEVERITY|file:line|what is wrong and the concrete consequence|FACT|transport:[Name]`
+
+- SEVERITY is CRIT (production will break), WARN (will cause problems
+  eventually), or NOTE (suspicious but not broken).
+- FACT is `fact` or `judgment`.
+- Prefix a HANDLED line for things already done well: `HANDLED|area|one-line why it's fine` (only for genuinely notable strengths, not every quiet area).
+
+Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
+on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
 
 ### Agent 2: State Transitions (mode changes + error/cleanup + first deploy)
@@ -188,32 +193,22 @@ Imagine the following scenarios, tracing code execution step by step:
 - Are there any protocol or schema changes that would break old clients hitting new code?
 - Is there backward compatibility or a migration path?
 
-Return findings as:
-## State Promotion / Mode Change Simulation
-### API Calls
-### User Experience
-### Log Traceability
-### Metric Coverage
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice. Return two blocks, nothing else:
 
-## Error + Cleanup Simulation
-### Cleanup Guarantees
-### User-Facing Error Experience
-### Log Traceability
-### Metric Coverage
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+CONTEXT lines (max 5 total) —
+`state-transition|API calls: [sequence]|UX: [what user sees]|Logs: [traceable?]|Metrics: [covered?]`
+`cleanup|Cleanup guarantees: [always/sometimes/never, why]|User-facing error: [actionable/cryptic]`
 
-## First Deploy / Old Client Compatibility
-### Breaking Changes
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+FINDING lines, one per finding —
+`SEVERITY|file:line|what is wrong and the concrete consequence|FACT|DOMAIN`
 
-Be specific. Trace actual code paths. No hand-waving. Label facts vs judgments. Include a "## What's Already Handled Well" block before findings. ~15 high-confidence findings; quiet areas get one sentence.
+- SEVERITY is CRIT/WARN/NOTE, FACT is `fact`/`judgment`.
+- DOMAIN is one of `state-transition`, `cleanup`, `first-deploy`.
+- Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
+
+Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
+on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
 
 ### Agent 3: Concurrency + Rate Limiting
@@ -248,24 +243,22 @@ Imagine the following scenarios:
 - Are there any read-modify-write sequences without locks or transactions?
 - What happens if an async callback fires after the parent context is gone?
 
-Return findings as:
-## Rapid-Fire / Rate Limiting Simulation
-### Throttle Behavior
-### User Experience Under Rate Limiting
-### Log Traceability
-### Metric Coverage
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice. Return two blocks, nothing else:
 
-## Concurrency + Async Race Simulation
-### Fire-and-Forget Risks
-### Shared State Races
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
+CONTEXT lines (max 5 total) —
+`rate-limit|Throttle behavior: [drop/queue/error, why]|UX under rate limit: [silence/error/delay]`
+`concurrency|Fire-and-forget risks: [count/summary]|Shared state races: [summary]`
 
-Be specific. Trace actual code paths. No hand-waving. Label facts vs judgments. Include a "## What's Already Handled Well" block before findings. ~15 high-confidence findings; quiet areas get one sentence.
+FINDING lines, one per finding —
+`SEVERITY|file:line|what is wrong and the concrete consequence|FACT|DOMAIN`
+
+- SEVERITY is CRIT/WARN/NOTE, FACT is `fact`/`judgment`.
+- DOMAIN is one of `rate-limit`, `concurrency`.
+- Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
+
+Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
+on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
 
 ### Agent 4: Observability Completeness
@@ -303,39 +296,45 @@ For every code path in the diff:
 - If this breaks silently at 3am, would anyone know?
 - Are errors surfaced to alerting systems or just swallowed?
 
-Return findings as:
-## Logging Gaps
-[List every code path with missing or insufficient logging, with file:line]
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice. Return FINDING lines only, one per finding, nothing else:
 
-## Metric Gaps
-[List every outcome that isn't counted, with file:line]
+`SEVERITY|file:line|what is wrong and the concrete consequence|FACT|DOMAIN`
 
-## Silent Failure Risks
-[Things that can break with no alert, no log, no metric]
+- SEVERITY is CRIT (silent failure, no alert/log/metric at all), WARN
+  (logging/metric gap that will cause problems eventually), or NOTE
+  (UX/observability nit, not a bug).
+- FACT is `fact`/`judgment`.
+- DOMAIN is one of `logging-gap`, `metric-gap`, `silent-failure`, `ux-observability`.
+- Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
 
-### Bugs Found 🚨
-### Serious Concerns ⚠️ (will cause problems eventually)
-### Questionable Decisions 🤔 (suspicious but not broken)
-
-## UX/Observability Issues (not bugs, but worth noting)
-[Things that aren't broken but would make debugging harder or the product feel worse]
-
-Be specific. Include file:line references. No vague hand-waving. Label facts vs judgments. Include a "## What's Already Handled Well" block before findings. ~15 high-confidence findings; quiet areas get one sentence.
+Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
+on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
 
 ## Audit Discipline
 
-**Aggregate signal over volume** — when combining agent outputs, deduplicate overlapping findings. One well-placed ⚠️ beats the same concern repeated under every section. Promote findings to the top-level severity blocks; don't bury them in subsections.
+Each agent returns raw CONTEXT/FINDING/HANDLED lines, not prose — the persona
+voice and human-facing formatting happen exactly once, when you render the
+Step 3 report below. **Aggregate signal over volume** — when combining agent
+outputs, deduplicate overlapping findings (same file:line + similar
+description). One well-placed ⚠️ beats the same concern repeated by two agents.
 
 ## Step 3: Aggregate and Deliver the Simulation Report
 
-If any agent's output is missing, errored, or malformed: include the section in
-the report with the note '[Agent did not return results — this section requires
-manual review]'. Do not silently omit sections.
+If any agent's output is missing, errored, or malformed (not valid
+CONTEXT/FINDING/HANDLED lines): include the section in the report with the
+note '[Agent did not return results — this section requires manual review]'.
+Do not silently omit sections.
 
-When aggregating Agent 4's output: 'Silent Failure Risks' maps to the top-level
-'🚨 Bugs Found' block. 'UX/Observability Issues (not bugs, but worth noting)'
-maps to the 'UX & Observability Notes (Not Bugs)' section.
+Map each FINDING line's SEVERITY to the top-level block (CRIT → 🚨 Bugs Found,
+WARN → ⚠️ Serious Concerns, NOTE → 🤔 Questionable Decisions), grouped by its
+DOMAIN. Agent 4's `silent-failure` DOMAIN findings go to 🚨 Bugs Found;
+`ux-observability` DOMAIN findings go to the 'UX & Observability Notes (Not
+Bugs)' section regardless of severity. HANDLED lines become the Strengths
+section (one bullet each). CONTEXT lines populate the per-domain narrative
+subsections (Transport Simulations, State Transition Simulations, etc.) —
+render each CONTEXT line's fields as the bullets already shown there.
 
 Once all agents complete, combine findings into one report:
 
