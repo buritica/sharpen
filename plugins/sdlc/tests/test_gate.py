@@ -23,6 +23,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 
+# Every subprocess this file spawns inherits the current environment (either
+# implicitly, or via `dict(os.environ, ...)`), so setting this once here
+# isolates every test — in-process calls too, since gate_store reads the env
+# var live on each call — from the real `~/.cache/sharpen/cross-repo-routes.json`
+# on whatever machine runs the suite. One shared file for the whole module is
+# safe: registry entries are keyed by absolute temp-repo paths from
+# `tempfile.mkdtemp()`, which never collide across tests.
+os.environ["SDLC_CROSS_REPO_ROUTES_PATH"] = os.path.join(
+    tempfile.mkdtemp(), "cross-repo-routes.json"
+)
+
 import gate_store as gs  # noqa: E402
 import hook_out as ho  # noqa: E402
 
@@ -1780,17 +1791,20 @@ class InitBranchOverrideGuardTest(unittest.TestCase):
 
 
 class CrossRepoRouteFromTest(unittest.TestCase):
-    """--route-from must refuse a path in a genuinely different repository
-    (sharpen#16) rather than silently accepting a route the auto-record hook
-    can never act on: the hook resolves its own git state from the SOURCE
-    repo's cwd, which has no idea the target repo's branches even exist."""
+    """--route-from a genuinely different repository must register a
+    cross-repo route (sharpen#10), not refuse — the auto-record hook resolves
+    its own git state from the SOURCE repo's cwd, which has no idea the
+    target repo's branches even exist, so simply allowing the local
+    `routed_from` write (sharpen#16's original behavior would have refused
+    this outright) isn't enough on its own; the registry is what lets the
+    hook find the target's store at all."""
 
     def setUp(self):
         self.target = make_repo(branch="feat/target")
         self.source = make_repo(branch="main")
         self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
 
-    def test_refuses_a_route_from_an_unrelated_repo(self):
+    def test_registers_a_cross_repo_route(self):
         r = run_cli(
             [
                 "--init",
@@ -1803,9 +1817,18 @@ class CrossRepoRouteFromTest(unittest.TestCase):
             self.target,
             self.gp,
         )
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("different repository", r.stderr.decode())
-        self.assertFalse(os.path.exists(self.gp))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo route registered", r.stderr.decode())
+        # Still writes the ordinary per-repo routed_from entry too — --status
+        # run from the target repo shouldn't need the registry to see it.
+        self.assertIn(
+            os.path.realpath(self.source),
+            read_json(self.gp)["feat/target"]["routed_from"],
+        )
+        entry = gs.resolve_cross_repo_route(os.path.realpath(self.source))
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["store_path"], self.gp)
+        self.assertEqual(entry["target_root"], os.path.realpath(self.target))
 
     def test_fails_closed_when_target_common_dir_is_unresolvable(self):
         # An earlier version only refused on a CONFIRMED mismatch
@@ -1876,6 +1899,261 @@ class CrossRepoRouteFromTest(unittest.TestCase):
                 ["git", "-C", self.target, "worktree", "remove", "-f", other_wt],
                 capture_output=True,
             )
+
+
+class CrossRepoAutoRecordTest(unittest.TestCase):
+    """The actual sharpen#10 bug: a session whose home repo is A driving
+    gated work in a genuinely different repo B (via cd/worktree/route-from)
+    couldn't get skill-gated stamps to land in B's store at all, even with a
+    route explicitly configured — the auto-record hook always resolved its
+    OWN store from its OWN cwd (A), which structurally can't contain B's
+    cycle. This is the end-to-end proof the fix actually closes that gap, not
+    just that `--init` accepts the route."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def auto(self, skill, cwd):
+        # `cwd` on the payload is what the hook actually uses for every git
+        # question (see auto-record-skill-gate.py) — the subprocess's own
+        # cwd (`self.source` here too, for realism) is irrelevant to it.
+        payload = {"tool_name": "Skill", "tool_input": {"skill": skill}, "cwd": cwd}
+        return run_hook(AUTO, payload, self.source, self.gp)
+
+    def test_records_into_the_target_store_from_the_source_cwd(self):
+        r = self.auto("simplify", self.source)
+        # A cross-repo stamp is a cross-worktree write from the hook's own
+        # perspective (target != the source's own detected branch), which
+        # this hook deliberately surfaces via exit 2 (see
+        # auto-record-skill-gate.py's holder.get("recorded") handling) —
+        # exit 2 here means "recorded, and surfaced," not "failed."
+        self.assertIn(r.returncode, (0, 2), r.stderr.decode())
+        self.assertIn('recorded "simplify"', r.stderr.decode())
+        self.assertIn("simplify", read_json(self.gp)["feat/target"]["gates"])
+
+    def test_without_a_registered_route_the_gate_does_not_record(self):
+        # Baseline proving the above is actually exercising the fix: drop the
+        # registration (simulating pre-fix behavior, where nothing but the
+        # per-repo `routed_from` entry ever existed) and confirm the hook
+        # genuinely cannot find the target's cycle from the source's cwd.
+        run_cli(["--unroute"], self.source, self.gp)
+        self.auto("simplify", self.source)
+        self.assertNotIn(
+            "simplify", read_json(self.gp).get("feat/target", {}).get("gates", {})
+        )
+
+    def test_liveness_check_asks_the_target_repo_not_the_source(self):
+        # `active_worktree_branches` must run against the target's own root —
+        # confirmed indirectly: `feat/target` is the target's main checkout
+        # branch (always "checked out" there), so if the hook mistakenly ran
+        # `git worktree list` against the SOURCE instead, this would fail as
+        # a stale-route skip instead of recording.
+        r = self.auto("simplify", self.source)
+        self.assertIn(r.returncode, (0, 2), r.stderr.decode())
+        self.assertNotIn("stale route", r.stderr.decode())
+
+
+class CrossRepoStaleRegistryTest(unittest.TestCase):
+    """A registry entry is keyed by a path string alone; without fingerprint
+    verification, deleting the source worktree and later reusing that same
+    path for an unrelated repo — routine in CI/tmp-dir workflows — would
+    silently redirect the new, unrelated repo's skill gates into the old
+    target's store. `resolve_cross_repo_route` must treat a fingerprint
+    mismatch as no-route, not a match on path alone."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source_path = tempfile.mkdtemp()
+        git(self.source_path, "init", "-q", "-b", "main")
+        git(self.source_path, "config", "user.email", "t@t")
+        git(self.source_path, "config", "user.name", "t")
+        git(self.source_path, "commit", "-q", "--allow-empty", "-m", "init")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source_path,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_a_repo_reused_at_the_same_path_is_not_trusted(self):
+        source_root = os.path.realpath(self.source_path)
+        self.assertIsNotNone(gs.resolve_cross_repo_route(source_root))
+
+        # Simulate the worktree being torn down and an ENTIRELY UNRELATED
+        # repo later occupying the exact same path — no --unroute ever ran.
+        shutil.rmtree(os.path.join(self.source_path, ".git"))
+        git(self.source_path, "init", "-q", "-b", "main")
+        git(self.source_path, "config", "user.email", "u@u")
+        git(self.source_path, "config", "user.name", "u")
+        git(self.source_path, "commit", "-q", "--allow-empty", "-m", "unrelated")
+
+        self.assertIsNone(
+            gs.resolve_cross_repo_route(source_root, cwd=self.source_path)
+        )
+        # Self-healed: the stale entry is gone, not just ignored once.
+        self.assertIsNone(gs.resolve_cross_repo_route(source_root))
+
+    def test_a_deleted_target_is_not_trusted(self):
+        source_root = os.path.realpath(self.source_path)
+        shutil.rmtree(self.target)
+        self.assertIsNone(gs.resolve_cross_repo_route(source_root))
+
+    def tearDown(self):
+        shutil.rmtree(self.source_path, ignore_errors=True)
+
+
+class CrossRepoUnrouteTest(unittest.TestCase):
+    """--unroute must clear a cross-repo route from the TARGET's store, not
+    silently check the wrong file (sharpen#10's follow-up report) — and must
+    require no `SDLC_GATES_PATH` override to do it."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_unroute_from_the_source_clears_the_cross_repo_route(self):
+        r = run_cli(["--unroute"], self.source, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo target", r.stderr.decode())
+        self.assertNotIn(
+            os.path.realpath(self.source),
+            read_json(self.gp)["feat/target"].get("routed_from", []),
+        )
+        self.assertIsNone(gs.resolve_cross_repo_route(os.path.realpath(self.source)))
+
+    def test_a_second_unroute_reports_plainly_not_a_wrong_file_success(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        r = run_cli(["--unroute"], self.source, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("not driving another worktree's gates", r.stderr.decode())
+
+    def test_gate_no_longer_records_after_unroute(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        payload = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "simplify"},
+            "cwd": self.source,
+        }
+        run_hook(AUTO, payload, self.source, self.gp)
+        self.assertNotIn(
+            "simplify", read_json(self.gp).get("feat/target", {}).get("gates", {})
+        )
+
+    def test_status_from_the_source_side_names_the_cross_repo_target(self):
+        # Without this, `--status` run from the SOURCE of a cross-repo route
+        # reports a plain "no gate cycle" — technically true of THIS repo's
+        # own store, but silent about where this worktree's skill gates are
+        # actually landing (sharpen#10's altitude gap). Deliberately uses the
+        # SOURCE's own (empty) store path, not `self.gp` — a real `--status`
+        # run from the source resolves its own repo's store via git, which
+        # never has the target's `routed_from` entry in it; reusing `self.gp`
+        # here would let the existing same-repo route-mismatch check answer
+        # first and mask whether the NEW cross-repo check works at all.
+        source_gp = os.path.join(self.source, ".claude", "data", "gates.json")
+        r = run_cli(["--status"], self.source, source_gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo routed", r.stdout.decode())
+        self.assertIn(os.path.realpath(self.target), r.stdout.decode())
+
+    def test_status_says_nothing_once_unrouted(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        source_gp = os.path.join(self.source, ".claude", "data", "gates.json")
+        r = run_cli(["--status"], self.source, source_gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn("cross-repo routed", r.stdout.decode())
+
+
+class CrossRepoRetargetTest(unittest.TestCase):
+    """Switching a source's cross-repo route to a NEW target must clean up
+    the OLD target's own store too — otherwise it's left with a `routed_from`
+    entry that will never be cleared by anything (the registry, by design,
+    can only ever point one source at one target at a time)."""
+
+    def setUp(self):
+        self.old_target = make_repo(branch="feat/old")
+        self.new_target = make_repo(branch="feat/new")
+        self.source = make_repo(branch="main")
+        self.old_gp = os.path.join(self.old_target, ".claude", "data", "gates.json")
+        self.new_gp = os.path.join(self.new_target, ".claude", "data", "gates.json")
+
+    def test_re_routing_clears_the_stale_entry_in_the_old_target(self):
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/old",
+                "--route-from",
+                self.source,
+            ],
+            self.old_target,
+            self.old_gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn(
+            os.path.realpath(self.source),
+            read_json(self.old_gp)["feat/old"]["routed_from"],
+        )
+
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/new",
+                "--route-from",
+                self.source,
+            ],
+            self.new_target,
+            self.new_gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+        # The registry now points at the new target only...
+        entry = gs.resolve_cross_repo_route(os.path.realpath(self.source))
+        self.assertEqual(entry["target_root"], os.path.realpath(self.new_target))
+        # ...and the OLD target's store no longer claims this source drives it.
+        self.assertNotIn(
+            os.path.realpath(self.source),
+            read_json(self.old_gp)["feat/old"].get("routed_from", []),
+        )
 
 
 class StoreGuardTest(unittest.TestCase):

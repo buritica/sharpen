@@ -10,7 +10,6 @@ portable core without any host-specific hooks, skills, or lifecycle events.
 Pure stdlib. Exits 0 on success, 1 on gate failure, 2 on unrecoverable error.
 """
 
-import json
 import os
 import subprocess
 import sys

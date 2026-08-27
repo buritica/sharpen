@@ -15,7 +15,6 @@ SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
 SCRIPT = os.path.join(SCRIPTS, "generic_adapter.py")
 sys.path.insert(0, SCRIPTS)
 
-import capabilities  # noqa: E402
 import gate_store as gs  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("generic_adapter", SCRIPT)
