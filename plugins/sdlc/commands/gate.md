@@ -52,31 +52,45 @@ Fix it forward, in order:
    Use it only when re-dispatching genuinely isn't practical, and say in the
    PR description that a gate was attested rather than hook-verified, and why.
 
-### `--route-from`/`--branch` cannot target a different repository (sharpen#16)
+### Cross-repo routing (sharpen#10)
 
-Distinct from the caching case above: `--worktree`/`--route-from` were built
-for "this session's cwd and `$WT` are different worktrees of the **same**
-repo." They do not — and structurally cannot — support "this session's cwd
-is a completely unrelated repo from the one I actually need to gate" (e.g. an
-assistant session whose active project is repo A, asked to fix repo B's
-tooling in a worktree of B). `record-gate.py --init` now refuses this loudly
-at init time instead of succeeding and failing later on the first skill-gated
-gate:
+`--worktree`/`--route-from` were originally built for "this session's cwd and
+`$WT` are different worktrees of the **same** repo," where the shared store
+(one file, keyed by `git rev-parse --git-common-dir`) made cwd mostly not
+matter. A session whose home project is a completely unrelated repo — e.g. an
+assistant session rooted in repo A, asked to fix repo B's tooling in a
+worktree of B — is a real, supported case too, but it needs one more piece:
+the auto-record hook resolves ITS OWN git state (which store to open, which
+branches are checked out) from the session's own cwd, and for this topology
+that cwd is repo A, which has no idea repo B or its branches exist. Without
+anything else, the route would record in B's store at `--init` time but never
+actually fire when `/simplify`/`/grumpy:*` run later.
 
-- `--route-from <path>` is refused when `<path>` resolves to a different
-  repository (different `git rev-parse --git-common-dir`) than the one
-  `--init` is running against — because the auto-record hook resolves ITS OWN
-  git state (which branches exist, which are checked out) from the session's
-  cwd, which for a cross-repo route is still the source repo. It can never see
-  the target repo's branches or worktrees, so the route would record but never
-  fire.
+`--init --route-from <path>` closes this by **also registering the route** in
+a small, repo-independent file (`gate_store.cross_repo_registry_path()`,
+default `~/.cache/sharpen/cross-repo-routes.json`, keyed by `<path>`'s own
+canonical root) whenever `<path>` resolves to a genuinely different repository
+(a different `git rev-parse --git-common-dir`) than the one `--init` is
+running against. The auto-record hook checks this registry first, before it
+ever resolves a store from its own cwd — a hit redirects every git question
+in that invocation (which store, which branches are checked out) to the
+target repo, not the session's own. A same-repo, different-worktree route
+(the original, still-supported case) never touches this registry at all — it
+doesn't need to, since the store is already shared there.
+
+**`--route-from`/`--branch` still refuse when they can't be verified**, rather
+than guess:
+- `--route-from <path>` is refused when either side's `git rev-parse
+  --git-common-dir` is unresolvable (not a repo, broken `.git`) — that's the
+  same uncertainty a confirmed mismatch represents, not a reason to proceed.
 - `--branch <name>` is refused when `<name>` isn't a real branch (local, or a
   remote-tracking ref — a fetched-but-not-yet-checked-out branch still
-  counts) in the repo this process's cwd resolves to — the most common way to
-  reach the case above without even using `--route-from`: `--branch` names a
-  branch in some OTHER repo entirely while the command runs against whatever
-  repo the cwd happens to be, silently creating a cycle entry for a branch
-  that repo has never heard of.
+  counts) in the repo this process's cwd resolves to. This is the most common
+  way to reach a wrong-repo mistake without even using `--route-from`:
+  `--branch` names a branch in some OTHER repo entirely while the command
+  runs against whatever repo the cwd happens to be, and without this check it
+  would silently create a cycle entry for a branch that repo has never heard
+  of.
 
 **Check the exit code.** Like every other `record-gate.py` refusal, this is a
 nonzero exit with the reason on stderr, not a hook payload a caller can miss —
@@ -85,25 +99,29 @@ but nothing forces the invoking skill to look. If you're scripting `--init`
 `--record`: stop and read the message rather than proceeding to the next gate
 as if the cycle had actually started.
 
-**Why not make the hook route across repos instead of refusing?** The
-alternative would be persisting the target repo's path somewhere the
-auto-record hook could find it from a foreign cwd, and having it resolve git
-state against that instead of its own session. That trades a loud, cheap
-failure at `--init` time for a hook that has to carry and trust a
-caller-supplied path across every later skill invocation in an unrelated
-session — a bigger, more fragile surface for exactly the class of bug this
-fix exists to catch (a caller-supplied `--branch`/`--route-from` value trusted
-without verification), and it still can't repeal the structural fact that a
-hook only ever observes the git state of wherever it actually runs. Cross-repo
-gate driving is a different capability from cross-worktree routing, not a
-generalization of it — so this stays a refusal, not a workaround.
+**`--unroute` follows the registry too.** Run from the source worktree (the
+one that originally ran `--route-from`), it checks the cross-repo registry
+first — a hit clears the route from the TARGET's store (not whatever repo
+`--unroute` itself happens to run in) and drops the registry entry. This
+matters because before this, `--unroute` resolved its store the same
+cwd-only way `--init` used to: for a cross-repo route it always opened the
+CURRENT process's own store, which never had the route in it, and reported
+"this worktree was not driving another worktree's gates" — true of that file,
+misleading about the actual route. There is no `SDLC_GATES_PATH` override
+needed for this anymore.
 
-**There is no cross-repo escape hatch equivalent to `--route-from` here.** The
-fix is to run `--init` (and the skills that follow) with your cwd genuinely
-inside the target repo — dispatch a fresh subagent whose working directory is
-the target repo/worktree, the same remedy as #11's fresh-subagent path, for
-the same underlying reason: the hook can only ever see git state relative to
-wherever it actually runs.
+**Known residual gap:** a session's Bash-tool cwd and the cwd the harness
+reports on a hook payload are not guaranteed to be the same thing — a
+subagent whose shell is genuinely rooted in the target repo has, in some
+environments, still been observed reporting its parent session's cwd on the
+`Skill` tool's `PostToolUse` payload. When that happens, `cwd` (and therefore
+`source_root`, the registry lookup key) is wrong regardless of how correctly
+routing itself is configured, and no fix in this file can see past a payload
+that already reports the wrong location. If `--status` and the registry both
+show a route configured correctly and a gate still won't record, suspect this
+before re-checking the routing setup itself — re-running from a session whose
+*top-level* cwd (not just a subagent's) is genuinely inside the target repo
+is the reliable workaround.
 
 ## Prerequisites check
 

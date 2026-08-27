@@ -101,7 +101,12 @@ def build_review_report(manifest, gate_results, cwd=None):
     try:
         diff = _extract_diff(cwd)
         response = _local_llm_chat(
-            [{"role": "user", "content": REVIEW_PROMPT.format(diff=diff or "(no diff)")}],
+            [
+                {
+                    "role": "user",
+                    "content": REVIEW_PROMPT.format(diff=diff or "(no diff)"),
+                }
+            ],
             model=provider.get("model"),
         )
         findings = _parse_findings(response)
@@ -130,7 +135,9 @@ def build_review_report(manifest, gate_results, cwd=None):
     return review_report.validate_report(
         {
             "protocol_version": "1",
-            "status": "fail" if review_failed or any(f.get("severity") == "serious" for f in findings) else "pass",
+            "status": "fail"
+            if review_failed or any(f.get("severity") == "serious" for f in findings)
+            else "pass",
             "provenance": {
                 "kind": "git-range",
                 "base": ga._detect_base(cwd),
@@ -138,7 +145,9 @@ def build_review_report(manifest, gate_results, cwd=None):
             },
             "executor": {
                 "agent": provider.get("agent", "local-llm-adapter"),
-                "model": provider.get("model", os.environ.get("LOCAL_LLM_MODEL", "llama3.1")),
+                "model": provider.get(
+                    "model", os.environ.get("LOCAL_LLM_MODEL", "llama3.1")
+                ),
                 "adapter": provider.get("name", "local-llm"),
             },
             "findings": findings,

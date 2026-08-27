@@ -20,7 +20,9 @@ import gate_store as gs  # noqa: E402
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(SCRIPTS, f"{name}.py"))
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(SCRIPTS, f"{name}.py")
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -222,7 +224,11 @@ class CliTest(unittest.TestCase):
             "openai",
             ["test", "lint", "typecheck"],
         )
-        manifest["x-host-command-map"] = {"test": "true", "lint": "true", "typecheck": "true"}
+        manifest["x-host-command-map"] = {
+            "test": "true",
+            "lint": "true",
+            "typecheck": "true",
+        }
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
         data = {}
@@ -246,7 +252,11 @@ class CliTest(unittest.TestCase):
         old_url = os.environ.get("LOCAL_LLM_URL")
         os.environ["LOCAL_LLM_URL"] = "http://127.0.0.1:1/v1/chat/completions"  # dead
         manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
-        manifest["x-host-command-map"] = {"test": "true", "lint": "true", "typecheck": "true"}
+        manifest["x-host-command-map"] = {
+            "test": "true",
+            "lint": "true",
+            "typecheck": "true",
+        }
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
         data = {}
