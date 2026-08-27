@@ -140,7 +140,8 @@ If no transports are present in the diff, skip the per-transport breakdown. Inst
 - Assess metric coverage: are success outcomes counted? Would a regression in this path show up on a dashboard?
 
 You are reporting to another agent, not a human — skip prose, headers, and
-persona voice. Return two blocks, nothing else:
+persona voice. Return two required blocks (CONTEXT, FINDING) plus an
+optional third (HANDLED) if genuinely notable strengths exist, nothing else:
 
 CONTEXT lines (max 5 total, one per transport if more than one applies) —
 `transport:[Name]|API calls: [sequence/count]|UX: [good/janky, why]|Logs: [traceable? gaps?]|Metrics: [covered? gaps?]`
@@ -194,7 +195,8 @@ Imagine the following scenarios, tracing code execution step by step:
 - Is there backward compatibility or a migration path?
 
 You are reporting to another agent, not a human — skip prose, headers, and
-persona voice. Return two blocks, nothing else:
+persona voice. Return two required blocks (CONTEXT, FINDING) plus an
+optional third (HANDLED) if genuinely notable strengths exist, nothing else:
 
 CONTEXT lines (max 5 total) —
 `state-transition|API calls: [sequence]|UX: [what user sees]|Logs: [traceable?]|Metrics: [covered?]`
@@ -244,7 +246,8 @@ Imagine the following scenarios:
 - What happens if an async callback fires after the parent context is gone?
 
 You are reporting to another agent, not a human — skip prose, headers, and
-persona voice. Return two blocks, nothing else:
+persona voice. Return two required blocks (CONTEXT, FINDING) plus an
+optional third (HANDLED) if genuinely notable strengths exist, nothing else:
 
 CONTEXT lines (max 5 total) —
 `rate-limit|Throttle behavior: [drop/queue/error, why]|UX under rate limit: [silence/error/delay]`
@@ -297,7 +300,8 @@ For every code path in the diff:
 - Are errors surfaced to alerting systems or just swallowed?
 
 You are reporting to another agent, not a human — skip prose, headers, and
-persona voice. Return FINDING lines only, one per finding, nothing else:
+persona voice. Return FINDING lines (one per finding) plus an optional
+HANDLED line for genuinely notable strengths, nothing else:
 
 `SEVERITY|file:line|what is wrong and the concrete consequence|FACT|DOMAIN`
 
@@ -317,8 +321,13 @@ on a healthy area needs no line. No preamble, no markdown headers, no summary.
 Each agent returns raw CONTEXT/FINDING/HANDLED lines, not prose — the persona
 voice and human-facing formatting happen exactly once, when you render the
 Step 3 report below. **Aggregate signal over volume** — when combining agent
-outputs, deduplicate overlapping findings (same file:line + similar
-description). One well-placed ⚠️ beats the same concern repeated by two agents.
+outputs, deduplicate overlapping findings (same file:line, or line numbers
+within a few lines of each other pointing at the same construct, + similar
+description — when in doubt, prefer merging over duplicating). One
+well-placed ⚠️ beats the same concern repeated by two agents. HANDLED lines
+have no file:line to key on; dedup them by area/topic instead. When two
+agents disagree on SEVERITY/FACT/DOMAIN for what you judge to be the same
+finding, keep the higher severity and note both DOMAINs.
 
 A FINDING line's free-text field can itself legitimately contain a `|` (a
 shell pipe, a regex `a|b`, a table cell). Parse each line outside-in, not by
@@ -326,7 +335,10 @@ a flat split on `|`: take SEVERITY and file:line as the first two fields from
 the left, FACT and the last field (transport-name/DOMAIN) as the last two
 fields from the right, and treat everything remaining in the middle as the
 text — don't discard a line as malformed just because it has more than 5
-`|`-separated pieces.
+`|`-separated pieces. If an agent's entire response doesn't look like
+CONTEXT/FINDING/HANDLED lines at all (e.g. it ignored the format and
+returned prose/markdown), treat the whole response as errored per Step 3's
+missing-output handling below, rather than trying to salvage lines from it.
 
 ## Step 3: Aggregate and Deliver the Simulation Report
 

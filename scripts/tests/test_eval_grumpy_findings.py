@@ -119,10 +119,17 @@ class TestParsePipeLine(unittest.TestCase):
                 "NOTE|charge.py:30|unnecessary factory|judgment|simplify",
             ]
         )
-        findings = eval_grumpy_findings.parse_pipe_findings(raw)
+        findings, raw_line_count = eval_grumpy_findings.parse_pipe_findings(raw)
         self.assertEqual(len(findings), 2)
         self.assertEqual(findings[0]["severity"], "CRIT")
         self.assertEqual(findings[1]["severity"], "NOTE")
+        self.assertEqual(raw_line_count, 4)  # blank line excluded, others counted
+
+    def test_parse_pipe_findings_reports_raw_count_even_when_all_fail(self):
+        raw = "this is not a pipe line\nneither is this"
+        findings, raw_line_count = eval_grumpy_findings.parse_pipe_findings(raw)
+        self.assertEqual(findings, [])
+        self.assertEqual(raw_line_count, 2)
 
 
 class TestScore(unittest.TestCase):

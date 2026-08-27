@@ -11,7 +11,9 @@ Usage:
   file), one finding per line, in the exact contract review.md/imagine.md's
   agent prompts specify: SEVERITY|file:line|text|FACT|DOMAIN. Lines that
   aren't FINDING lines (CONTEXT/HANDLED, blank, malformed) are skipped, same
-  as the real aggregator is instructed to do.
+  as the real aggregator is instructed to do -- the "raw lines seen" count
+  in the output lets you tell a genuinely quiet run apart from every line
+  failing to parse (e.g. a prompt regression dropping a field).
 
 Used to compare recall (did the run still catch the planted issues?) and
 output size (a token-cost proxy) between two prompt variants on the same
@@ -67,7 +69,18 @@ def parse_pipe_line(line):
 
 
 def parse_pipe_findings(raw_text):
-    return [f for f in (parse_pipe_line(l) for l in raw_text.splitlines()) if f]
+    """Returns (parsed FINDING lines, count of non-blank raw lines seen).
+
+    The raw count matters as much as the parsed findings: CONTEXT/HANDLED
+    lines are expected to not parse as findings, so a lower parsed count
+    isn't itself a failure signal -- but if a prompt regression drops a
+    field from every FINDING line, recall would otherwise silently read as
+    "0 findings, 0% recall", indistinguishable from a genuinely quiet run
+    unless the caller can also see that N raw lines went in.
+    """
+    raw_lines = [l for l in raw_text.splitlines() if l.strip()]
+    parsed = [f for f in (parse_pipe_line(l) for l in raw_lines) if f]
+    return parsed, len(raw_lines)
 
 
 def matches(golden_finding, candidate):
@@ -116,12 +129,21 @@ def main():
     args = parser.parse_args()
 
     fmt = args.format or ("json" if args.candidate.endswith(".json") else "pipe")
-    golden = load_json(args.golden)
-    if fmt == "json":
-        candidates = load_json(args.candidate)
-    else:
-        with open(args.candidate, encoding="utf-8") as f:
-            candidates = parse_pipe_findings(f.read())
+    try:
+        golden = load_json(args.golden)
+        if fmt == "json":
+            candidates = load_json(args.candidate)
+            raw_line_count = None
+        else:
+            with open(args.candidate, encoding="utf-8") as f:
+                candidates, raw_line_count = parse_pipe_findings(f.read())
+    except FileNotFoundError as e:
+        print(f"error: {e.filename} not found", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"error: {args.candidate if fmt == 'json' else args.golden} is not valid JSON: {e}", file=sys.stderr)
+        return 1
+
     result = score(golden, candidates)
 
     label = args.label or os.path.basename(args.candidate)
@@ -132,8 +154,10 @@ def main():
     if result["misses"]:
         print(f"missed:            {', '.join(result['misses'])}")
     print(f"candidate findings: {result['candidate_count']}")
+    if raw_line_count is not None:
+        print(f"raw lines seen:    {raw_line_count} (non-blank lines in the pipe-format input)")
     print(f"signal ratio:      {result['signal_ratio']:.0%} (matched a planted issue / total findings)")
-    print(f"output size:       {output_chars} bytes (candidate JSON)")
+    print(f"output size:       {output_chars} bytes ({fmt} format)")
 
     return 0
 
