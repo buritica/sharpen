@@ -13,7 +13,10 @@ Usage:
   record-gate.py --unroute              # stop driving another worktree's gates
   record-gate.py --branch <name>        # override auto-detected branch
   record-gate.py --route-from <path>    # with --init: route <path>'s skill
-                                        # gates to --branch (cross-worktree)
+                                        # gates to --branch (cross-worktree,
+                                        # same repo only — see gate.md's
+                                        # "cannot target a different
+                                        # repository" section, sharpen#16)
   record-gate.py --profile <name>       # with --init: record an explicit
                                         # portable profile
   record-gate.py --capabilities-file <path>
@@ -32,6 +35,7 @@ Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
              existing .claude/data/gates.json remains active until .sharpen exists)
 """
 
+import os
 import sys
 
 import capabilities
@@ -81,6 +85,62 @@ def _resolve_routing(branch, route_from):
         source = gs.canonical_worktree_root(route_from)
         if not source:
             raise ValueError(f'--route-from "{route_from}" is not inside a git repo')
+        # target_common re-spawns `git rev-parse --git-common-dir` for cwd=None
+        # even though `default_store_path()` (called once in main(), before
+        # this function) already ran that exact command for the exact same
+        # cwd. Not threaded through: doing so would mean widening
+        # default_store_path's signature (or duplicating its env-var/fallback
+        # logic here) to save one `git` subprocess on a CLI path a human runs
+        # at most a few times per branch — not worth the surface area.
+        target_common = gs.git_common_dir()
+        source_common = gs.git_common_dir(route_from)
+        # Fail CLOSED, not just on a confirmed mismatch: if either side's
+        # `git rev-parse --git-common-dir` comes back None (this process's
+        # own cwd isn't a resolvable repo — reachable exactly when --branch
+        # overrode a nonexistent-here branch and left cwd unverified, or a
+        # broken/partial repo at route_from), that's the SAME uncertainty
+        # this check exists to close, not a reason to wave the route through.
+        # An earlier version compared with `target_common and source_common
+        # and target_common != source_common`, which treated "couldn't tell"
+        # as "must be fine" and silently accepted the exact class of route
+        # sharpen#16 reported — the least reliable environments were the ones
+        # that bypassed the new protection.
+        if (
+            target_common is None
+            or source_common is None
+            or target_common != source_common
+        ):
+            # Genuinely different repositories, not just a different worktree
+            # of this one (same-repo worktrees share git_common_dir even
+            # though canonical_worktree_root differs per worktree). The
+            # auto-record hook resolves ITS OWN git state from whatever cwd
+            # the harness reports for the session, which for a route like
+            # this is the SOURCE repo — so it can never see this (target)
+            # repo's worktrees or branches, and the route would silently fail
+            # on the first skill-gated gate instead of here (sharpen#16).
+            detail = (
+                "this repo's own git state could not be resolved"
+                if target_common is None
+                else (
+                    f'"{route_from}"\'s git state could not be resolved'
+                    if source_common is None
+                    else f'"{route_from}" is a different repository from this one'
+                )
+            )
+            raise ValueError(
+                f"--route-from refused: {detail} — cross-repo routing isn't "
+                "supported and this can't be verified as the same repo. The "
+                "auto-record hook checks git state relative to the session's "
+                "own cwd, which would still be --route-from's repo, so an "
+                "unverifiable route would record here but never actually "
+                "fire.\n\n"
+                "The skills that need to record gates (/simplify, "
+                f"/grumpy:*) must run with their cwd inside THIS repo ({os.getcwd()}) "
+                "— the one this --init is running in — not --route-from's. If "
+                "that's a different repo from wherever your current session "
+                "is, dispatch a fresh subagent whose working directory is "
+                "this one instead."
+            )
         if gs.detect_branch(route_from) == branch:
             # Routing a worktree to the branch it already has checked out is a
             # no-op that would only go stale on the next branch switch.
@@ -208,6 +268,32 @@ def main(argv):
                     "it does not change recorded gates"
                 )
         elif command == "--init":
+            if branch_override and not gs.branch_exists(branch):
+                # `--branch` lets a caller init a cycle for a branch it isn't
+                # currently on — the documented cross-worktree pattern — but
+                # nothing else here ever confirms the name is real in the
+                # repo this process's cwd resolves to. Skipped when there's
+                # no override: a detected branch is trivially real, you're
+                # standing on it. The likeliest way to hit this is running
+                # `--branch <name>` from a session whose cwd is a repo that's
+                # never heard of that branch — e.g. the wrong repo entirely
+                # (sharpen#16) — which would otherwise create a phantom cycle
+                # entry here that nothing downstream can ever complete.
+                #
+                # `--branch ""` is `branch_override` too, but an empty string
+                # is falsy, so it skips this guard and `branch` below falls
+                # back to `gs.detect_branch()` instead — the current branch,
+                # not a nonexistent one. That degrades to the SAFE behavior
+                # (acting on the real current branch, same as no override at
+                # all), not the failure mode this guard exists for, so it's
+                # deliberately left alone rather than special-cased.
+                raise ValueError(
+                    f'--branch "{branch}" does not exist in this repo. If '
+                    "you're targeting a different repository, `--branch` "
+                    "doesn't change which repo's git state this command "
+                    "inspects — run it with your cwd inside the target repo "
+                    "instead."
+                )
             tier = rest[1] if len(rest) > 1 else None
             profile = None
             capability_snapshot = None
