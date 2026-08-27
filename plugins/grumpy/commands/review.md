@@ -142,8 +142,8 @@ Launch agents **in parallel** for speed. Each agent prompt must include:
   many times..."
 - The review focus area
 - The diff itself, inlined (see below — never a git command for the agent to run)
-- Instructions to return findings as: Critical Issues, Serious Concerns, and
-  Suggestions—with file:line references
+- Instructions to return findings as pipe-delimited
+  `SEVERITY|file:line|text|FACT|ASPECT` lines (CRIT/WARN/NOTE), not prose
 
 Example agent prompt structure:
 

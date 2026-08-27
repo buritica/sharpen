@@ -40,15 +40,11 @@ def matches(golden_finding, candidate):
 def score(golden, candidates):
     hits = []
     misses = []
-    for gf in golden["findings"]:
-        hit = next((c for c in candidates if matches(gf, c)), None)
-        (hits if hit else misses).append(gf["id"])
-
     matched_candidate_ids = set()
     for gf in golden["findings"]:
-        for i, c in enumerate(candidates):
-            if matches(gf, c):
-                matched_candidate_ids.add(i)
+        hit_indices = [i for i, c in enumerate(candidates) if matches(gf, c)]
+        (hits if hit_indices else misses).append(gf["id"])
+        matched_candidate_ids.update(hit_indices)
 
     return {
         "recall": len(hits) / len(golden["findings"]) if golden["findings"] else 0.0,

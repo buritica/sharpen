@@ -1,6 +1,6 @@
 {
   "diff": "sample.diff",
-  "description": "Synthetic diff with 6 planted issues spanning code/errors/tests/comments/simplify aspects, used to compare grumpy review output quality before/after the compact-findings format change.",
+  "description": "Synthetic diff with 7 planted issues spanning code/errors/tests/comments/simplify aspects, used to compare grumpy review output quality before/after the compact-findings format change.",
   "findings": [
     {
       "id": "swallowed-exception",
