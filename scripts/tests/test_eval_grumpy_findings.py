@@ -7,7 +7,6 @@ inputs, not a live grumpy/LLM run.
 
 import importlib.util
 import os
-import sys
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,7 +87,9 @@ class TestParsePipeLine(unittest.TestCase):
         )
 
     def test_preserves_a_pipe_character_inside_the_text_field(self):
-        line = "WARN|charge.py:10|retries with a a|b regex, never bounded|judgment|errors"
+        line = (
+            "WARN|charge.py:10|retries with a a|b regex, never bounded|judgment|errors"
+        )
         result = eval_grumpy_findings.parse_pipe_line(line)
         self.assertEqual(result["text"], "retries with a a|b regex, never bounded")
         self.assertEqual(result["fact"], "judgment")
@@ -101,7 +102,9 @@ class TestParsePipeLine(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            eval_grumpy_findings.parse_pipe_line("HANDLED|cleanup|always releases locks")
+            eval_grumpy_findings.parse_pipe_line(
+                "HANDLED|cleanup|always releases locks"
+            )
         )
 
     def test_rejects_blank_and_malformed_lines(self):
@@ -165,7 +168,9 @@ class TestScore(unittest.TestCase):
         self.assertEqual(result["signal_ratio"], 0.0)
 
     def test_empty_golden_no_crash(self):
-        result = eval_grumpy_findings.score({"findings": []}, [{"file": "x.py", "text": "y"}])
+        result = eval_grumpy_findings.score(
+            {"findings": []}, [{"file": "x.py", "text": "y"}]
+        )
         self.assertEqual(result["recall"], 0.0)
         self.assertEqual(result["misses"], [])
 

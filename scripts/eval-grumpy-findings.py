@@ -78,8 +78,8 @@ def parse_pipe_findings(raw_text):
     "0 findings, 0% recall", indistinguishable from a genuinely quiet run
     unless the caller can also see that N raw lines went in.
     """
-    raw_lines = [l for l in raw_text.splitlines() if l.strip()]
-    parsed = [f for f in (parse_pipe_line(l) for l in raw_lines) if f]
+    raw_lines = [line for line in raw_text.splitlines() if line.strip()]
+    parsed = [f for f in (parse_pipe_line(line) for line in raw_lines) if f]
     return parsed, len(raw_lines)
 
 
@@ -116,7 +116,8 @@ def score(golden, candidates):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "candidate", help="path to a JSON findings list, or raw pipe-format agent output"
+        "candidate",
+        help="path to a JSON findings list, or raw pipe-format agent output",
     )
     parser.add_argument("--golden", default=DEFAULT_GOLDEN)
     parser.add_argument("--label", default=None)
@@ -141,7 +142,10 @@ def main():
         print(f"error: {e.filename} not found", file=sys.stderr)
         return 1
     except json.JSONDecodeError as e:
-        print(f"error: {args.candidate if fmt == 'json' else args.golden} is not valid JSON: {e}", file=sys.stderr)
+        print(
+            f"error: {args.candidate if fmt == 'json' else args.golden} is not valid JSON: {e}",
+            file=sys.stderr,
+        )
         return 1
 
     result = score(golden, candidates)
@@ -150,13 +154,19 @@ def main():
     output_chars = os.path.getsize(args.candidate)
 
     print(f"=== {label} ===")
-    print(f"recall:            {result['recall']:.0%} ({len(result['hits'])}/{len(golden['findings'])})")
+    print(
+        f"recall:            {result['recall']:.0%} ({len(result['hits'])}/{len(golden['findings'])})"
+    )
     if result["misses"]:
         print(f"missed:            {', '.join(result['misses'])}")
     print(f"candidate findings: {result['candidate_count']}")
     if raw_line_count is not None:
-        print(f"raw lines seen:    {raw_line_count} (non-blank lines in the pipe-format input)")
-    print(f"signal ratio:      {result['signal_ratio']:.0%} (matched a planted issue / total findings)")
+        print(
+            f"raw lines seen:    {raw_line_count} (non-blank lines in the pipe-format input)"
+        )
+    print(
+        f"signal ratio:      {result['signal_ratio']:.0%} (matched a planted issue / total findings)"
+    )
     print(f"output size:       {output_chars} bytes ({fmt} format)")
 
     return 0
