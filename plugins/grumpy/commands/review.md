@@ -142,8 +142,8 @@ Launch agents **in parallel** for speed. Each agent prompt must include:
   many times..."
 - The review focus area
 - The diff itself, inlined (see below — never a git command for the agent to run)
-- Instructions to return findings as: Critical Issues, Serious Concerns, and
-  Suggestions—with file:line references
+- Instructions to return findings as pipe-delimited
+  `SEVERITY|file:line|text|FACT|ASPECT` lines (CRIT/WARN/NOTE), not prose
 
 Example agent prompt structure:
 
@@ -158,17 +158,31 @@ Review these changes focusing on [ASPECT] (base: [DIFF_BASE]):
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
-Return your findings as:
-## Critical Issues 🚨 (production will break)
-## Serious Concerns ⚠️ (will cause problems eventually)
-## Suggestions 💡 (things that make you raise an eyebrow)
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice in your findings. Return ONE line per finding, nothing else,
+in this exact pipe-delimited format:
 
-Each finding must state: what is wrong, where (file:line), and the concrete consequence if left unfixed — not a principle, a thing that breaks or hurts. Label facts vs judgments: e.g. "swallows the error — client.ts:142 [fact]" vs "this abstraction feels wrong [judgment]". Prefer ~15 high-confidence findings over 50 speculative ones; a healthy area gets one sentence, don't invent problems.
+SEVERITY|file:line|what is wrong and the concrete consequence if left unfixed|FACT|ASPECT
+
+- SEVERITY is one of CRIT (production will break), WARN (will cause problems
+  eventually), NOTE (things that make you raise an eyebrow).
+- FACT is `fact` (objectively true — "swallows the error") or `judgment`
+  (your call — "this abstraction feels wrong").
+- ASPECT is the review focus you were given (e.g. `errors`, `tests`).
+
+Example:
+CRIT|client.ts:142|swallows the network error, retry never fires|fact|errors
+NOTE|client.ts:88|this abstraction feels wrong for a single call site|judgment|simplify
+
+Prefer ~15 high-confidence lines over 50 speculative ones. If an area is
+healthy, do not emit a line for it — silence means "nothing found," you do
+not need a line saying so. Do not invent problems. No other output — no
+preamble, no summary, no markdown headers.
 ```
 
 ## Audit discipline
 
-When aggregating the final report: assign the correct severity tier (🚨/⚠️/🤔) to every finding, dedup overlapping findings from different agents, and drop any finding missing a `file:line` or a stated concrete consequence. Signal over volume — a healthy area gets one sentence.
+Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. A line's free-text field can itself legitimately contain a `|` (a shell pipe, a regex `a|b`), so parse outside-in — SEVERITY and file:line as the first two fields from the left, FACT and ASPECT as the last two from the right, everything remaining in the middle is the text — rather than a flat split that would shift fields on an embedded pipe. If an agent's entire response doesn't look like pipe lines at all (e.g. it ignored the format and returned prose/markdown despite instructions), treat the whole response as errored rather than trying to salvage individual lines from it, and note in the report that agent's section needed manual review — don't silently drop it. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line, or line numbers within a few lines of each other pointing at the same construct, + similar description — when in doubt, prefer merging over duplicating), and drop any individual line missing a `file:line` or that still doesn't resolve to all 5 fields after outside-in parsing. When two agents disagree on SEVERITY/FACT/ASPECT for what you judge to be the same finding, keep the higher severity and list both ASPECT tags. Signal over volume — a healthy area gets one sentence, or none.
 
 ## Step 4: Aggregate and Deliver the Verdict
 
