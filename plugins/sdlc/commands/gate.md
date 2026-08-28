@@ -213,6 +213,41 @@ separate gate — they inform whether `tests` should be recorded at all.
 `/sdlc:test-flake` is for a suite that passes inconsistently; run it when a gate-1
 failure doesn't reproduce.
 
+### A gate fails for reasons unrelated to your diff (sharpen#4)
+
+Tests, lint, or typecheck can fail because of breakage that predates your branch —
+a dependency bump, upstream drift, a flaky suite someone else's change exposed.
+When that happens you genuinely cannot record the gate (it isn't passing), which
+blocks `gh pr create` — not because of anything in your diff, but because
+`enforce-sdlc-gates.py` can't tell "this predates me" from "my change broke it."
+**There is deliberately no flag to skip this check** — see
+`enforce-sdlc-gates.py`'s own `# Deliberately no escape hatch here` comment, which
+already removed one waiver (a gitignore-based exemption) for firing silently on
+exactly this kind of ambiguity. A gate that can be talked past isn't a gate.
+
+The fix is always to make the gate genuinely pass, not to skip checking it:
+
+1. **Confirm it's actually unrelated before assuming so.** `git stash` (or check
+   out a clean `origin/main`) and re-run the failing gate. If it fails there too,
+   it predates your branch. If it passes clean, your diff is the cause — go fix
+   that instead, this playbook doesn't apply.
+2. **Trivial/mechanical fix** (an unused import, a formatting nit, a one-line
+   dependency pin): bundle it into your own PR and say so explicitly in the PR
+   body — name what was broken, and that you confirmed it via step 1. This is
+   already established practice in this repo's own history (sharpen#16, #10) —
+   both bundled a confirmed-unrelated lint fix from a just-merged PR rather than
+   shipping a separate follow-up for something that small.
+3. **Non-trivial fix** (a real logic bug, a dependency needing an actual upgrade,
+   an infra issue): don't scope-creep your feature branch. Cut a separate,
+   minimal hotfix branch off `main` first — `tiny` or `small-medium` tier as the
+   fix warrants — ship it alone, then rebase your feature branch onto the
+   now-green `main` and continue. The hotfix earns its own gates the normal way;
+   it is not an exemption, just the fix landing first.
+4. **The same problem shows up one level up, at `ci-pass` on GitHub**, if `main`
+   moves between your local gate-1 run and the PR's actual CI run — your local
+   success doesn't substitute for what CI reports. Rebase and let CI re-validate
+   rather than trusting a local pass that's gone stale.
+
 For **Tiny** (≤3 lines, no executable code): gates 1, 7, 8 only.
 
 For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only origin/main...HEAD`: only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
