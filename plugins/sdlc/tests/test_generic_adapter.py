@@ -213,12 +213,12 @@ class CliTest(unittest.TestCase):
             json.dump(data, f)
         r = self.run_cli(path)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("1 gate(s) failed", r.stderr.decode())
+        self.assertIn("1 gate(s) or review failed", r.stderr.decode())
         with open(self.store_path) as f:
             store = json.load(f)
         self.assertEqual(store["feat/x"]["review_report"]["status"], "fail")
 
-    def test_no_cycle_still_runs_but_warns(self):
+    def test_no_cycle_fails_when_report_cannot_attach(self):
         manifest = make_manifest(
             ["test", "lint", "typecheck"],
             {"test": "true", "lint": "true", "typecheck": "true"},
@@ -226,7 +226,7 @@ class CliTest(unittest.TestCase):
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
         r = self.run_cli(path)
-        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 2)
         self.assertIn("could not attach review report", r.stderr.decode())
 
 

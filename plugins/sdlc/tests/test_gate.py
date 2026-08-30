@@ -2711,19 +2711,26 @@ class PortableStateRootTest(unittest.TestCase):
             os.path.realpath(os.path.join(repo, ".sharpen", "data", "gates.json")),
         )
 
-    def test_legacy_claude_data_store_remains_active_until_neutral_exists(self):
+    def test_legacy_fallback_is_per_file(self):
         repo = make_repo(branch="feat/a")
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
         legacy_dir = os.path.join(repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy = os.path.join(legacy_dir, "gates.json")
+        neutral = os.path.join(repo, ".sharpen", "data", "gates.json")
+
+        # A legacy directory created for unrelated state must not redirect a
+        # new gates file away from the neutral location.
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(neutral))
+
+        with open(legacy, "w", encoding="utf-8") as f:
+            json.dump({}, f)
         self.assertEqual(gs.default_store_path(repo), os.path.realpath(legacy))
-        neutral_dir = os.path.join(repo, ".sharpen", "data")
-        os.makedirs(neutral_dir)
-        self.assertEqual(
-            gs.default_store_path(repo),
-            os.path.realpath(os.path.join(neutral_dir, "gates.json")),
-        )
+
+        os.makedirs(os.path.dirname(neutral), exist_ok=True)
+        with open(neutral, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(neutral))
 
 
 class StoreHousekeepingTest(unittest.TestCase):

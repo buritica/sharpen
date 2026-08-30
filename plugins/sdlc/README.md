@@ -89,6 +89,25 @@ Docs-only changes (no executable files, any size): test + lint + typecheck, all 
 
 `/sdlc:gate` records gate state to one JSON file **shared across every worktree of the repo**, keyed by branch: `<main-checkout>/.sharpen/data/gates.json` (override with `$SDLC_GATES_PATH`). The path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree and any cwd inside the repo reads and writes the same file. Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. A cycle recorded in one worktree is therefore visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key — no `$SDLC_*` pinning footgun.
 
+### Portable adapters
+
+Non-Claude hosts can use the same gate evidence with a v1 capability manifest. The manifest declares a non-empty subset of `plan`, `review`, `imagine`, `fix`, `test`, `lint`, `typecheck`, and `ship`; the adapter resolves the highest supported profile (`baseline`, `review`, or `adversarial`). Supply `x-host-command-map` for any capability whose command is host-specific:
+
+```json
+{
+  "protocol_version": "1",
+  "provider": {"name": "my-agent", "agent": "my-agent", "model": "model-id"},
+  "capabilities": ["test", "lint", "typecheck"],
+  "x-host-command-map": {
+    "test": "python3 -m unittest",
+    "lint": "ruff check .",
+    "typecheck": "mypy ."
+  }
+}
+```
+
+On a named feature branch with an initialized gate cycle, run `python3 plugins/sdlc/scripts/generic_adapter.py capabilities.json`. It executes the selected profile's commands and attaches a validated, synthetic review report to the gate store. `local_llm_adapter.py` uses the same manifest and gates, then delegates a diff review to an OpenAI-compatible local endpoint; set `LOCAL_LLM_URL` and optionally `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`. For this adapter, declared `review` is fulfilled by the delegated LLM rather than an `x-host-command-map.review` command. A failed gate, invalid or failed delegated review, or inability to attach the report exits non-zero; attaching a report never marks a gate complete.
+
 The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
 
 - `gate_store.py` — the store plus the rules. `record_gate()` refuses a skill-gated gate unless the caller passes `authorized=True`, so the rule holds for every caller that goes through it: the CLI, the hooks, an inline `python3 -c` that imports the module. A direct write to `gates.json` still bypasses it — the guard is against an agent talking itself past its own process gate, not against an adversary.

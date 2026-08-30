@@ -266,7 +266,9 @@ class CliTest(unittest.TestCase):
             json.dump(data, f)
         try:
             r = self.run_cli("local_llm_adapter.py", path)
-            self.assertEqual(r.returncode, 0, r.stderr.decode())
+            # A delegated-review failure is attached for evidence but must fail
+            # the adapter rather than reporting a false successful gate run.
+            self.assertEqual(r.returncode, 1, r.stderr.decode())
             with open(self.store_path) as f:
                 store = json.load(f)
             self.assertEqual(store["feat/x"]["review_report"]["status"], "fail")

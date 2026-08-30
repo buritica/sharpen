@@ -22,9 +22,11 @@ import review_report
 # Default commands for capabilities that have no host-specific mapping. These
 # are the portable baseline: any POSIX environment with Python can run them.
 DEFAULT_COMMANDS = {
-    "test": "python3 -m unittest discover -s tests -p 'test_*.py'",
-    "lint": "python3 -m py_compile",
-    "typecheck": "python3 -c 'import ast; ast.parse(open(__file__).read())'",
+    "test": "test ! -d tests || python3 -m unittest discover -s tests -p 'test_*.py'",
+    # `py_compile` requires explicit file names and `__file__` is not defined
+    # under `python -c`; compileall is a safe, useful portable syntax check.
+    "lint": "python3 -m compileall -q .",
+    "typecheck": "python3 -m compileall -q .",
 }
 
 
@@ -94,15 +96,20 @@ def _detect_head(cwd=None):
         return "HEAD"
 
 
-def run_gates(manifest, profile, cwd=None):
-    """Execute the commands for a resolved profile and return results.
+def run_gates(manifest, profile, cwd=None, skip_capabilities=()):
+    """Execute mapped commands for a resolved profile and return results.
 
-    Returns a list of dicts: capability, command, exit_code, duration_s,
-    stdout, stderr. A gate fails if its command exits non-zero.
+    `skip_capabilities` is for an adapter that implements a profile capability
+    directly rather than through a shell command (for example, local review).
+    Returns dicts with capability, command, exit_code, duration_s, stdout, and
+    stderr. A gate fails if its command exits non-zero.
     """
     commands = _resolve_commands(manifest)
+    skipped = set(skip_capabilities)
     results = []
     for cap in capabilities.PROFILE_REQUIREMENTS[profile]:
+        if cap in skipped:
+            continue
         cmd = commands.get(cap)
         if cmd is None:
             results.append(
@@ -208,11 +215,12 @@ def main(argv):
     try:
         gs.update_store(path, lambda d: review_report.attach_report(d, branch, report))
         _log(f"[generic-adapter] attached review report for {branch}")
-    except ValueError as e:
-        _log(f"[generic-adapter] warning: could not attach review report: {e}")
+    except (ValueError, OSError, gs.StoreCorruptError) as e:
+        _log(f"[generic-adapter] error: could not attach review report: {e}")
+        return 2
 
-    if failures:
-        _log(f"[generic-adapter] {len(failures)} gate(s) failed")
+    if failures or report["status"] != "pass":
+        _log(f"[generic-adapter] {len(failures)} gate(s) or review failed")
         return 1
     _log("[generic-adapter] all gates passed")
     return 0

@@ -37,6 +37,7 @@ def _local_llm_chat(messages, model=None):
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.1,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
     ).encode()
     req = urllib.request.Request(url, data=body, headers=headers)
@@ -65,7 +66,7 @@ def _generic_build_review_report(manifest, gate_results, cwd=None):
 
 REVIEW_PROMPT = """You are a code reviewer. Review this diff and return a JSON array of findings.
 
-Each finding: {{"severity": "nit"|"suggestion"|"serious", "summary": "...", "location": "file:line or file", "consequence": "why it matters"}}.
+Each finding: {{"severity": "suggestion"|"serious"|"critical", "summary": "...", "location": "file:line or file", "consequence": "why it matters"}}.
 
 Return [] if the diff is clean. Return only the JSON array, no other text.
 
@@ -87,7 +88,7 @@ def _parse_findings(response):
                             return parsed
                     except (json.JSONDecodeError, ValueError):
                         pass
-    return []
+    return None
 
 
 def build_review_report(manifest, gate_results, cwd=None):
@@ -110,14 +111,20 @@ def build_review_report(manifest, gate_results, cwd=None):
             model=provider.get("model"),
         )
         findings = _parse_findings(response)
-        valid = {"nit", "suggestion", "serious"}
+        if findings is None:
+            raise ValueError("local LLM response did not contain a JSON findings array")
         normalized = []
-        for f in findings:
-            if not isinstance(f, dict):
-                continue
-            if f.get("severity") not in valid:
-                f["severity"] = "suggestion"
-            normalized.append(f)
+        for index, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                raise ValueError(f"finding {index} is not an object")
+            if finding.get("severity") not in review_report.SEVERITIES:
+                raise ValueError(f"finding {index} has an invalid severity")
+            if not all(
+                isinstance(finding.get(key), str) and finding[key].strip()
+                for key in review_report.FINDING_TEXT_FIELDS
+            ):
+                raise ValueError(f"finding {index} is missing a required text field")
+            normalized.append(dict(finding))
         findings = normalized
     except Exception as e:
         findings = [
@@ -129,15 +136,16 @@ def build_review_report(manifest, gate_results, cwd=None):
             }
         ]
 
-    import review_report
-
     review_failed = any(f.get("summary") == "delegated review failed" for f in findings)
     return review_report.validate_report(
         {
             "protocol_version": "1",
-            "status": "fail"
-            if review_failed or any(f.get("severity") == "serious" for f in findings)
-            else "pass",
+            "status": (
+                "fail"
+                if review_failed
+                or any(f.get("severity") in {"serious", "critical"} for f in findings)
+                else "pass"
+            ),
             "provenance": {
                 "kind": "git-range",
                 "base": ga._detect_base(cwd),
@@ -180,7 +188,9 @@ def main(argv):
         ga._log("[local-llm-adapter] error: not on a named branch")
         return 2
 
-    results = ga.run_gates(manifest, profile)
+    # Review is fulfilled by build_review_report's delegated LLM call, not a
+    # command-map entry. The other selected profile capabilities remain gates.
+    results = ga.run_gates(manifest, profile, skip_capabilities={"review"})
     failures = [r for r in results if r["exit_code"] != 0]
 
     for r in results:
@@ -193,11 +203,12 @@ def main(argv):
     try:
         gs.update_store(path, lambda d: review_report.attach_report(d, branch, report))
         ga._log(f"[local-llm-adapter] attached review report for {branch}")
-    except ValueError as e:
-        ga._log(f"[local-llm-adapter] warning: could not attach review report: {e}")
+    except (ValueError, OSError, gs.StoreCorruptError) as e:
+        ga._log(f"[local-llm-adapter] error: could not attach review report: {e}")
+        return 2
 
-    if failures:
-        ga._log(f"[local-llm-adapter] {len(failures)} gate(s) failed")
+    if failures or report["status"] != "pass":
+        ga._log(f"[local-llm-adapter] {len(failures)} gate(s) or review failed")
         return 1
     ga._log("[local-llm-adapter] all gates passed")
     return 0

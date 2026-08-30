@@ -256,32 +256,40 @@ def repo_identity(cwd=None):
 
 
 def state_data_root(cwd=None):
-    """Return the shared data root, preferring neutral `.sharpen/data`.
+    """Return the shared neutral `.sharpen/data` root.
 
-    Existing installs may only have `.claude/data`; keep reading that location
-    when it already exists so upgrading does not make active cycles or
-    capability manifests disappear. New state is written to `.sharpen/data`.
+    `state_file_path` retains an existing legacy file on a per-file basis. The
+    root helper deliberately has no migration policy so new portable state files
+    do not inherit a `.claude` dependency merely because that directory exists.
     """
     common = git_common_dir(cwd)
     if common:
-        # dirname(common .git dir) == the main checkout root, identical for every
-        # linked worktree → one shared, branch-keyed state root.
+        # common is <main>/.git for both a main checkout and linked worktree.
         root = os.path.dirname(common)
     else:
         root = os.path.realpath(cwd or os.getcwd())
-    legacy = os.path.join(root, ".claude", "data")
-    neutral = os.path.join(root, ".sharpen", "data")
-    if os.path.exists(neutral) or not os.path.exists(legacy):
-        return neutral
-    return legacy
+    return os.path.join(root, ".sharpen", "data")
 
 
 def state_file_path(filename, env_var, cwd=None):
-    """Resolve a portable state file with an explicit env override first."""
+    """Resolve state with an explicit override and per-file legacy fallback.
+
+    Prefer an already-existing neutral file. Otherwise retain an existing legacy
+    file so creating unrelated neutral state cannot hide an active gate cycle.
+    A missing file resolves to the neutral location for new writes.
+    """
     env = os.environ.get(env_var)
     if env:
         return env
-    return os.path.join(state_data_root(cwd), filename)
+    neutral_root = state_data_root(cwd)
+    neutral = os.path.join(neutral_root, filename)
+    if os.path.exists(neutral):
+        return neutral
+    root = os.path.dirname(os.path.dirname(neutral_root))
+    legacy = os.path.join(root, ".claude", "data", filename)
+    if os.path.exists(legacy):
+        return legacy
+    return neutral
 
 
 def default_store_path(cwd=None):
