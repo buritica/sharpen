@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharpen.dev/schemas/review-report.v1.schema.json",
+  "title": "Sharpen review report v1",
+  "description": "A host-neutral review artifact with change provenance and actionable findings.",
+  "type": "object",
+  "required": ["protocol_version", "status", "provenance", "findings"],
+  "properties": {
+    "protocol_version": {"const": "1"},
+    "status": {"enum": ["pass", "fail", "inconclusive"]},
+    "provenance": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["git-range", "legacy"]},
+        "base": {"type": "string", "minLength": 1},
+        "head": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "git-range"}}},
+          "then": {"required": ["base", "head"]}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "executor": {
+      "type": "object",
+      "properties": {
+        "agent": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "adapter": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "summary", "location", "consequence"],
+        "properties": {
+          "severity": {"enum": ["critical", "serious", "suggestion"]},
+          "summary": {"type": "string", "minLength": 1},
+          "location": {"type": "string", "minLength": 1},
+          "consequence": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

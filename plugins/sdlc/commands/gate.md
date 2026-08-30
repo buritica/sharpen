@@ -22,6 +22,107 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --unroute
 
 Run `--unroute` when you finish gating `$WT` and keep working in this session — otherwise a later `/grumpy:review` here still records against `$WT`'s branch. `--status` prints `Driven from: <path>` whenever a route is active; check it if a gate lands somewhere unexpected. A worktree drives at most one branch, but two sessions may drive the same target and both record there.
 
+### A skill-gated gate that won't stamp in a long session
+
+If `/simplify` or a `/grumpy:*` skill genuinely ran — real findings, real
+artifacts written — but its gate never landed in `--status`, suspect Skill-tool
+instruction caching before assuming the hook is broken: re-invoking a skill
+already loaded earlier in a long session can make the Skill tool return
+"already loaded above, instructions unchanged" instead of dispatching fresh.
+Reported behavior (sharpen#11) is that `auto-record-skill-gate.py`'s
+PostToolUse hook does not fire for that cached response, since it only fires
+on a genuine dispatch — but this hasn't been pinned down as fully reliable
+across sessions, so a stamp that lands anyway on a re-invocation isn't a sign
+the hook is misbehaving.
+
+Fix it forward, in order:
+
+1. **Re-run the skill from a fresh subagent.** A clean context has no cached
+   instructions to short-circuit, so the Skill tool dispatches for real and
+   the hook fires normally. If that subagent isn't the worktree driving the
+   branch's cycle, route it first (`--route-from`, as above) so its stamp
+   lands on the right branch.
+2. **Last resort:** `record-gate.py --attest <gate> --reason "<text>"`.
+   This stamps the gate on human attestation instead of a hook observation —
+   it requires a reason and marks itself in `--status`/`--oneline` with `⚠`
+   rather than `✓`, so a reader can tell it apart from a hook-verified stamp.
+   That distinction is for the reader, not the enforcer: `gh pr create`
+   unblocks on an attested gate exactly as it would on a hook-verified one —
+   `enforce-sdlc-gates.py` only checks whether the gate is stamped, not how.
+   Use it only when re-dispatching genuinely isn't practical, and say in the
+   PR description that a gate was attested rather than hook-verified, and why.
+
+### Cross-repo routing (sharpen#10)
+
+`--worktree`/`--route-from` were originally built for "this session's cwd and
+`$WT` are different worktrees of the **same** repo," where the shared store
+(one file, keyed by `git rev-parse --git-common-dir`) made cwd mostly not
+matter. A session whose home project is a completely unrelated repo — e.g. an
+assistant session rooted in repo A, asked to fix repo B's tooling in a
+worktree of B — is a real, supported case too, but it needs one more piece:
+the auto-record hook resolves ITS OWN git state (which store to open, which
+branches are checked out) from the session's own cwd, and for this topology
+that cwd is repo A, which has no idea repo B or its branches exist. Without
+anything else, the route would record in B's store at `--init` time but never
+actually fire when `/simplify`/`/grumpy:*` run later.
+
+`--init --route-from <path>` closes this by **also registering the route** in
+a small, repo-independent file (`gate_store.cross_repo_registry_path()`,
+default `~/.cache/sharpen/cross-repo-routes.json`, keyed by `<path>`'s own
+canonical root) whenever `<path>` resolves to a genuinely different repository
+(a different `git rev-parse --git-common-dir`) than the one `--init` is
+running against. The auto-record hook checks this registry first, before it
+ever resolves a store from its own cwd — a hit redirects every git question
+in that invocation (which store, which branches are checked out) to the
+target repo, not the session's own. A same-repo, different-worktree route
+(the original, still-supported case) never touches this registry at all — it
+doesn't need to, since the store is already shared there.
+
+**`--route-from`/`--branch` still refuse when they can't be verified**, rather
+than guess:
+- `--route-from <path>` is refused when either side's `git rev-parse
+  --git-common-dir` is unresolvable (not a repo, broken `.git`) — that's the
+  same uncertainty a confirmed mismatch represents, not a reason to proceed.
+- `--branch <name>` is refused when `<name>` isn't a real branch (local, or a
+  remote-tracking ref — a fetched-but-not-yet-checked-out branch still
+  counts) in the repo this process's cwd resolves to. This is the most common
+  way to reach a wrong-repo mistake without even using `--route-from`:
+  `--branch` names a branch in some OTHER repo entirely while the command
+  runs against whatever repo the cwd happens to be, and without this check it
+  would silently create a cycle entry for a branch that repo has never heard
+  of.
+
+**Check the exit code.** Like every other `record-gate.py` refusal, this is a
+nonzero exit with the reason on stderr, not a hook payload a caller can miss —
+but nothing forces the invoking skill to look. If you're scripting `--init`
+(the "Initialize" block above), treat a nonzero exit here the same as a failed
+`--record`: stop and read the message rather than proceeding to the next gate
+as if the cycle had actually started.
+
+**`--unroute` follows the registry too.** Run from the source worktree (the
+one that originally ran `--route-from`), it checks the cross-repo registry
+first — a hit clears the route from the TARGET's store (not whatever repo
+`--unroute` itself happens to run in) and drops the registry entry. This
+matters because before this, `--unroute` resolved its store the same
+cwd-only way `--init` used to: for a cross-repo route it always opened the
+CURRENT process's own store, which never had the route in it, and reported
+"this worktree was not driving another worktree's gates" — true of that file,
+misleading about the actual route. There is no `SDLC_GATES_PATH` override
+needed for this anymore.
+
+**Known residual gap:** a session's Bash-tool cwd and the cwd the harness
+reports on a hook payload are not guaranteed to be the same thing — a
+subagent whose shell is genuinely rooted in the target repo has, in some
+environments, still been observed reporting its parent session's cwd on the
+`Skill` tool's `PostToolUse` payload. When that happens, `cwd` (and therefore
+`source_root`, the registry lookup key) is wrong regardless of how correctly
+routing itself is configured, and no fix in this file can see past a payload
+that already reports the wrong location. If `--status` and the registry both
+show a route configured correctly and a gate still won't record, suspect this
+before re-checking the routing setup itself — re-running from a session whose
+*top-level* cwd (not just a subagent's) is genuinely inside the target repo
+is the reliable workaround.
+
 ## Prerequisites check
 
 Before initializing the gate cycle, detect which optional capabilities are available and announce the mode.
@@ -40,7 +141,7 @@ Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no extern
 
 ## Gate tracking
 
-Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.claude/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how the auto-record hook in this session finds `$WT`'s cycle.
+Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how the auto-record hook in this session finds `$WT`'s cycle.
 
 ### Initialize
 
@@ -112,6 +213,41 @@ separate gate — they inform whether `tests` should be recorded at all.
 `/sdlc:test-flake` is for a suite that passes inconsistently; run it when a gate-1
 failure doesn't reproduce.
 
+### A gate fails for reasons unrelated to your diff (sharpen#4)
+
+Tests, lint, or typecheck can fail because of breakage that predates your branch —
+a dependency bump, upstream drift, a flaky suite someone else's change exposed.
+When that happens you genuinely cannot record the gate (it isn't passing), which
+blocks `gh pr create` — not because of anything in your diff, but because
+`enforce-sdlc-gates.py` can't tell "this predates me" from "my change broke it."
+**There is deliberately no flag to skip this check** — see
+`enforce-sdlc-gates.py`'s own `# Deliberately no escape hatch here` comment, which
+already removed one waiver (a gitignore-based exemption) for firing silently on
+exactly this kind of ambiguity. A gate that can be talked past isn't a gate.
+
+The fix is always to make the gate genuinely pass, not to skip checking it:
+
+1. **Confirm it's actually unrelated before assuming so.** `git stash` (or check
+   out a clean `origin/main`) and re-run the failing gate. If it fails there too,
+   it predates your branch. If it passes clean, your diff is the cause — go fix
+   that instead, this playbook doesn't apply.
+2. **Trivial/mechanical fix** (an unused import, a formatting nit, a one-line
+   dependency pin): bundle it into your own PR and say so explicitly in the PR
+   body — name what was broken, and that you confirmed it via step 1. This is
+   already established practice in this repo's own history (sharpen#16, #10) —
+   both bundled a confirmed-unrelated lint fix from a just-merged PR rather than
+   shipping a separate follow-up for something that small.
+3. **Non-trivial fix** (a real logic bug, a dependency needing an actual upgrade,
+   an infra issue): don't scope-creep your feature branch. Cut a separate,
+   minimal hotfix branch off `main` first — `tiny` or `small-medium` tier as the
+   fix warrants — ship it alone, then rebase your feature branch onto the
+   now-green `main` and continue. The hotfix earns its own gates the normal way;
+   it is not an exemption, just the fix landing first.
+4. **The same problem shows up one level up, at `ci-pass` on GitHub**, if `main`
+   moves between your local gate-1 run and the PR's actual CI run — your local
+   success doesn't substitute for what CI reports. Rebase and let CI re-validate
+   rather than trusting a local pass that's gone stale.
+
 For **Tiny** (≤3 lines, no executable code): gates 1, 7, 8 only.
 
 For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only origin/main...HEAD`: only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
@@ -124,7 +260,7 @@ Detect the project's toolchain by checking for config files:
 
 **Test runner:**
 ```
-bun.lockb / bunfig.toml → bun test
+bun.lock* / bunfig.toml → bun test
 package-lock.json / yarn.lock → npm test
 pnpm-lock.yaml → pnpm test
 pyproject.toml / setup.py → pytest

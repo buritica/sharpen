@@ -10,16 +10,23 @@ Set up secrets injection across three tiers with tier-scoped service accounts,
 so a leaked token can never reach a tier it wasn't granted. The injection itself
 relies on stable `op://` secret-reference syntax — works the same in every tier.
 
-> CI/prod uses **1Password Environments** (beta) as the scoping unit; dev uses a
-> shared `dev` vault. Confirm `op --version` is recent.
+> The scriptable scoping unit, in every tier, is a **vault** with a
+> vault-scoped service account — `op vault create` plus `op service-account
+> create <sa> --vault <vault>:read_items`. 1Password's UI also offers
+> "Environments" as an alternative scoping concept, but as of `op` 2.34.1
+> there is no `op environment` CLI subcommand for them — they're UI-only and
+> unscriptable, so this command does not use them. A vault-per-tier with a
+> vault-scoped SA gives the identical isolation property (a token can only
+> read its own tier) via the same `op://<name>/<item>/<field>` reference
+> syntax used throughout. Confirm `op --version` is recent.
 
 ## The model
 
-| Tier | Vault / Environment | Service account | Stored where |
+| Tier | Vault | Service account | Stored where |
 |---|---|---|---|
 | **Dev workstation** | shared `dev` vault | one `dev` SA (read+write), distributed to every dev machine | `~/.config/op/dev-token`, placed by whatever configuration management provisions your workstations |
-| PR CI | `<repo>-ci` Environment | read-only → `<repo>-ci` only | GitHub repo secret `OP_SERVICE_ACCOUNT_TOKEN` |
-| Deploy/prod | `<repo>-prod` Environment | read-only → `<repo>-prod` only | on the deploy box, or a GitHub `production` Environment secret |
+| PR CI | `<repo>-ci` vault | read-only → `<repo>-ci` only | GitHub repo secret `OP_SERVICE_ACCOUNT_TOKEN` |
+| Deploy/prod | `<repo>-prod` vault | read-only → `<repo>-prod` only | on the deploy box, or a GitHub `production` Environment secret |
 
 Service-account environment scope is **chosen at creation and immutable** — so
 create one SA per tier. The `.env.op` template uses `op://$APP_ENV/...` for
@@ -30,7 +37,7 @@ CI/prod (where `APP_ENV` swaps per context); the dev tier uses a literal
 
 | Layer | Encodes | Example |
 |---|---|---|
-| vault / Environment | the **env** | `dev`, `<repo>-ci`, `<repo>-prod` |
+| vault | the **env** | `dev`, `<repo>-ci`, `<repo>-prod` |
 | item title | the **repo** (dev) or a **logical group** (CI/prod) | `<repo>` (in `dev`), `openrouter` (in `<repo>-ci`) |
 | field name | the **secret descriptor** (env var lowercased + hyphenated) — never the env | `GEMINI_API_KEY` → `gemini-api-key` |
 | reference | full `op://...` path | `op://dev/<repo>/gemini-api-key` · `op://$APP_ENV/openrouter/key` |
@@ -65,8 +72,8 @@ op item create --vault <provisioning-vault> --category "API Credential" \
 
 Write access lets the dev SA *create* items as new repos onboard (matches the
 "stub secrets on the user's behalf" working rule); the audit log records each
-write. The token sits scoped to one vault — it cannot reach `<repo>-ci` /
-`<repo>-prod` Environments.
+write. The token sits scoped to one vault — it cannot reach the `<repo>-ci` /
+`<repo>-prod` vaults.
 
 **Per dev machine:** the token file has to land on each workstation without a
 human pasting it. Provision it through whatever already configures those machines
@@ -88,7 +95,13 @@ resilient — a not-yet-created ref warns and skips, never breaks provision.
 
 **Per repo:** put a `.env.op` in the repo root with `op://dev/<repo>/<field>`
 references (commit it; gitignore the resolved `.env`, allow `!.env.op`). Wire
-resolution into the repo's `mise.toml` setup task with this precedence:
+resolution into whatever the repo already uses to bootstrap a dev environment —
+`mise run setup` if the repo uses mise (below), otherwise the equivalent hook:
+a `package.json` `"postinstall"` script, a `Makefile` `setup` target, or
+whatever `/sdlc:new`/`/sdlc:init` already detected and scaffolded for this repo.
+The `mise.toml` example below is illustrative of the *shape* (prefer the SA
+token, fall back to an existing `.env`, else warn) — port that shape to the
+repo's actual setup entrypoint rather than assuming mise. A mise example:
 
 ```toml
 # mise.toml — setup task that prefers the scoped dev SA, falls back gracefully
@@ -110,23 +123,33 @@ fi
 """
 ```
 
-Verify: `mise run setup` logs `op service account: dev-token` when the dev SA is
-in place.
+Verify: the setup entrypoint (`mise run setup` or its equivalent) logs
+`op service account: dev-token` when the dev SA is in place.
 
-## 3. CI/prod tiers — create Environments + scoped service accounts
+## 3. CI/prod tiers — create scoped vaults + service accounts
 
 Guide the user through (these are account-level operations — show the commands,
 let the user run the ones that mint credentials):
 
-- Create an Environment per tier in the 1Password Developer section
-  (`<repo>-ci`, `<repo>-prod`), or via the documented CLI/SDK path.
-- Create one **read-only** service account per tier, scoped to *only* that
-  tier's Environment. Capture each token once — it is shown once.
+```bash
+op vault create <repo>-ci
+op vault create <repo>-prod
+op service-account create <repo>-ci-sa --vault <repo>-ci:read_items
+op service-account create <repo>-prod-sa --vault <repo>-prod:read_items
+```
+
+Each `service-account create` prints its token once — capture it immediately;
+it cannot be retrieved again. If the user prefers 1Password's UI-based
+"Environments" concept instead of a plain vault, that's a supported
+alternative scoping unit with the identical isolation property — but it has no
+CLI equivalent (see the note at the top of this file), so everything below
+that reads/writes secrets by name must be done by hand in the 1Password app
+rather than scripted here.
 
 Link the docs:
-- https://www.1password.dev/environments/
 - https://developer.1password.com/docs/service-accounts/get-started/
 - https://developer.1password.com/docs/ci-cd/github-actions/
+- https://www.1password.dev/environments/ (UI-only alternative, not used above)
 
 ## 4. Emit the template
 
@@ -238,7 +261,7 @@ Instruct the user on what they still need to do:
    The template dies with a clear error until this is set — no silent
    half-seeded states.
 5. **Write `docs/SECRETS.md` and `docs/DEPLOY.md`** covering, at minimum: which
-   vault or Environment each tier reads, where each token lives, how to rotate
+   vault each tier reads, where each token lives, how to rotate
    one, and what to do when a rotation is missed.
 6. **Run the script.** It authorizes via one biometric prompt then
    proceeds unattended. Guards: placeholder-not-replaced check aborts if
@@ -261,10 +284,8 @@ Instruct the user on what they still need to do:
   unfed — in `ssh bash -s` heredoc pipelines that leaks and errors with
   `invalid JSON in piped input`. The template appends `</dev/null` to
   every mutating op call.
-- 1Password "Environments" are UI-only in op 2.34.1 — no `op environment`
-  subcommand. Plain vaults with a vault-scoped SA achieve identical
-  isolation, and the `op://<name>/<item>/<field>` reference syntax is
-  the same.
+- 1Password "Environments" are UI-only — see the note at the top of this
+  file for why this command uses plain vaults instead.
 
 ## 7. Verify and report
 
@@ -274,6 +295,6 @@ Instruct the user on what they still need to do:
 - **CI:** `gh secret list --repo <owner>/<repo>` shows `OP_SERVICE_ACCOUNT_TOKEN`;
   `APP_ENV=<repo>-ci op inject -i .env.op -o /tmp/.env.check && head /tmp/.env.check && rm /tmp/.env.check`
   resolves (requires a session with access).
-- **Summarize:** which vault/Environments + SAs were created, where each token
-  lives, and the isolation guarantees (dev token cannot read CI/prod
-  Environments; CI token cannot read `<repo>-prod`).
+- **Summarize:** which vaults + SAs were created, where each token
+  lives, and the isolation guarantees (dev token cannot read the CI/prod
+  vaults; CI token cannot read `<repo>-prod`).

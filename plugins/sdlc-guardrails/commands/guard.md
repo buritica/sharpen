@@ -2,7 +2,7 @@
 name: guard
 description: Manage main-branch commit protection for the current repo (opt-in). on|off|status|list, or default-on|default-off for the global default.
 argument-hint: "[on|off|status|list|default-on|default-off]"
-allowed-tools: Bash(*)
+allowed-tools: Bash(python3:*)
 model: haiku
 ---
 
@@ -23,7 +23,7 @@ and run the helper, then report its output verbatim to the user:
 | `on`                      | Protect the current repo (block commits/pushes to main)      |
 | `off`                     | Stop protecting the current repo                              |
 | `list`                    | List every protected repo (and exceptions, if default-on)    |
-| `default-on`              | Protect every repo by default (`off` then carves exceptions) |
+| `default-on`              | Protect every repo by default; `off` on a specific repo then records an exception for it |
 | `default-off`             | Default to no protection (the shipped default)               |
 
 Run exactly one of:

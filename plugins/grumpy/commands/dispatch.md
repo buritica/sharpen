@@ -1,7 +1,7 @@
 ---
 description: "Inspect the current diff and route automatically to the most relevant grumpy review mode(s); for broad changes fans out and synthesizes results."
 argument-hint: "[--level grumpy|grumpier|linus] [--worktree <path>] [--dry-run]"
-allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
+allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate", "Skill"]
 ---
 
 # /grumpy:dispatch
@@ -34,11 +34,33 @@ list of modes that would be invoked, then stop. Do not run any review.
 
 ```bash
 WT="${WT:-.}"
-# Resolve the default branch instead of assuming "main" (could be master/develop).
-BASE=$(git -C "$WT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
-BASE="${BASE:-$(git -C "$WT" rev-parse --verify -q main >/dev/null 2>&1 && echo main || echo master)}"
-# Priority: branch ahead of base → staged → unstaged → last commit
-git -C "$WT" diff "$BASE...HEAD" 2>/dev/null | head -c 200000
+# Check HEAD state before anything else. review.md/edge-cases.md/imagine.md
+# all abort outright on detached HEAD; dispatch must too, and before routing —
+# otherwise it can select a mode set, then have review/edge-cases/imagine
+# individually refuse on detached HEAD while product.md silently falls back
+# to a whole-project scan, producing a fan-out synthesis that conflates two
+# different analysis scopes with no coordination between them.
+if [ "$(git -C "$WT" rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
+  echo "You're in detached HEAD state. Attach to a branch before running dispatch." >&2
+  exit 1
+fi
+# Resolve the default branch — this mirrors the same fallback chain
+# auto-init-gate-cycle.py uses, since a bare origin/HEAD symref isn't always
+# set and a master-only repo would otherwise silently break on a hardcoded
+# origin/main guess.
+BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+if [ -z "$BASE" ]; then
+  for candidate in origin/main origin/master main master; do
+    git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+  done
+fi
+# Priority: branch ahead of base → staged → unstaged → last commit. Only run
+# the base-diff when $BASE actually resolved — bash expands an empty "$BASE"
+# away, so "$BASE...HEAD" would silently become "...HEAD" (git parses that as
+# HEAD...HEAD: exit 0, empty output), indistinguishable from "no diff here."
+if [ -n "$BASE" ]; then
+  git -C "$WT" diff "$BASE...HEAD" 2>/dev/null | head -c 200000
+fi
 ```
 
 Try each fallback in order until you get non-empty output:
@@ -55,7 +77,7 @@ If all are empty: "Nothing to review. Stage a change or commit something first."
 Capture the list of changed files:
 
 ```bash
-git -C "$WT" diff --name-only "$BASE...HEAD" 2>/dev/null \
+{ [ -n "$BASE" ] && git -C "$WT" diff --name-only "$BASE...HEAD" 2>/dev/null; } \
   || git -C "$WT" diff --name-only --staged \
   || git -C "$WT" diff --name-only \
   || git -C "$WT" diff --name-only HEAD~1
@@ -93,15 +115,19 @@ State the reasoning in one sentence per selected mode.
 
 ### Single-mode path
 
-If exactly one mode is selected, run it immediately by reading and executing
-the instructions in the corresponding command file:
+If exactly one mode is selected, invoke it as a real Skill call — do **not**
+`cat` the command file and follow its instructions inline. Gate enforcement
+(the `sdlc` plugin's PostToolUse hook that auto-records `grumpy-review` /
+`grumpy-imagine` gates) fires only when the `Skill` tool itself is called with
+a tracked skill name; inlining a command's instructions never makes that
+call, so on a gated branch the gate silently never records:
 
-```bash
-cat "$CLAUDE_PLUGIN_ROOT/commands/<mode>.md"
+```
+Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")
 ```
 
-Then follow those instructions exactly, passing `--worktree "$WT"` and
-`--level <level>` as arguments.
+This is exactly equivalent to the user typing `/grumpy:<mode> --worktree "$WT"
+--level <level>` directly — same artifact output, same gate recording.
 
 ### Fan-out path
 
@@ -114,11 +140,13 @@ multi-agent pipeline that saturates available capacity):
 
 For each selected mode:
 1. Mark its task `in_progress`.
-2. Read `$CLAUDE_PLUGIN_ROOT/commands/<mode>.md`.
-3. Execute the instructions in that file, passing `--worktree "$WT"` and
-   `--level <level>`.
-4. Capture the findings (Critical Issues, Serious Concerns, Suggestions).
-5. Mark its task `completed`.
+2. Invoke it as a real Skill call, same as the single-mode path:
+   `Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")`.
+   Each mode still writes its own artifact and — for `review`/`imagine` —
+   still records its own gate exactly as a direct invocation would; nothing
+   about running inside a fan-out changes that.
+3. Capture the findings (Critical Issues, Serious Concerns, Suggestions).
+4. Mark its task `completed`.
 
 After all modes complete, synthesize results (see Step 4).
 
@@ -169,7 +197,12 @@ ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
 ```
 
-Write the full report to `$ARTIFACT_DIR/review.md`.
+Write the full report to `$ARTIFACT_DIR/review.md` — **unless** `review` was
+one of the fanned-out modes, in which case its own Step 5 already wrote that
+file with its own (non-synthesized) findings; overwriting it here would
+silently discard that per-mode output. In that case write the synthesis to
+`$ARTIFACT_DIR/dispatch.md` instead, and say so in the report's closing line
+so the user knows where to look for both.
 
 For single-mode dispatches the individual mode already writes its own
 `review.md`; do not overwrite it — the single-mode output is the final report.
@@ -206,5 +239,8 @@ modes in this list:**
   mention it in the verdict as a next step.
 - Fan-out increases runtime significantly. If the diff is clearly dominated by
   one signal, prefer single-mode dispatch and say so.
+- Both paths above call `Skill` directly rather than reading a command file
+  and following it inline, specifically so gate-recording works — see the
+  Single-mode path section above for why.
 - `--dry-run` is useful before a large fan-out to confirm the routing makes
   sense without spending the time.

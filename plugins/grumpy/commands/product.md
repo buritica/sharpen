@@ -43,23 +43,65 @@ level-appropriate version:
   hostile, call it hostile. Every harsh judgment must be backed by a specific
   product argument. No softening, no hedging."
 
-**Focus areas (optional):** "$ARGUMENTS"
+**Focus areas (optional):** "$ARGUMENTS" — if specific areas are named (e.g.
+`experience metrics`), only launch those agents. This applies to **both** the
+Diff Path and the whole-project path below; otherwise launch all four.
 
 ## Worktree targeting
 
-Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. When set, explore `$WT` for the project scan instead of the current directory. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
+Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
+
+Sub-agents launched via the Task tool do not inherit this command's shell
+variables. For the Diff Path, that means the diff must be inlined into each
+prompt as `DIFF_CONTENT`, never handed to the agent as a `git` command to
+run. For the whole-project path, it means every agent prompt's `[WT_PATH]`
+placeholder (see Step 2 below) must be substituted with `$WT`'s literal
+resolved path before the prompt is sent.
 
 ## Scope Detection
 
 Before choosing a path, detect whether there is a diff to review:
 
-1. Run each command in order until one returns output:
-   - `git -C "$WT" diff main...HEAD` (branch ahead of main)
+1. Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
+   returns `HEAD` (detached), say so — "Detached HEAD, no branch diff to
+   review; running a whole-project scan instead." — then skip straight to
+   **Step 1: Scan the Project** (whole-project path). This is a deliberate
+   difference from `review.md`/`edge-cases.md`/`imagine.md`, which have no
+   whole-project mode to fall back to and so stop outright on detached HEAD
+   instead: this command alone has a real fallback path available, so it
+   uses it rather than refusing to run — but the user still needs to know
+   their diff review silently became a full scan, not just get one.
+2. Otherwise resolve `BASE` first, trying each candidate in order until one
+   exists — this mirrors the same fallback chain `auto-init-gate-cycle.py`
+   uses, since a bare `origin/HEAD` symref isn't always set and a
+   `master`-only repo would otherwise silently break on a hardcoded
+   `origin/main` guess:
+   ```bash
+   BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+   if [ -z "$BASE" ]; then
+     for candidate in origin/main origin/master main master; do
+       git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+     done
+   fi
+   ```
+   If `$BASE` is still empty here, **skip straight to the next candidate
+   below** — do not run `git -C "$WT" diff "$BASE"...HEAD`. Bash expands an
+   empty `"$BASE"` away, so the command silently becomes `git diff ...HEAD`,
+   which git parses as `HEAD...HEAD`: exit 0, empty output — indistinguishable
+   from "no diff at this priority," the exact signal this fallback list
+   relies on to know when to try the next command. Otherwise run each
+   command in order until one returns output:
+   - `git -C "$WT" diff "$BASE"...HEAD` (branch ahead of origin default, only
+     when `$BASE` resolved)
    - `git -C "$WT" diff --staged` (staged changes)
    - `git -C "$WT" diff` (unstaged changes)
-   - `git -C "$WT" diff HEAD~1` (fallback)
-2. If any produces output, capture it as `DIFF_CONTENT` and proceed to **Diff Path** below.
-3. If none produces output, proceed to **Step 1: Scan the Project** (whole-project path).
+   - `git -C "$WT" diff HEAD~1 2>/dev/null` (fallback)
+3. If any produces output, cap it at 200000 characters (`| head -c 200000`,
+   matching `/grumpy:dispatch`'s own cap) and capture it as `DIFF_CONTENT`,
+   then proceed to **Diff Path** below. This diff gets inlined into every one
+   of the four parallel agent prompts there, uncapped it multiplies token
+   cost by the agent count on a large diff.
+4. If none produces output, proceed to **Step 1: Scan the Project** (whole-project path).
 
 ## Diff Path: Launch Parallel Agents
 
@@ -74,9 +116,9 @@ You are a grumpy senior product engineer who has reviewed too many products that
 
 Review these changes for USER EXPERIENCE quality. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -104,9 +146,9 @@ You are a grumpy senior product engineer who asks "why does this feature exist?"
 
 Review these changes for whether FEATURES MAP TO OUTCOMES. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -133,9 +175,9 @@ You are a grumpy senior product engineer who has been asked "is this working?" a
 
 Review these changes for PRODUCT OBSERVABILITY. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -162,9 +204,9 @@ You are a grumpy senior product engineer who notices when products are good and 
 
 Review these changes for PRODUCT POLISH. Here is the diff:
 
-```
+<<<DIFF_START>>>
 [DIFF_CONTENT]
-```
+<<<DIFF_END>>>
 
 Do not run git commands to re-fetch the diff — use what is provided above.
 
@@ -176,9 +218,9 @@ Evaluate:
 - Confirmation and feedback: does the user know when actions complete or fail?
 
 Return findings as:
-## 🚨 Actively Harmful (polish)
-## ⚠️ Generic and Forgettable (polish)
-## 🤔 Missed Opportunity (polish)
+## 🚨 Actively Harmful (delight)
+## ⚠️ Generic and Forgettable (delight)
+## 🤔 Missed Opportunity (delight)
 
 Be specific. Reference actual file:line. Show what generic looks like and what good would look like.
 ```
@@ -204,14 +246,22 @@ those agents. Otherwise launch all four.
 ## Step 2: Launch Parallel Agents
 
 Launch agents simultaneously using the Task tool. Each agent independently
-explores the codebase from its product lens.
+explores the codebase from its product lens. Every agent prompt below uses
+the `[WT_PATH]` placeholder — substitute it with the literal resolved `$WT`
+path before dispatch, for every agent, not just the first. A sub-agent has no
+access to this command's shell variables, so an unsubstituted "explore the
+project" instruction otherwise means wherever the harness happens to start
+it, not necessarily `$WT`. Before launching, check each built prompt for a
+literal `[WT_PATH]` still present — that means the substitution step was
+skipped for that agent, and it must not be dispatched unsubstituted: it
+would silently explore the wrong directory with no error.
 
 ### Agent 1: Experience
 
 ```
 You are a grumpy senior product engineer who has reviewed too many products that work but aren't good.
 
-Explore the current working directory and evaluate the USER EXPERIENCE quality:
+Explore the project at `[WT_PATH]` and evaluate the USER EXPERIENCE quality:
 - User flows — are they logical, or do they require context the user doesn't have?
 - Error messages — do they say what went wrong AND what to do about it, or do they just say "error"?
 - Empty states — are they helpful, or does the product just show nothing?
@@ -235,7 +285,7 @@ Be specific. Each finding: what / where (file:line, flow, or component) / why it
 ```
 You are a grumpy senior product engineer who asks "why does this feature exist?" about everything.
 
-Explore the current working directory and evaluate whether FEATURES MAP TO OUTCOMES:
+Explore the project at `[WT_PATH]` and evaluate whether FEATURES MAP TO OUTCOMES:
 - Purpose clarity — can you tell from the code what problem this product is solving?
 - Feature justification — are there features that seem to exist because someone asked for them, rather than because they solve a user problem?
 - Scope creep — are there capabilities that dilute the product's core purpose?
@@ -258,7 +308,7 @@ Be specific. Each finding: what / where (file, flow, or feature name) / user or 
 ```
 You are a grumpy senior product engineer who has been asked "is this working?" and had no answer too many times.
 
-Explore the current working directory and evaluate PRODUCT OBSERVABILITY:
+Explore the project at `[WT_PATH]` and evaluate PRODUCT OBSERVABILITY:
 - Event tracking — are meaningful user actions instrumented? What's missing?
 - Success metrics — is there any way to measure if the product is achieving its purpose?
 - Error observability — are errors tracked in a way that lets you see patterns, not just individual failures?
@@ -281,7 +331,7 @@ Be specific. Each finding: which action / where (file or flow) / business conseq
 ```
 You are a grumpy senior product engineer who notices when products are good and when they are merely functional.
 
-Explore the current working directory and evaluate PRODUCT POLISH and DELIGHT:
+Explore the project at `[WT_PATH]` and evaluate PRODUCT POLISH and DELIGHT:
 - Copy quality — does the text sound like a human wrote it, or a legal team? Are labels, buttons, and messages clear and specific?
 - Default values — are defaults set to what the user actually wants, or to what's easy to implement?
 - Progressive disclosure — does the product show complexity only when needed, or does it front-load everything?

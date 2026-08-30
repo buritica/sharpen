@@ -32,6 +32,16 @@ Review runs through `grumpy`, not by hand: `/grumpy:review` and `/grumpy:imagine
 3 and 5, and `/grumpy:fix` is how their findings get resolved. Reviewing your own diff in
 your head does not record a gate, by design.
 
+If you edit `plugins/grumpy/commands/review.md` or `imagine.md`'s sub-agent prompt
+contract (the compact `SEVERITY|file:line|text|FACT|ASPECT`/`DOMAIN` pipe format each
+sub-agent returns), re-run the recall eval before merging:
+`plugins/grumpy/tests/fixtures/` holds a fixture diff with 7 planted issues and a golden
+answer key; `scripts/eval-grumpy-findings.py` scores a candidate findings run (JSON or raw
+pipe-format output) against it — see `plugins/grumpy/tests/fixtures/README.md` for the
+run steps. This is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only
+constraint below), so a prompt-wording change can silently regress recall if the eval is
+skipped — recall must stay at 100% on the fixture, not just "look reasonable."
+
 ## Run gates before every PR
 
 ```

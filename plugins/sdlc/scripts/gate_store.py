@@ -175,8 +175,8 @@ def branch_exists(branch, cwd=None):
     unconditional: nothing has ever verified the name is real in the repo
     `cwd` resolves to. Pair this with a repo-mismatch check at `--init` —
     `--branch` alone can't tell "this worktree, a different branch" from
-    "this string, a repo that's never heard of it" — see gate.md's "cannot
-    target a different repository" section (sharpen#16) — and only the
+    "this string, a repo that's never heard of it" — see gate.md's
+    "Cross-repo routing" section (sharpen#16, sharpen#10) — and only the
     second one is a mistake worth stopping for.
 
     Checks `refs/remotes/*/<branch>` too, not just `refs/heads/<branch>`: a
@@ -230,6 +230,31 @@ def git_common_dir(cwd=None):
     return os.path.realpath(os.path.join(cwd or os.getcwd(), common))
 
 
+def repo_identity(cwd=None):
+    """A content-based fingerprint for the repo at `cwd`: its root commit
+    SHA. Unlike `git_common_dir` (a filesystem PATH), this doesn't change if
+    the repo is a linked worktree, and — the property that matters for
+    `resolve_cross_repo_route` — it DOES change if the path is ever reused by
+    an unrelated repo (routine in CI/tmp-dir workflows): a path string alone
+    can't tell "still the same repo" from "something else lives here now,"
+    since a fresh `git init` at the same path produces a `.git` at the exact
+    same path `git_common_dir` would report. Root commit SHA is immutable for
+    the life of a repo and shared across every worktree/branch of it (one
+    object store), which is exactly the identity a stale-route check needs.
+
+    A repo with multiple root commits (rare — e.g. histories merged via
+    `--allow-unrelated-histories`) returns several; only the first is used.
+    That's still a real, repo-specific value — sufficient to detect "this is
+    recognizably not the repo that was here before," which is the only
+    question this function exists to answer, not a complete identity proof."""
+    try:
+        out = _git("rev-list", "--max-parents=0", "HEAD", cwd=cwd)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    lines = out.splitlines()
+    return lines[0] if lines else None
+
+
 def state_data_root(cwd=None):
     """Return the shared neutral `.sharpen/data` root.
 
@@ -239,8 +264,7 @@ def state_data_root(cwd=None):
     """
     common = git_common_dir(cwd)
     if common:
-        # dirname(common .git dir) == the main checkout root, identical for every
-        # linked worktree → one shared, branch-keyed state root.
+        # common is <main>/.git for both a main checkout and linked worktree.
         root = os.path.dirname(common)
     else:
         root = os.path.realpath(cwd or os.getcwd())
@@ -257,10 +281,11 @@ def state_file_path(filename, env_var, cwd=None):
     env = os.environ.get(env_var)
     if env:
         return env
-    neutral = os.path.join(state_data_root(cwd), filename)
+    neutral_root = state_data_root(cwd)
+    neutral = os.path.join(neutral_root, filename)
     if os.path.exists(neutral):
         return neutral
-    root = os.path.dirname(os.path.dirname(state_data_root(cwd)))
+    root = os.path.dirname(os.path.dirname(neutral_root))
     legacy = os.path.join(root, ".claude", "data", filename)
     if os.path.exists(legacy):
         return legacy
@@ -288,6 +313,143 @@ def default_store_path(cwd=None):
         )
         return fallback
     return state_file_path("gates.json", "SDLC_GATES_PATH", cwd)
+
+
+def cross_repo_registry_path():
+    """Where a genuinely cross-repo route is recorded (sharpen#10).
+
+    Deliberately NOT repo-relative like `default_store_path`: a cross-repo
+    route exists precisely because the auto-record hook's own cwd resolves to
+    a DIFFERENT repo than the one actually being gated, so a per-repo file
+    (found via that same wrong-repo cwd) could never be the answer — the hook
+    would need to already know which repo to look in before it could look.
+    This lives at a fixed, user-level location instead, so it's findable from
+    any repo's cwd. `$SDLC_CROSS_REPO_ROUTES_PATH` overrides it (tests, and
+    any environment where `~/.cache` isn't the right place).
+
+    Trust model, stated rather than left implicit: this registry lets any
+    local process that can invoke `record-gate.py --init --route-from <path>`
+    redirect where `<path>`'s future skill-gate writes land, with no
+    acknowledgment from a session actually rooted at `<path>`. That is not a
+    new boundary this file introduces — `--route-from` has always let a
+    caller redirect another worktree's writes unilaterally, and `record_gate`
+    itself already documents its guard as being against talking yourself past
+    your own process, not against a local adversary (see
+    auto-record-skill-gate.py's module docstring). `--status` (run from the
+    source side) is this registry's only visibility for a session that didn't
+    initiate the route — same as the pre-existing same-repo case.
+    """
+    env = os.environ.get("SDLC_CROSS_REPO_ROUTES_PATH")
+    if env:
+        return env
+    path = os.path.expanduser("~/.cache/sharpen/cross-repo-routes.json")
+    # Explicit 0700, not the process umask: this directory is user-private by
+    # intent (routes across every repo on the machine live here), and a
+    # shared-HOME misconfiguration (a service account, a shared CI box)
+    # should not silently depend on the umask having been set correctly
+    # elsewhere. save_store's own mkstemp already leaves the FILE at 0600;
+    # this closes the matching gap on the directory.
+    os.makedirs(os.path.dirname(path), exist_ok=True, mode=0o700)
+    return path
+
+
+def register_cross_repo_route(
+    source_root,
+    target_root,
+    target_store_path,
+    source_identity=None,
+    target_identity=None,
+):
+    """Record that `source_root` (a worktree in one repo) drives skill gates
+    for the repo at `target_root`, whose store lives at `target_store_path`.
+
+    Keyed by `source_root` alone, matching the one-source-drives-one-branch
+    invariant `set_route` already enforces on the per-repo `routed_from`
+    channel — a source can be cross-repo-routed to at most one target at a
+    time. The per-repo `routed_from` entry (written separately, via
+    `set_route` on the target's own store) still holds the branch-level
+    detail; this registry's only job is answering "which store file, and
+    which repo root, does `source_root` actually mean" for a hook that can't
+    otherwise know.
+
+    `source_identity`/`target_identity` are each side's `repo_identity` (root
+    commit SHA) AT REGISTRATION TIME — a content-based fingerprint, not just
+    a path string. A path alone can't detect a worktree deleted and its path
+    later reused for an unrelated repo entirely (routine in CI/tmp-dir
+    workflows): a fresh `git init` at the same path reports the exact same
+    `git_common_dir`, so that alone would still match. `resolve_cross_repo_route`
+    re-checks these before trusting an entry."""
+    if not source_root or not target_root or not target_store_path:
+        raise ValueError(
+            "register_cross_repo_route requires a non-empty source_root, "
+            "target_root, and target_store_path"
+        )
+
+    def mutate(d):
+        d[source_root] = {
+            "target_root": target_root,
+            "store_path": target_store_path,
+            "source_identity": source_identity,
+            "target_identity": target_identity,
+        }
+        return d[source_root]
+
+    return update_store(cross_repo_registry_path(), mutate)
+
+
+def resolve_cross_repo_route(source_root, cwd=None):
+    """`{"target_root":..., "store_path":..., ...}` for `source_root`, or
+    None if there's no entry OR the entry no longer verifies as live.
+
+    Liveness, not just presence: an entry is trusted only if the CURRENT
+    `repo_identity` of `cwd` (when given) still matches what was recorded for
+    the source at registration time, AND the target repo's own
+    `repo_identity` still matches too. A mismatch — the worktree was deleted
+    and the path reused for an unrelated repo, or the target repo is
+    gone/replaced/reinitialized — is treated as "no route," and the stale
+    entry is proactively cleared so it stops costing lookups or misdirecting
+    a later, unrelated caller whose cwd happens to collide with the same
+    path. Legacy entries with no fingerprint (`source_identity`/
+    `target_identity` absent) verify against `None`, which a real
+    `repo_identity` result never equals — so they fail closed here too,
+    rather than being grandfathered in as trusted.
+
+    Read-only in the common case: a stale or missing registry entry is not
+    an error, just "no cross-repo route from here" — the caller falls back
+    to its own repo. The extra `repo_identity` calls only happen when an
+    entry is actually found (rare), so the overwhelming common case — no
+    entry for this `source_root` at all — stays a single file read.
+
+    Costs one small file read + JSON parse per call once the registry file
+    exists at all (`os.path.exists` alone covers the never-used case) — paid
+    by every Skill-tool invocation across every repo on the machine, most of
+    which will miss. Accepted: the registry stays tiny (one entry per active
+    cross-repo route, not per repo or per gate), and a per-process cache
+    would buy nothing since each hook invocation is a fresh process anyway."""
+    if not source_root:
+        return None
+    entry = load_store(cross_repo_registry_path()).get(source_root)
+    if not entry:
+        return None
+    if cwd is not None and repo_identity(cwd) != entry.get("source_identity"):
+        clear_cross_repo_route(source_root)
+        return None
+    if repo_identity(entry.get("target_root")) != entry.get("target_identity"):
+        clear_cross_repo_route(source_root)
+        return None
+    return entry
+
+
+def clear_cross_repo_route(source_root):
+    """Drop `source_root`'s cross-repo route, if any. Returns the cleared
+    entry, or None if there wasn't one — so callers can report accurately."""
+    if not source_root:
+        return None
+
+    def mutate(d):
+        return d.pop(source_root, None)
+
+    return update_store(cross_repo_registry_path(), mutate)
 
 
 def load_store(path):

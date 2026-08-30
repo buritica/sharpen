@@ -1,6 +1,17 @@
 {
   "description": "SDLC gate enforcement (JSON-backed, pure python — no bun): block PR creation until all gates pass, block direct skill-gate stamping, auto-record skill gates, auto-init gate cycles on first commit to a feature branch.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/claude-session-start.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

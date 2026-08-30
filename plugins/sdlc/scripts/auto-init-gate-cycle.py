@@ -37,6 +37,7 @@ import os
 import subprocess
 import sys
 
+import capabilities
 import gate_store as gs
 import hook_out as ho
 import shell_parse as sp
@@ -44,6 +45,8 @@ import shell_parse as sp
 GIT_COMMIT = "git commit"
 DEFAULT_TIER = "small-medium"
 OVERLAY_SKILL_PATH = os.path.join(".claude", "skills", "sdlc", "SKILL.md")
+CAPABILITY_MANIFEST_ENV = "SDLC_CAPABILITIES_PATH"
+CAPABILITY_MANIFEST_NAME = "capabilities.claude.json"
 
 # Allowlist, not a denylist: an unrecognized extension (or none at all) is
 # NOT docs. See _pick_tier — under-classifying silently skips gates 2-6,
@@ -146,6 +149,43 @@ def has_project_overlay(cwd=None):
     if not top:
         return False
     return os.path.isfile(os.path.join(top, OVERLAY_SKILL_PATH))
+
+
+def _capability_manifest_path(cwd=None):
+    """Where the Claude SessionStart adapter writes this repo's manifest."""
+    return gs.state_file_path(CAPABILITY_MANIFEST_NAME, CAPABILITY_MANIFEST_ENV, cwd)
+
+
+def _resolve_portable_profile(cwd=None):
+    """Return `(profile, snapshot)` from the host manifest, or `(None, None)`.
+
+    Missing, unreadable, invalid, or incomplete manifests deliberately preserve
+    legacy auto-init behavior: local enforcement still works without profile
+    metadata, and explicit `/sdlc:gate --init --capabilities-file ...` remains
+    the path that fails closed on a bad declaration.
+    """
+    path = _capability_manifest_path(cwd)
+    if not path or not os.path.isfile(path):
+        return None, None
+    try:
+        manifest = capabilities.load_manifest(path)
+        decision = capabilities.resolve_profile(manifest["capabilities"])
+    except ValueError as e:
+        ho.notify(
+            "auto-init",
+            f"ignoring capability manifest at {path}: {e}",
+            surface=False,
+        )
+        return None, None
+    if decision["decision"] != "selected":
+        ho.notify(
+            "auto-init",
+            f"capability manifest at {path} did not satisfy a profile: "
+            f"{decision['reason']}",
+            surface=False,
+        )
+        return None, None
+    return decision["resolved_profile"], manifest["capabilities"]
 
 
 def _is_docs_path(path):
@@ -347,8 +387,10 @@ def main():
         cycle_exists = False
     if cycle_exists:
         tier, tier_reason = DEFAULT_TIER, None  # unused: mutator no-ops below
+        profile, capability_snapshot = None, None
     else:
         tier, tier_reason = _pick_tier(workdir)
+        profile, capability_snapshot = _resolve_portable_profile(workdir)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.
@@ -362,7 +404,14 @@ def main():
             lambda d: (
                 None
                 if d.get(branch)
-                else gs.init_gates(d, branch, tier, tier_reason=tier_reason)
+                else gs.init_gates(
+                    d,
+                    branch,
+                    tier,
+                    tier_reason=tier_reason,
+                    profile=profile,
+                    capabilities=capability_snapshot,
+                )
             ),
         )
     # Every failure here leaves the branch with no cycle, same as above.
@@ -395,19 +444,20 @@ def main():
         # do something, and at exit 0 no reader ever gets it. Fires at most
         # once per branch, since `result` is None when a cycle already exists.
         # Non-blocking — the commit already ran.
+        profile_note = f" using portable profile {profile}" if profile else ""
         if tier == "tiny":
             # _pick_tier already confirmed every changed file is docs/text/
             # assets — gates 2-6 don't apply, so there's nothing to ask the
             # reader to widen unless that changes.
             detail = (
-                f'It armed a tiny gate cycle for "{branch}" — every file '
+                f'It armed a tiny gate cycle for "{branch}"{profile_note} — every file '
                 "changed so far looks like docs/text/assets, so the grumpy "
                 "review gates don't apply. Run `/sdlc:gate --init "
                 "small-medium` (or `significant`) if that changes."
             )
         else:
             detail = (
-                f'It armed a {tier} gate cycle for "{branch}": gates 2-6 '
+                f'It armed a {tier} gate cycle for "{branch}"{profile_note}: gates 2-6 '
                 "need /simplify and the grumpy skills to record, so without "
                 "them, re-init as tiny (/sdlc:gate --init tiny) if the "
                 "change qualifies."

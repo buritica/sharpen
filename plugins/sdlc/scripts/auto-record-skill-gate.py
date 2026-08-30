@@ -19,6 +19,32 @@ past your own process, not against an adversary. Below, we at least refuse to
 stamp when the tool call itself reported an error — a skill that errored plainly
 did not run.
 
+**Known gap: this hook can only fire on a genuine tool call.** In a long
+session, re-invoking a skill already loaded earlier in the conversation can
+make the Skill tool return "already loaded above, instructions unchanged"
+instead of dispatching fresh. Reported behavior (sharpen#11) is that when this
+happens with no real tool call underneath it, PostToolUse does not fire, so
+this hook does not run, even though the skill's instructions genuinely
+executed — though it is not yet fully understood how consistently that holds
+across harness versions and sessions; treat "the hook didn't fire" as a
+symptom to investigate, not a guarantee tied to this exact wording. Either
+way, there is nothing this hook itself can do about it: if the underlying tool
+call never happened, this script never runs to detect anything. The documented
+ways through: re-run the skill from a fresh subagent (a clean context has no
+cached instructions to short-circuit — see /sdlc:gate's --worktree/--route-from
+routing for wiring its gate to the right branch), or, last resort,
+`record-gate.py --attest <gate> --reason <text>` (gate_store.attest_gate) — a
+separate, reason-required path that marks its stamp as human-attested rather
+than hook-verified.
+
+Repo resolution, BEFORE any of the branch resolution below even starts
+(sharpen#10): if the payload's `cwd` is the SOURCE of a registered cross-repo
+route (gate_store.resolve_cross_repo_route), every git question in this file
+— which store to open, which branch is checked out where — is asked about
+the TARGET repo, not `cwd`'s own repo. Skipped entirely for the ordinary case
+(no cross-repo route from `cwd`), which is the overwhelming majority of
+invocations and costs nothing beyond the one registry lookup.
+
 Branch resolution, in order:
   1. An explicit route (gate_store.ROUTE_KEY) from this worktree — written by
      `/sdlc:gate --worktree <path> --init`. Wins outright; see the note in
@@ -257,8 +283,22 @@ def main():
     # The harness reports the session's cwd on the payload; prefer it over this
     # process's cwd so every git question below is asked of the right worktree.
     cwd = data_in.get("cwd") or None
-    path = gs.default_store_path(cwd)
-    # All three git calls happen BEFORE the lock: update_store holds an exclusive
+    source_root = gs.canonical_worktree_root(cwd)
+    # A cross-repo route (sharpen#10) means `cwd` is the SOURCE of a route
+    # whose actual target is a different repository — `default_store_path(cwd)`
+    # would resolve to the SOURCE's own store (via ITS OWN git-common-dir),
+    # which never has, and never could have, the target's cycle in it: they're
+    # different files. Check the registry BEFORE falling back to the local
+    # resolution, so this is the one place that decides which repo's git state
+    # everything below asks about — not just which store file to open.
+    cross = gs.resolve_cross_repo_route(source_root, cwd=cwd)
+    if cross:
+        path = cross["store_path"]
+        git_cwd = cross["target_root"]
+    else:
+        path = gs.default_store_path(cwd)
+        git_cwd = cwd
+    # All git calls happen BEFORE the lock: update_store holds an exclusive
     # flock shared by every worktree of the repo, and a stalled git inside it
     # stalls all of them. Tradeoff: `active`/`branch` are a snapshot from before
     # the lock, while `data` is read fresh once inside it — so a race between two
@@ -268,9 +308,21 @@ def main():
     # only a misleading diagnostic in that one rare window. Detached HEAD is
     # `git worktree add`'s normal state, so this window is now a mainline path
     # rather than only reachable through named-branch ambiguity.
-    active = active_worktree_branches(cwd)
+    #
+    # `active_worktree_branches` runs against `git_cwd` — the TARGET repo's own
+    # root on a cross-repo route — because "is this branch checked out
+    # anywhere" is a question about the target's worktrees, and `cwd` (the
+    # source) has no idea the target repo even exists.
+    active = active_worktree_branches(git_cwd)
+    # Deliberately still `cwd` (the source), not `git_cwd`, on a cross-repo
+    # route: `branch` is never consulted for correctness on that path — a
+    # route, once found, resolves the target branch entirely on its own
+    # (see handle_skill_completion) — it's used only for the "is this a
+    # cross-worktree stamp worth surfacing" display comparison against
+    # `holder["target"]` below, where the meaningful question is "what was
+    # the SOURCE session actually on," not what happens to be checked out in
+    # some worktree of the target.
     branch = gs.detect_branch(cwd)
-    source_root = gs.canonical_worktree_root(cwd)
     holder = {}
 
     def mutate(store):

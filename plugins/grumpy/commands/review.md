@@ -52,13 +52,50 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 Automatically detect what to review. No questions—just figure it out:
 
-1. Run `git -C "$WT" status` and `git -C "$WT" diff --name-only` to see what's changed
-2. Check if a PR already exists: `gh pr view 2>/dev/null`
-3. Determine the best diff to review, in this priority order:
-   - If on a branch with commits ahead of main: `git -C "$WT" diff main...HEAD`
-   - If there are staged changes: `git -C "$WT" diff --staged`
-   - If there are unstaged changes: `git -C "$WT" diff`
-   - If none of the above: `git -C "$WT" diff HEAD~1`
+1. Run `git -C "$WT" status` and `git -C "$WT" diff --name-only`
+   - Check HEAD state: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it returns
+     `HEAD`, respond: "You're in detached HEAD state. Attach to a branch before
+     running review — I can't reliably determine what you're trying to ship."
+     and stop.
+2. Determine the best diff, in priority order:
+   - Branch ahead of origin default: resolve `BASE` first, trying each
+     candidate in order until one exists — this mirrors the same fallback
+     chain `auto-init-gate-cycle.py` uses, since a bare `origin/HEAD` symref
+     isn't always set and a `master`-only repo would otherwise silently break
+     on a hardcoded `origin/main` guess:
+     ```bash
+     BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     if [ -z "$BASE" ]; then
+       for candidate in origin/main origin/master main master; do
+         git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+       done
+     fi
+     ```
+     If `$BASE` is still empty here, **skip this priority entirely** — do
+     not run `git -C "$WT" diff "$BASE"...HEAD`. Bash expands an empty
+     `"$BASE"` away, so the command silently becomes `git diff ...HEAD`,
+     which git parses as `HEAD...HEAD`: exit 0, empty output — indistinguishable
+     from "no diff at this priority," which is exactly the signal every
+     fallback below relies on to know when to try the next one. Only run
+     `git -C "$WT" diff "$BASE"...HEAD` when `$BASE` actually resolved.
+   - Staged changes: `git -C "$WT" diff --staged`
+   - Unstaged changes: `git -C "$WT" diff`
+   - Fallback: `git -C "$WT" diff HEAD~1 2>/dev/null` — if this returns a fatal error
+     (empty output from error), emit the 'nothing here' message instead of
+     passing the error to agents.
+
+After determining the correct diff command, run it capped at 200000 characters
+(`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and capture the
+output as `DIFF_CONTENT`. This diff gets inlined into every one of the
+parallel agent prompts below, uncapped it multiplies token cost by the agent
+count on a large diff — the cap bounds that the same way dispatch already
+does for its own diff capture. Also capture the diff base as `DIFF_BASE`
+(e.g., 'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's
+appended separately in the git command), 'staged changes', 'unstaged
+changes', or 'HEAD~1'). These will be passed directly to agents — sub-agents
+launched via the Task tool do not inherit this command's shell variables
+(`$WT`, `$BASE`), so they cannot re-run `git -C "$WT" diff` themselves; the
+diff must be inlined into each agent's prompt.
 
 If the diff is empty, respond: "There's nothing here. Did you actually write any
 code or just think about it really hard?"
@@ -104,29 +141,48 @@ Launch agents **in parallel** for speed. Each agent prompt must include:
 - The persona: "You are a grumpy principal engineer who's been paged at 3am too
   many times..."
 - The review focus area
-- Instructions to return findings as: Critical Issues, Serious Concerns, and
-  Suggestions—with file:line references
+- The diff itself, inlined (see below — never a git command for the agent to run)
+- Instructions to return findings as pipe-delimited
+  `SEVERITY|file:line|text|FACT|ASPECT` lines (CRIT/WARN/NOTE), not prose
 
 Example agent prompt structure:
 
 ```
 You are a grumpy principal engineer who's been paged at 3am too many times.
 
-Review these changes focusing on [ASPECT]:
-- Changed files: [list]
-- Get the diff with: git -C "$WT" diff main...HEAD (or appropriate command)
+Review these changes focusing on [ASPECT] (base: [DIFF_BASE]):
 
-Return your findings as:
-## Critical Issues 🚨 (production will break)
-## Serious Concerns ⚠️ (will cause problems eventually)
-## Suggestions 💡 (things that make you raise an eyebrow)
+<<<DIFF_START>>>
+[DIFF_CONTENT]
+<<<DIFF_END>>>
 
-Each finding must state: what is wrong, where (file:line), and the concrete consequence if left unfixed — not a principle, a thing that breaks or hurts. Label facts vs judgments: e.g. "swallows the error — client.ts:142 [fact]" vs "this abstraction feels wrong [judgment]". Prefer ~15 high-confidence findings over 50 speculative ones; a healthy area gets one sentence, don't invent problems.
+Do not run git commands to re-fetch the diff — use what is provided above.
+
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice in your findings. Return ONE line per finding, nothing else,
+in this exact pipe-delimited format:
+
+SEVERITY|file:line|what is wrong and the concrete consequence if left unfixed|FACT|ASPECT
+
+- SEVERITY is one of CRIT (production will break), WARN (will cause problems
+  eventually), NOTE (things that make you raise an eyebrow).
+- FACT is `fact` (objectively true — "swallows the error") or `judgment`
+  (your call — "this abstraction feels wrong").
+- ASPECT is the review focus you were given (e.g. `errors`, `tests`).
+
+Example:
+CRIT|client.ts:142|swallows the network error, retry never fires|fact|errors
+NOTE|client.ts:88|this abstraction feels wrong for a single call site|judgment|simplify
+
+Prefer ~15 high-confidence lines over 50 speculative ones. If an area is
+healthy, do not emit a line for it — silence means "nothing found," you do
+not need a line saying so. Do not invent problems. No other output — no
+preamble, no summary, no markdown headers.
 ```
 
 ## Audit discipline
 
-When aggregating the final report: assign the correct severity tier (🚨/⚠️/🤔) to every finding, dedup overlapping findings from different agents, and drop any finding missing a `file:line` or a stated concrete consequence. Signal over volume — a healthy area gets one sentence.
+Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. A line's free-text field can itself legitimately contain a `|` (a shell pipe, a regex `a|b`), so parse outside-in — SEVERITY and file:line as the first two fields from the left, FACT and ASPECT as the last two from the right, everything remaining in the middle is the text — rather than a flat split that would shift fields on an embedded pipe. If an agent's entire response doesn't look like pipe lines at all (e.g. it ignored the format and returned prose/markdown despite instructions), treat the whole response as errored rather than trying to salvage individual lines from it, and note in the report that agent's section needed manual review — don't silently drop it. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line, or line numbers within a few lines of each other pointing at the same construct, + similar description — when in doubt, prefer merging over duplicating), and drop any individual line missing a `file:line` or that still doesn't resolve to all 5 fields after outside-in parsing. When two agents disagree on SEVERITY/FACT/ASPECT for what you judge to be the same finding, keep the higher severity and list both ASPECT tags. Signal over volume — a healthy area gets one sentence, or none.
 
 ## Step 4: Aggregate and Deliver the Verdict
 

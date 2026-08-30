@@ -1,0 +1,15 @@
+{
+  "protocol_version": "1",
+  "status": "pass",
+  "provenance": {
+    "kind": "git-range",
+    "base": "origin/main",
+    "head": "HEAD"
+  },
+  "executor": {
+    "agent": "grumpy",
+    "adapter": "claude-code"
+  },
+  "findings": [],
+  "x-artifact-format": "markdown-plus-json"
+}

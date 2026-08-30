@@ -23,6 +23,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 
+# Every subprocess this file spawns inherits the current environment (either
+# implicitly, or via `dict(os.environ, ...)`), so setting this once here
+# isolates every test — in-process calls too, since gate_store reads the env
+# var live on each call — from the real `~/.cache/sharpen/cross-repo-routes.json`
+# on whatever machine runs the suite. One shared file for the whole module is
+# safe: registry entries are keyed by absolute temp-repo paths from
+# `tempfile.mkdtemp()`, which never collide across tests.
+os.environ["SDLC_CROSS_REPO_ROUTES_PATH"] = os.path.join(
+    tempfile.mkdtemp(), "cross-repo-routes.json"
+)
+
 import gate_store as gs  # noqa: E402
 import hook_out as ho  # noqa: E402
 
@@ -32,6 +43,13 @@ auto = importlib.util.module_from_spec(  # the hook's filename has dashes
     )
 )
 auto.__spec__.loader.exec_module(auto)
+
+record_gate_mod = importlib.util.module_from_spec(  # ditto, for unit-level access
+    importlib.util.spec_from_file_location(
+        "record_gate_cli", os.path.join(SCRIPTS, "record-gate.py")
+    )
+)
+record_gate_mod.__spec__.loader.exec_module(record_gate_mod)
 
 RECORD = os.path.join(SCRIPTS, "record-gate.py")
 ENFORCE = os.path.join(SCRIPTS, "enforce-sdlc-gates.py")
@@ -295,6 +313,31 @@ class EnforceTest(unittest.TestCase):
         run_cli(["--init", "tiny"], self.repo, self.gp)
         r = run_hook(ENFORCE, self.payload("ls -la"), self.repo, self.gp)
         self.assertEqual(r.returncode, 0)
+
+    def test_an_attested_gate_unblocks_exactly_like_a_hook_verified_one(self):
+        # The whole point of attest_gate: enforcement reads `gates`, never
+        # `attestations`, so a PR with one attested gate must sail through
+        # identically to one where every gate was hook-verified.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        for g in gs.BASH_GATES:
+            run_cli(["--record", g], self.repo, self.gp)
+        for g in gs.SKILL_FOR_GATE:
+            if g != "simplify":
+                seed_gate(self.gp, "feat/x", g)
+        r = run_cli(
+            [
+                "--attest",
+                "simplify",
+                "--reason",
+                "Skill tool returned cached instructions",
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        r = run_hook(ENFORCE, self.payload(), self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.decode(), "")
 
     def test_head_flag_forms_that_are_not_store_keys(self):
         # gh accepts `--head owner:branch` for a fork and a full ref. Neither
@@ -1006,9 +1049,37 @@ class AutoInitTest(unittest.TestCase):
         self.repo = make_repo()
         self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
 
-    def _commit(self, cmd="git commit --allow-empty -m 'x'", repo=None, gp=None):
+    def _commit(
+        self,
+        cmd="git commit --allow-empty -m 'x'",
+        repo=None,
+        gp=None,
+        extra_env=None,
+    ):
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
-        return run_hook(AUTO_INIT, payload, repo or self.repo, gp or self.gp)
+        env = dict(os.environ, SDLC_GATES_PATH=gp or self.gp)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["python3", AUTO_INIT],
+            input=json.dumps(payload).encode(),
+            capture_output=True,
+            cwd=repo or self.repo,
+            env=env,
+        )
+
+    def _write_manifest(self, capabilities):
+        path = os.path.join(self.repo, "capabilities.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "protocol_version": "1",
+                    "provider": {"name": "claude-code"},
+                    "capabilities": capabilities,
+                },
+                f,
+            )
+        return path
 
     def test_failed_commit_stamps_nothing_and_claims_nothing(self):
         # PostToolUse fires on failed tool calls too. Every message this hook
@@ -1051,6 +1122,42 @@ class AutoInitTest(unittest.TestCase):
         data = read_json(self.gp)
         self.assertIn("feat/x", data)
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
+        self.assertNotIn("profile", data["feat/x"])
+
+    def test_git_commit_with_capability_manifest_stores_resolved_profile(self):
+        manifest = self._write_manifest(
+            ["test", "lint", "typecheck", "review", "imagine", "fix"]
+        )
+        r = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn("portable profile adversarial", r.stderr.decode())
+        cycle = read_json(self.gp)["feat/x"]
+        self.assertEqual(cycle["tier"], "small-medium")
+        self.assertEqual(cycle["profile"], "adversarial")
+        self.assertEqual(
+            cycle["capabilities"],
+            ["fix", "imagine", "lint", "review", "test", "typecheck"],
+        )
+
+    def test_capability_manifest_does_not_rewrite_existing_cycle(self):
+        first = self._commit()
+        self.assertEqual(first.returncode, 2, first.stderr.decode())
+        before = read_json(self.gp)["feat/x"]
+        manifest = self._write_manifest(["test", "lint", "typecheck"])
+        second = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(second.returncode, 0, second.stderr.decode())
+        self.assertEqual(read_json(self.gp)["feat/x"], before)
+
+    def test_malformed_capability_manifest_preserves_legacy_auto_init(self):
+        manifest = os.path.join(self.repo, "bad-capabilities.json")
+        with open(manifest, "w", encoding="utf-8") as f:
+            f.write("not json")
+        r = self._commit(extra_env={"SDLC_CAPABILITIES_PATH": manifest})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        cycle = read_json(self.gp)["feat/x"]
+        self.assertEqual(cycle["tier"], "small-medium")
+        self.assertNotIn("profile", cycle)
+        self.assertNotIn("capabilities", cycle)
 
     def _repo_off_main(self, branch="feat/docs"):
         # make_repo(branch="main") already does init/config/an initial commit
@@ -1446,8 +1553,9 @@ class WorkdirResolutionTest(unittest.TestCase):
         )
 
     def test_auto_init_follows_wrapped_cd_to_the_right_repo(self):
-        gp = os.path.join(self.repo, ".sharpen", "data", "gates.json")
-        os.remove(gp)  # start clean so the stamp below is unambiguous
+        gp = gs.default_store_path(self.repo)
+        if os.path.exists(gp):
+            os.remove(gp)  # start clean so the stamp below is unambiguous
         subprocess.run(
             ["python3", AUTO_INIT],
             input=json.dumps(
@@ -1582,6 +1690,472 @@ class SharedWorktreeStoreTest(unittest.TestCase):
         self.assertIn(" on feat/b", r.stderr.decode())
 
 
+class BranchExistsTest(unittest.TestCase):
+    """gate_store.branch_exists: the check --init's --branch guard relies on."""
+
+    def setUp(self):
+        self.repo = make_repo(branch="feat/x")
+
+    def test_true_for_the_checked_out_branch(self):
+        self.assertTrue(gs.branch_exists("feat/x", cwd=self.repo))
+
+    def test_true_for_another_real_branch(self):
+        git(self.repo, "branch", "gated/y")
+        self.assertTrue(gs.branch_exists("gated/y", cwd=self.repo))
+
+    def test_false_for_a_branch_that_does_not_exist(self):
+        self.assertFalse(gs.branch_exists("does-not-exist", cwd=self.repo))
+
+    def test_false_when_cwd_is_not_a_repo_at_all(self):
+        self.assertFalse(gs.branch_exists("feat/x", cwd=tempfile.mkdtemp()))
+
+    def test_true_for_a_remote_tracking_branch_never_checked_out_locally(self):
+        # A fresh clone or a CI checkout that fetched a branch without ever
+        # making a local `refs/heads/` entry for it is a real, genuine
+        # branch — not the "this repo has never heard of it" case the guard
+        # exists to catch. Simulated with update-ref since spinning up an
+        # actual second remote for one assertion would be pure ceremony.
+        git(self.repo, "update-ref", "refs/remotes/origin/feature/only-remote", "HEAD")
+        self.assertTrue(gs.branch_exists("feature/only-remote", cwd=self.repo))
+
+    def test_false_for_a_name_that_matches_neither_local_nor_remote(self):
+        git(self.repo, "update-ref", "refs/remotes/origin/some-other-branch", "HEAD")
+        self.assertFalse(gs.branch_exists("does-not-exist", cwd=self.repo))
+
+
+class InitBranchOverrideGuardTest(unittest.TestCase):
+    """--init --branch <name> must refuse a name this repo has never heard of
+    (sharpen#16) — the failure mode that otherwise creates a phantom cycle
+    entry nothing downstream can ever complete."""
+
+    def setUp(self):
+        self.repo = make_repo(branch="feat/x")
+        self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
+
+    def test_refuses_a_nonexistent_branch(self):
+        r = run_cli(
+            ["--init", "small-medium", "--branch", "does-not-exist"],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not exist", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+    def test_allows_a_real_branch_via_override(self):
+        git(self.repo, "branch", "gated/y")
+        r = run_cli(
+            ["--init", "small-medium", "--branch", "gated/y"], self.repo, self.gp
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("gated/y", read_json(self.gp))
+
+    def test_no_override_skips_the_check_entirely(self):
+        # A detected branch (no --branch) is trivially real — no git spawn
+        # needed to confirm it, and none should happen.
+        r = run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_empty_string_branch_falls_back_to_the_detected_branch(self):
+        # `--branch ""` is technically an override, but an empty string is
+        # falsy, so the guard skips it — and `branch` itself already fell
+        # back to the real current branch before reaching this check, not to
+        # the empty string. Confirms that degrades to the SAFE behavior
+        # rather than silently bypassing the guard on a bad name.
+        r = run_cli(["--init", "small-medium", "--branch", ""], self.repo, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("feat/x", read_json(self.gp))
+
+    def test_bogus_branch_and_route_from_together_reports_the_branch_first(self):
+        # Both guards exist for the same root cause (sharpen#16) but close
+        # different entry points. Confirms they compose: a call wrong in both
+        # ways is refused, and by the branch check specifically — it runs
+        # before routing is ever resolved — not silently by whichever guard
+        # happens to run last.
+        other_repo = make_repo(branch="main")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "does-not-exist",
+                "--route-from",
+                other_repo,
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not exist", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+
+class CrossRepoRouteFromTest(unittest.TestCase):
+    """--route-from a genuinely different repository must register a
+    cross-repo route (sharpen#10), not refuse — the auto-record hook resolves
+    its own git state from the SOURCE repo's cwd, which has no idea the
+    target repo's branches even exist, so simply allowing the local
+    `routed_from` write (sharpen#16's original behavior would have refused
+    this outright) isn't enough on its own; the registry is what lets the
+    hook find the target's store at all."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+
+    def test_registers_a_cross_repo_route(self):
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo route registered", r.stderr.decode())
+        # Still writes the ordinary per-repo routed_from entry too — --status
+        # run from the target repo shouldn't need the registry to see it.
+        self.assertIn(
+            os.path.realpath(self.source),
+            read_json(self.gp)["feat/target"]["routed_from"],
+        )
+        entry = gs.resolve_cross_repo_route(os.path.realpath(self.source))
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["store_path"], self.gp)
+        self.assertEqual(entry["target_root"], os.path.realpath(self.target))
+
+    def test_fails_closed_when_target_common_dir_is_unresolvable(self):
+        # An earlier version only refused on a CONFIRMED mismatch
+        # (`target_common and source_common and target_common != source_common`),
+        # which silently accepted the route whenever either side's
+        # git-common-dir lookup came back None — reopening the exact class of
+        # bug sharpen#16 reported, just through the "couldn't tell" door
+        # instead of the "confirmed different" one. Unit-level, monkeypatched:
+        # constructing this via two real repos on disk isn't practical, since
+        # `canonical_worktree_root` (show-toplevel) and `git_common_dir`
+        # succeed or fail together in any real repo.
+        original = gs.git_common_dir
+        calls = []
+
+        def fake(cwd=None):
+            calls.append(cwd)
+            return None if cwd is None else original(cwd)
+
+        gs.git_common_dir = fake
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                record_gate_mod._resolve_routing("feat/target", self.source)
+            self.assertIn("could not be resolved", str(ctx.exception))
+        finally:
+            gs.git_common_dir = original
+        self.assertIn(None, calls)  # confirms the target-side call actually ran
+
+    def test_fails_closed_when_source_common_dir_is_unresolvable(self):
+        original = gs.git_common_dir
+
+        def fake(cwd=None):
+            return None if cwd == self.source else original(cwd)
+
+        gs.git_common_dir = fake
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                record_gate_mod._resolve_routing("feat/target", self.source)
+            self.assertIn("could not be resolved", str(ctx.exception))
+        finally:
+            gs.git_common_dir = original
+
+    def test_still_allows_routing_from_a_different_worktree_of_the_same_repo(self):
+        # The existing, documented, supported case: --route-from a linked
+        # worktree of THIS SAME repo must keep working unchanged.
+        other_wt = tempfile.mkdtemp()
+        shutil.rmtree(other_wt)
+        git(self.target, "worktree", "add", "-b", "feat/other", other_wt)
+        try:
+            r = run_cli(
+                [
+                    "--init",
+                    "small-medium",
+                    "--branch",
+                    "feat/target",
+                    "--route-from",
+                    other_wt,
+                ],
+                self.target,
+                self.gp,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr.decode())
+            self.assertIn(
+                os.path.realpath(other_wt),
+                read_json(self.gp)["feat/target"]["routed_from"],
+            )
+        finally:
+            subprocess.run(
+                ["git", "-C", self.target, "worktree", "remove", "-f", other_wt],
+                capture_output=True,
+            )
+
+
+class CrossRepoAutoRecordTest(unittest.TestCase):
+    """The actual sharpen#10 bug: a session whose home repo is A driving
+    gated work in a genuinely different repo B (via cd/worktree/route-from)
+    couldn't get skill-gated stamps to land in B's store at all, even with a
+    route explicitly configured — the auto-record hook always resolved its
+    OWN store from its OWN cwd (A), which structurally can't contain B's
+    cycle. This is the end-to-end proof the fix actually closes that gap, not
+    just that `--init` accepts the route."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def auto(self, skill, cwd):
+        # `cwd` on the payload is what the hook actually uses for every git
+        # question (see auto-record-skill-gate.py) — the subprocess's own
+        # cwd (`self.source` here too, for realism) is irrelevant to it.
+        payload = {"tool_name": "Skill", "tool_input": {"skill": skill}, "cwd": cwd}
+        return run_hook(AUTO, payload, self.source, self.gp)
+
+    def test_records_into_the_target_store_from_the_source_cwd(self):
+        r = self.auto("simplify", self.source)
+        # A cross-repo stamp is a cross-worktree write from the hook's own
+        # perspective (target != the source's own detected branch), which
+        # this hook deliberately surfaces via exit 2 (see
+        # auto-record-skill-gate.py's holder.get("recorded") handling) —
+        # exit 2 here means "recorded, and surfaced," not "failed."
+        self.assertIn(r.returncode, (0, 2), r.stderr.decode())
+        self.assertIn('recorded "simplify"', r.stderr.decode())
+        self.assertIn("simplify", read_json(self.gp)["feat/target"]["gates"])
+
+    def test_without_a_registered_route_the_gate_does_not_record(self):
+        # Baseline proving the above is actually exercising the fix: drop the
+        # registration (simulating pre-fix behavior, where nothing but the
+        # per-repo `routed_from` entry ever existed) and confirm the hook
+        # genuinely cannot find the target's cycle from the source's cwd.
+        run_cli(["--unroute"], self.source, self.gp)
+        self.auto("simplify", self.source)
+        self.assertNotIn(
+            "simplify", read_json(self.gp).get("feat/target", {}).get("gates", {})
+        )
+
+    def test_liveness_check_asks_the_target_repo_not_the_source(self):
+        # `active_worktree_branches` must run against the target's own root —
+        # confirmed indirectly: `feat/target` is the target's main checkout
+        # branch (always "checked out" there), so if the hook mistakenly ran
+        # `git worktree list` against the SOURCE instead, this would fail as
+        # a stale-route skip instead of recording.
+        r = self.auto("simplify", self.source)
+        self.assertIn(r.returncode, (0, 2), r.stderr.decode())
+        self.assertNotIn("stale route", r.stderr.decode())
+
+
+class CrossRepoStaleRegistryTest(unittest.TestCase):
+    """A registry entry is keyed by a path string alone; without fingerprint
+    verification, deleting the source worktree and later reusing that same
+    path for an unrelated repo — routine in CI/tmp-dir workflows — would
+    silently redirect the new, unrelated repo's skill gates into the old
+    target's store. `resolve_cross_repo_route` must treat a fingerprint
+    mismatch as no-route, not a match on path alone."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source_path = tempfile.mkdtemp()
+        git(self.source_path, "init", "-q", "-b", "main")
+        git(self.source_path, "config", "user.email", "t@t")
+        git(self.source_path, "config", "user.name", "t")
+        git(self.source_path, "commit", "-q", "--allow-empty", "-m", "init")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source_path,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_a_repo_reused_at_the_same_path_is_not_trusted(self):
+        source_root = os.path.realpath(self.source_path)
+        self.assertIsNotNone(gs.resolve_cross_repo_route(source_root))
+
+        # Simulate the worktree being torn down and an ENTIRELY UNRELATED
+        # repo later occupying the exact same path — no --unroute ever ran.
+        shutil.rmtree(os.path.join(self.source_path, ".git"))
+        git(self.source_path, "init", "-q", "-b", "main")
+        git(self.source_path, "config", "user.email", "u@u")
+        git(self.source_path, "config", "user.name", "u")
+        git(self.source_path, "commit", "-q", "--allow-empty", "-m", "unrelated")
+
+        self.assertIsNone(
+            gs.resolve_cross_repo_route(source_root, cwd=self.source_path)
+        )
+        # Self-healed: the stale entry is gone, not just ignored once.
+        self.assertIsNone(gs.resolve_cross_repo_route(source_root))
+
+    def test_a_deleted_target_is_not_trusted(self):
+        source_root = os.path.realpath(self.source_path)
+        shutil.rmtree(self.target)
+        self.assertIsNone(gs.resolve_cross_repo_route(source_root))
+
+    def tearDown(self):
+        shutil.rmtree(self.source_path, ignore_errors=True)
+
+
+class CrossRepoUnrouteTest(unittest.TestCase):
+    """--unroute must clear a cross-repo route from the TARGET's store, not
+    silently check the wrong file (sharpen#10's follow-up report) — and must
+    require no `SDLC_GATES_PATH` override to do it."""
+
+    def setUp(self):
+        self.target = make_repo(branch="feat/target")
+        self.source = make_repo(branch="main")
+        self.gp = os.path.join(self.target, ".claude", "data", "gates.json")
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/target",
+                "--route-from",
+                self.source,
+            ],
+            self.target,
+            self.gp,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_unroute_from_the_source_clears_the_cross_repo_route(self):
+        r = run_cli(["--unroute"], self.source, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo target", r.stderr.decode())
+        self.assertNotIn(
+            os.path.realpath(self.source),
+            read_json(self.gp)["feat/target"].get("routed_from", []),
+        )
+        self.assertIsNone(gs.resolve_cross_repo_route(os.path.realpath(self.source)))
+
+    def test_a_second_unroute_reports_plainly_not_a_wrong_file_success(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        r = run_cli(["--unroute"], self.source, self.gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("not driving another worktree's gates", r.stderr.decode())
+
+    def test_gate_no_longer_records_after_unroute(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        payload = {
+            "tool_name": "Skill",
+            "tool_input": {"skill": "simplify"},
+            "cwd": self.source,
+        }
+        run_hook(AUTO, payload, self.source, self.gp)
+        self.assertNotIn(
+            "simplify", read_json(self.gp).get("feat/target", {}).get("gates", {})
+        )
+
+    def test_status_from_the_source_side_names_the_cross_repo_target(self):
+        # Without this, `--status` run from the SOURCE of a cross-repo route
+        # reports a plain "no gate cycle" — technically true of THIS repo's
+        # own store, but silent about where this worktree's skill gates are
+        # actually landing (sharpen#10's altitude gap). Deliberately uses the
+        # SOURCE's own (empty) store path, not `self.gp` — a real `--status`
+        # run from the source resolves its own repo's store via git, which
+        # never has the target's `routed_from` entry in it; reusing `self.gp`
+        # here would let the existing same-repo route-mismatch check answer
+        # first and mask whether the NEW cross-repo check works at all.
+        source_gp = os.path.join(self.source, ".claude", "data", "gates.json")
+        r = run_cli(["--status"], self.source, source_gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn("cross-repo routed", r.stdout.decode())
+        self.assertIn(os.path.realpath(self.target), r.stdout.decode())
+
+    def test_status_says_nothing_once_unrouted(self):
+        run_cli(["--unroute"], self.source, self.gp)
+        source_gp = os.path.join(self.source, ".claude", "data", "gates.json")
+        r = run_cli(["--status"], self.source, source_gp)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn("cross-repo routed", r.stdout.decode())
+
+
+class CrossRepoRetargetTest(unittest.TestCase):
+    """Switching a source's cross-repo route to a NEW target must clean up
+    the OLD target's own store too — otherwise it's left with a `routed_from`
+    entry that will never be cleared by anything (the registry, by design,
+    can only ever point one source at one target at a time)."""
+
+    def setUp(self):
+        self.old_target = make_repo(branch="feat/old")
+        self.new_target = make_repo(branch="feat/new")
+        self.source = make_repo(branch="main")
+        self.old_gp = os.path.join(self.old_target, ".claude", "data", "gates.json")
+        self.new_gp = os.path.join(self.new_target, ".claude", "data", "gates.json")
+
+    def test_re_routing_clears_the_stale_entry_in_the_old_target(self):
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/old",
+                "--route-from",
+                self.source,
+            ],
+            self.old_target,
+            self.old_gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertIn(
+            os.path.realpath(self.source),
+            read_json(self.old_gp)["feat/old"]["routed_from"],
+        )
+
+        r = run_cli(
+            [
+                "--init",
+                "small-medium",
+                "--branch",
+                "feat/new",
+                "--route-from",
+                self.source,
+            ],
+            self.new_target,
+            self.new_gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+        # The registry now points at the new target only...
+        entry = gs.resolve_cross_repo_route(os.path.realpath(self.source))
+        self.assertEqual(entry["target_root"], os.path.realpath(self.new_target))
+        # ...and the OLD target's store no longer claims this source drives it.
+        self.assertNotIn(
+            os.path.realpath(self.source),
+            read_json(self.old_gp)["feat/old"].get("routed_from", []),
+        )
+
+
 class StoreGuardTest(unittest.TestCase):
     """The invariant lives in the mutator, so every recorder is covered."""
 
@@ -1651,6 +2225,126 @@ class StoreGuardTest(unittest.TestCase):
         self.assertEqual(
             sorted(gs.BASH_GATES + list(gs.SKILL_FOR_GATE)), sorted(gs.ALL_GATE_NAMES)
         )
+
+
+class AttestGateTest(unittest.TestCase):
+    """gate_store.attest_gate: the reasoned, human-attested bypass."""
+
+    def test_attests_a_skill_gated_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "skill ran, Skill tool cached")
+        self.assertIn("simplify", d["feat/x"]["gates"])
+        self.assertEqual(
+            d["feat/x"]["attestations"]["simplify"]["reason"],
+            "skill ran, Skill tool cached",
+        )
+
+    def test_refuses_a_bash_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "tests", "because")
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_refuses_an_empty_reason(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        for bad in ("", "   ", None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                gs.attest_gate(d, "feat/x", "simplify", bad)
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_refuses_a_gate_not_required_by_the_tier(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "tiny")
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "because")
+
+    def test_status_marks_an_attested_gate_differently(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "skill ran, Skill tool cached")
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn("⚠ simplify", out)
+        self.assertIn("skill ran, Skill tool cached", out)
+        self.assertNotIn("✓ simplify", out)
+
+    def test_oneline_marks_an_attested_gate_differently(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        out = gs.format_oneline(d["feat/x"])
+        self.assertIn("⚠", out)
+
+    def test_reset_via_init_clears_attestations_too(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        gs.init_gates(d, "feat/x", "small-medium")
+        self.assertEqual(d["feat/x"].get("attestations", {}), {})
+        self.assertEqual(d["feat/x"]["gates"], {})
+
+    def test_status_still_prints_the_timestamp_on_an_attested_line(self):
+        # The attested branch of format_status must not drop `{ts}` while
+        # adding the reason — a regression here reads fine at a glance but
+        # silently loses when the gate was actually stamped.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "because")
+        ts = d["feat/x"]["gates"]["simplify"]
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn(ts, out)
+
+    def test_refuses_to_overwrite_a_hook_verified_gate(self):
+        # Without this, attesting an already-stamped gate would clobber a
+        # genuine hook-verified timestamp with a fabricated one and downgrade
+        # real verification history to merely-attested.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.record_gate(d, "feat/x", "simplify", authorized=True)
+        original_ts = d["feat/x"]["gates"]["simplify"]
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "because")
+        self.assertEqual(d["feat/x"]["gates"]["simplify"], original_ts)
+        self.assertEqual(d["feat/x"].get("attestations", {}), {})
+
+    def test_refuses_to_re_attest_an_already_attested_gate(self):
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.attest_gate(d, "feat/x", "simplify", "first reason")
+        original_ts = d["feat/x"]["gates"]["simplify"]
+        with self.assertRaises(ValueError):
+            gs.attest_gate(d, "feat/x", "simplify", "second reason")
+        self.assertEqual(d["feat/x"]["gates"]["simplify"], original_ts)
+        self.assertEqual(
+            d["feat/x"]["attestations"]["simplify"]["reason"], "first reason"
+        )
+
+    def test_status_tolerates_a_malformed_attestations_entry(self):
+        # A hand-edited store where `attestations[g]` isn't the shape
+        # attest_gate writes must degrade the message, not throw — same
+        # posture as route_sources for a hand-edited scalar elsewhere in
+        # this module.
+        d = {}
+        gs.init_gates(d, "feat/x", "small-medium")
+        gs.record_gate(d, "feat/x", "simplify", authorized=True)
+        d["feat/x"]["attestations"] = {"simplify": "not-a-dict"}
+        out = gs.format_status(d["feat/x"], "feat/x")
+        self.assertIn("⚠ simplify", out)
+
+
+class GateMarkerTest(unittest.TestCase):
+    """gate_store._gate_marker: the one shared attested/verified/missing check."""
+
+    def test_stamped_and_attested_is_the_warning_marker(self):
+        self.assertEqual(gs._gate_marker("2026-01-01", {"reason": "x"}), "⚠")
+
+    def test_stamped_only_is_the_check_marker(self):
+        self.assertEqual(gs._gate_marker("2026-01-01", None), "✓")
+
+    def test_neither_is_the_cross_marker(self):
+        self.assertEqual(gs._gate_marker(None, None), "✗")
 
 
 class CliSkillGatedGuardTest(unittest.TestCase):
@@ -1734,6 +2428,100 @@ class CliSkillGatedGuardTest(unittest.TestCase):
             self.gp,
         )
         self.assertTrue(read_json(self.gp)["feat/x"]["gates"]["simplify"])
+
+
+class CliAttestTest(unittest.TestCase):
+    """record-gate.py --attest: the CLI surface for the reasoned bypass."""
+
+    def setUp(self):
+        self.repo = make_repo()
+        self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+
+    def test_attests_with_a_reason(self):
+        r = run_cli(
+            [
+                "--attest",
+                "simplify",
+                "--reason",
+                "Skill tool returned cached instructions",
+            ],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        data = read_json(self.gp)
+        self.assertTrue(data["feat/x"]["gates"]["simplify"])
+        self.assertEqual(
+            data["feat/x"]["attestations"]["simplify"]["reason"],
+            "Skill tool returned cached instructions",
+        )
+
+    def test_refuses_without_a_reason(self):
+        r = run_cli(["--attest", "simplify"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_reason_flag_rejected_outside_attest(self):
+        r = run_cli(["--record", "tests", "--reason", "nope"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--reason is only valid with --attest", r.stderr.decode())
+
+    def test_not_blocked_by_the_direct_record_guard(self):
+        # --attest is the sanctioned exception, not the spelling block-direct
+        # exists to catch — it must sail through unblocked.
+        r = run_hook(
+            BLOCK,
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": f'python3 "{RECORD}" --attest simplify --reason because'
+                },
+            },
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0)
+
+    def test_refuses_a_bash_gate(self):
+        r = run_cli(["--attest", "tests", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("record it directly", r.stderr.decode())
+
+    def test_refuses_an_empty_string_reason(self):
+        # Distinct from the flag being omitted entirely: this is a present
+        # but blank `--reason ""`, exercised through the CLI rather than only
+        # at the store level.
+        r = run_cli(["--attest", "simplify", "--reason", ""], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_refuses_a_gate_not_required_by_the_tier(self):
+        run_cli(["--init", "tiny"], self.repo, self.gp)
+        r = run_cli(["--attest", "simplify", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_combined_with_init_is_rejected_not_silently_dropped(self):
+        # --init wins as `rest[0]` and would otherwise silently swallow the
+        # trailing --attest <gate> as unused positionals — exit 0, no
+        # attestation, no error. Must be a hard refusal instead.
+        r = run_cli(
+            ["--init", "small-medium", "--attest", "simplify"], self.repo, self.gp
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not combine", r.stderr.decode())
+
+    def test_combined_with_record_is_rejected_not_silently_dropped(self):
+        r = run_cli(["--record", "tests", "--attest", "simplify"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not combine", r.stderr.decode())
+
+    def test_refuses_to_overwrite_an_already_recorded_gate(self):
+        seed_gate(self.gp, "feat/x", "simplify")
+        r = run_cli(["--attest", "simplify", "--reason", "because"], self.repo, self.gp)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(read_json(self.gp)["feat/x"].get("attestations", {}), {})
 
 
 class BlockAutoRecordDrivingTest(unittest.TestCase):
@@ -1912,6 +2700,37 @@ class AutoRecordAmbiguityTest(unittest.TestCase):
         self.assertIn('branch "feat/b"', res["reason"])
         self.assertIn("git worktree list", res["reason"])
         self.assertEqual(data["feat/a"]["gates"], {})
+
+
+class PortableStateRootTest(unittest.TestCase):
+    def test_default_store_prefers_neutral_sharpen_data(self):
+        repo = make_repo(branch="feat/a")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        self.assertEqual(
+            gs.default_store_path(repo),
+            os.path.realpath(os.path.join(repo, ".sharpen", "data", "gates.json")),
+        )
+
+    def test_legacy_fallback_is_per_file(self):
+        repo = make_repo(branch="feat/a")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        legacy_dir = os.path.join(repo, ".claude", "data")
+        os.makedirs(legacy_dir)
+        legacy = os.path.join(legacy_dir, "gates.json")
+        neutral = os.path.join(repo, ".sharpen", "data", "gates.json")
+
+        # A legacy directory created for unrelated state must not redirect a
+        # new gates file away from the neutral location.
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(neutral))
+
+        with open(legacy, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(legacy))
+
+        os.makedirs(os.path.dirname(neutral), exist_ok=True)
+        with open(neutral, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        self.assertEqual(gs.default_store_path(repo), os.path.realpath(neutral))
 
 
 class StoreHousekeepingTest(unittest.TestCase):
