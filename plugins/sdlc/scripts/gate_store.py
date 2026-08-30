@@ -13,8 +13,10 @@ keeps two branches checked out in two worktrees isolated from each other.
 
 Store path (precedence):
   1. $SDLC_GATES_PATH env var
-  2. <main-checkout>/.claude/data/gates.json  (dirname of the common .git dir)
-  3. <cwd>/.claude/data/gates.json   (git resolution failed)
+  2. <main-checkout>/.sharpen/data/gates.json  (dirname of the common .git dir)
+  3. <main-checkout>/.claude/data/gates.json   (legacy, read fallback)
+  4. <cwd>/.sharpen/data/gates.json            (git resolution failed)
+  5. <cwd>/.claude/data/gates.json             (legacy git-resolution fallback)
 
 Schema:
   {
@@ -59,6 +61,11 @@ class StoreCorruptError(Exception):
 
 
 TIERS = ("tiny", "small-medium", "significant")
+
+# Portable profile names accepted on stored cycle metadata. This is storage
+# validation only; profile-to-gate mapping is a separate runtime decision and
+# deliberately does not change required_gates() here.
+PROFILE_NAMES = ("baseline", "review", "adversarial")
 
 # Key under a branch's cycle holding the worktree root that drives it. See the
 # module docstring — this is the cross-worktree routing channel.
@@ -126,6 +133,14 @@ def skill_gated_message(gate):
             "complete: install it, or re-init as `tiny` if the change genuinely "
             "qualifies (≤3 lines, no executable code)."
         )
+        # Deliberately NOT mentioning --attest here. This message fires on
+        # every manual --record of a skill-gated gate, including the very
+        # first attempt before the skill has ever run — surfacing the
+        # attestation escape hatch in that hot path would read as "here's
+        # your actual next step" rather than the rare, reasoned last resort
+        # it's meant to be (see gate.md's own section on it). It stays
+        # documented there and in attest_gate's docstring, not advertised at
+        # the exact moment an agent is looking for the fastest way through.
     )
 
 
@@ -149,6 +164,43 @@ def detect_branch(cwd=None):
         return _git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def branch_exists(branch, cwd=None):
+    """Does `branch` name a real ref (local, or a remote-tracking branch) in
+    the repo at `cwd`?
+
+    `--branch <name>` lets a caller record gates for a branch it isn't
+    currently on (the documented cross-worktree pattern), but that trust is
+    unconditional: nothing has ever verified the name is real in the repo
+    `cwd` resolves to. Pair this with a repo-mismatch check at `--init` —
+    `--branch` alone can't tell "this worktree, a different branch" from
+    "this string, a repo that's never heard of it" — see gate.md's "cannot
+    target a different repository" section (sharpen#16) — and only the
+    second one is a mistake worth stopping for.
+
+    Checks `refs/remotes/*/<branch>` too, not just `refs/heads/<branch>`: a
+    branch fetched but never locally checked out (a fresh clone, a PR branch
+    a CI job pulled without `git checkout -b`) is still a genuine branch in
+    this repo, not the "never heard of it" case this guard exists to catch —
+    treating it as nonexistent would be a false refusal of a real topology.
+    """
+    try:
+        # No --quiet: `_git` already sends stderr to DEVNULL, and success/
+        # failure here is read from the exit code (CalledProcessError), never
+        # git's own output, so --quiet would only suppress a message nobody
+        # was going to see anyway.
+        _git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=cwd)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    try:
+        out = _git(
+            "for-each-ref", "--format=%(refname)", f"refs/remotes/*/{branch}", cwd=cwd
+        )
+        return bool(out.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return False
 
 
 # Pulling the working directory out of a command string used to live here as a
@@ -178,33 +230,64 @@ def git_common_dir(cwd=None):
     return os.path.realpath(os.path.join(cwd or os.getcwd(), common))
 
 
+def state_data_root(cwd=None):
+    """Return the shared neutral `.sharpen/data` root.
+
+    `state_file_path` retains an existing legacy file on a per-file basis. The
+    root helper deliberately has no migration policy so new portable state files
+    do not inherit a `.claude` dependency merely because that directory exists.
+    """
+    common = git_common_dir(cwd)
+    if common:
+        # dirname(common .git dir) == the main checkout root, identical for every
+        # linked worktree → one shared, branch-keyed state root.
+        root = os.path.dirname(common)
+    else:
+        root = os.path.realpath(cwd or os.getcwd())
+    return os.path.join(root, ".sharpen", "data")
+
+
+def state_file_path(filename, env_var, cwd=None):
+    """Resolve state with an explicit override and per-file legacy fallback.
+
+    Prefer an already-existing neutral file. Otherwise retain an existing legacy
+    file so creating unrelated neutral state cannot hide an active gate cycle.
+    A missing file resolves to the neutral location for new writes.
+    """
+    env = os.environ.get(env_var)
+    if env:
+        return env
+    neutral = os.path.join(state_data_root(cwd), filename)
+    if os.path.exists(neutral):
+        return neutral
+    root = os.path.dirname(os.path.dirname(state_data_root(cwd)))
+    legacy = os.path.join(root, ".claude", "data", filename)
+    if os.path.exists(legacy):
+        return legacy
+    return neutral
+
+
 def default_store_path(cwd=None):
     env = os.environ.get("SDLC_GATES_PATH")
     if env:
         return env
     common = git_common_dir(cwd)
-    if common:
-        # dirname(common .git dir) == the main checkout root, identical for every
-        # linked worktree → one shared, branch-keyed store.
-        return os.path.join(os.path.dirname(common), ".claude", "data", "gates.json")
-    # git resolution failed (not a repo, broken .git, git missing). Fall back to a
-    # cwd-relative store — realpath'd for the same single-inode guarantee as the
-    # happy path — and leave a breadcrumb, since a silent fallback here is the
-    # likeliest cause of a later "my gate didn't record / wasn't enforced" report.
-    # `cwd`, not os.getcwd(): callers pass the workdir they resolved out of the
-    # command (`cd X && …`, `git -C X`). Using the process's own cwd here sends
-    # the recorder and the enforcer to different files without saying so.
-    fallback = os.path.realpath(
-        os.path.join(cwd or os.getcwd(), ".claude", "data", "gates.json")
-    )
-    # Name the path: "which file did it actually pick" is the whole question
-    # when someone reports a gate that recorded but wasn't enforced.
-    sys.stderr.write(
-        "[gate] warning: could not resolve the repo's shared git dir; "
-        f"falling back to a cwd-local gate store at {fallback}. Gates recorded "
-        "here won't be visible from other worktrees/cwds.\n"
-    )
-    return fallback
+    if not common:
+        # git resolution failed (not a repo, broken .git, git missing). Fall back
+        # to a cwd-relative store and leave a breadcrumb, since a silent fallback
+        # here is the likeliest cause of a later "my gate didn't record / wasn't
+        # enforced" report. `cwd`, not os.getcwd(): callers pass the workdir they
+        # resolved out of the command (`cd X && …`, `git -C X`). Using the
+        # process's own cwd here sends the recorder and the enforcer to different
+        # files without saying so.
+        fallback = state_file_path("gates.json", "SDLC_GATES_PATH", cwd)
+        sys.stderr.write(
+            "[gate] warning: could not resolve the repo's shared git dir; "
+            f"falling back to a cwd-local gate store at {fallback}. Gates recorded "
+            "here won't be visible from other worktrees/cwds.\n"
+        )
+        return fallback
+    return state_file_path("gates.json", "SDLC_GATES_PATH", cwd)
 
 
 def load_store(path):
@@ -313,13 +396,20 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_gates(data, branch, tier, tier_reason=None):
-    """`tier_reason` records WHY this tier was picked, e.g. by
+def init_gates(data, branch, tier, tier_reason=None, profile=None, capabilities=None):
+    """Initialize a branch cycle while preserving legacy state shape by default.
+
+    `tier_reason` records WHY this tier was picked, e.g. by
     auto-init-gate-cycle.py's docs-only detection — absence of the key is how
     a reader (format_status, a human editing the store) tells "manually
     chosen" from "auto-detected"; a manual --init passes no reason and the
     key is simply not written, so a plain init produces a byte-identical
-    entry to before this field existed."""
+    entry to before this field existed.
+
+    `profile` and `capabilities` are optional portable-core metadata. They are
+    written only when a caller explicitly resolves a manifest, so legacy init
+    behavior remains unchanged and pre-profile cycles continue to load.
+    """
     if branch in ("main", "master"):
         raise ValueError(
             f'Refusing to initialize gate cycle for "{branch}". '
@@ -327,7 +417,17 @@ def init_gates(data, branch, tier, tier_reason=None):
         )
     if tier not in TIERS:
         raise ValueError(f'Invalid tier "{tier}". Valid: {", ".join(TIERS)}')
+    if profile is not None and profile not in PROFILE_NAMES:
+        raise ValueError(
+            f'Invalid profile "{profile}". Valid: {", ".join(PROFILE_NAMES)}'
+        )
+    if capabilities is not None and not isinstance(capabilities, list):
+        raise ValueError("capabilities must be a list of capability names")
     entry = {"tier": tier, "created_at": _now(), "gates": {}}
+    if profile is not None:
+        entry["profile"] = profile
+    if capabilities is not None:
+        entry["capabilities"] = sorted(capabilities)
     if tier_reason:
         entry["tier_reason"] = tier_reason
     # `--init` doubles as the post-gate reset, so it clears every timestamp. The
@@ -512,6 +612,78 @@ def record_gate(data, branch, gate, authorized=False):
     return bd
 
 
+def attest_gate(data, branch, gate, reason):
+    """Stamp a skill-gated `gate` on human attestation, not a hook observation.
+
+    Last-resort escape hatch for a reported gap (sharpen#11): in a long
+    session, the Skill tool can return "already loaded above, instructions
+    unchanged" for a skill invoked again — a Claude Code caching behavior —
+    and PostToolUse can fail to fire for that call, so auto-record-skill-gate.py
+    doesn't run even though the skill's instructions genuinely executed (see
+    that script's docstring; how consistently this reproduces isn't fully
+    pinned down). The documented way around it is a fresh subagent dispatch
+    (a clean context re-runs the Skill tool for real); this exists for when
+    that route was already tried, or genuinely isn't practical.
+
+    Deliberately not the same code path as the hook's `authorized=True`: this
+    requires a human-legible `reason` and marks the stamp in `attestations` so
+    `--status`/`--oneline` render it with a different marker than a
+    hook-verified gate. It attests the operator's claim that the skill ran,
+    not this process's own observation of it — the distinction the reader of
+    `--status` needs in order to judge it, same reasoning as `authorized=True`
+    itself: any bypass has to say so out loud, where it will be seen.
+
+    That distinction is for the reader, not the enforcer: an attestation
+    writes the same timestamp into `gates` that a hook-verified stamp would,
+    so `missing_gates()` (and therefore `gh pr create` via
+    enforce-sdlc-gates.py) treats the two identically. `attestations` is
+    metadata for a human reading `--status`/`--oneline`, not a weaker gate.
+
+    Refuses on a bash-verifiable gate (`tests`, `lint`, `typecheck`): those
+    already have a legitimate manual `--record`, so an attestation would only
+    be a second, weaker way to do the same thing.
+
+    Refuses when `gate` is already stamped, even by an attestation. Without
+    this, attesting an already hook-verified gate would silently overwrite a
+    genuine timestamp with a fabricated one and downgrade real verification
+    history to merely-attested — the opposite of what this function is for.
+    A gate that's already done needs no attestation; if it's wrong, `--init`
+    resets it the same as any other gate.
+    """
+    if gate not in SKILL_FOR_GATE:
+        raise ValueError(
+            f'"{gate}" is not skill-gated, so it has no attestation path — '
+            f"record it directly instead: --record {gate}\n\n" + gate_lists_hint()
+        )
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(
+            "--attest requires --reason \"<why the skill's run could not be "
+            'observed>" — the whole point is that the bypass is legible, not silent'
+        )
+    bd = data.get(branch)
+    if bd is None:
+        raise ValueError(
+            f'No gate cycle for branch "{branch}". Run: record-gate.py --init <tier>'
+        )
+    if bd.get("gates", {}).get(gate):
+        raise ValueError(
+            f'"{gate}" is already recorded for "{branch}" — nothing to attest. '
+            "If it's wrong, --init resets the cycle."
+        )
+    bd = record_gate(data, branch, gate, authorized=True)
+    stamp = bd["gates"][gate]
+    bd.setdefault("attestations", {})[gate] = {"reason": reason.strip(), "at": stamp}
+    return bd
+
+
+def _gate_marker(stamped, attested):
+    """The one shared "attested vs. hook-verified vs. missing" classification,
+    so format_status and format_oneline can't render it two different ways."""
+    if stamped and attested:
+        return "⚠"
+    return "✓" if stamped else "✗"
+
+
 def required_gates(branch_data):
     return GATES_BY_TIER.get(branch_data.get("tier", "small-medium"), ALL_GATE_NAMES)
 
@@ -571,15 +743,48 @@ def format_status(branch_data, branch=None):
     tier_reason = branch_data.get("tier_reason")
     if tier_reason:
         lines.append(f"  reason: {tier_reason}")
+    profile = branch_data.get("profile")
+    if profile:
+        capabilities = branch_data.get("capabilities")
+        if capabilities:
+            lines.append(f"Profile: {profile} ({', '.join(capabilities)})")
+        else:
+            lines.append(f"Profile: {profile}")
+    report = branch_data.get("review_report")
+    if isinstance(report, dict):
+        provenance = report.get("provenance", {})
+        location = provenance.get("kind", "unknown")
+        if provenance.get("kind") == "git-range":
+            location += f" {provenance.get('base')}...{provenance.get('head')}"
+        findings = report.get("findings")
+        finding_count = len(findings) if isinstance(findings, list) else 0
+        lines.append(
+            f"Review report: {report.get('status', 'unknown')} "
+            f"({location}; {finding_count} finding(s))"
+        )
     sources = route_sources(branch_data)
     if sources:
         # A wrong route is the failure mode that used to be invisible; print it.
         lines.append(f"Driven from: {', '.join(sources)}")
     lines.append("")
     gates = branch_data.get("gates", {})
+    attestations = branch_data.get("attestations", {})
     for g in required_gates(branch_data):
         ts = gates.get(g)
-        lines.append(f"  ✓ {g} — {ts}" if ts else f"  ✗ {g}")
+        att = attestations.get(g)
+        mark = _gate_marker(ts, att)
+        if ts and att:
+            # Tolerates a hand-edited store where `attestations[g]` isn't the
+            # shape attest_gate writes (missing/non-dict) — same posture as
+            # route_sources for a hand-edited scalar: degrade the message,
+            # don't throw.
+            reason = att.get("reason") if isinstance(att, dict) else None
+            detail = f": {reason}" if reason else ""
+            lines.append(f"  {mark} {g} — {ts} (attested, not hook-verified{detail})")
+        elif ts:
+            lines.append(f"  {mark} {g} — {ts}")
+        else:
+            lines.append(f"  {mark} {g}")
     missing = missing_gates(branch_data)
     lines += [
         "",
@@ -591,11 +796,19 @@ def format_status(branch_data, branch=None):
 def format_oneline(branch_data):
     if not branch_data:
         return "No SDLC gate cycle active"
+    profile = branch_data.get("profile")
+    label = branch_data.get("tier")
+    if profile:
+        label = f"{label}/{profile}"
+    report = branch_data.get("review_report")
+    if isinstance(report, dict) and report.get("status"):
+        label = f"{label}/review:{report['status']}"
     if not missing_gates(branch_data):
-        return f"SDLC {branch_data.get('tier')}: all complete"
+        return f"SDLC {label}: all complete"
     gates = branch_data.get("gates", {})
+    attestations = branch_data.get("attestations", {})
     parts = []
     for g in required_gates(branch_data):
         short = g.replace("grumpy-", "g:").replace("fix-post-", "fix:")
-        parts.append(("✓" if gates.get(g) else "✗") + short)
-    return f"SDLC {branch_data.get('tier')}: {' '.join(parts)}"
+        parts.append(_gate_marker(gates.get(g), attestations.get(g)) + short)
+    return f"SDLC {label}: {' '.join(parts)}"

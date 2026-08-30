@@ -87,7 +87,7 @@ Docs-only changes (no executable files, any size): test + lint + typecheck, all 
 
 ## Gate tracking (JSON, pure python — no bun)
 
-`/sdlc:gate` records gate state to one JSON file **shared across every worktree of the repo**, keyed by branch: `<main-checkout>/.claude/data/gates.json` (override with `$SDLC_GATES_PATH`). The path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree and any cwd inside the repo reads and writes the same file. A cycle recorded in one worktree is therefore visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key — no `$SDLC_*` pinning footgun.
+`/sdlc:gate` records gate state to one JSON file **shared across every worktree of the repo**, keyed by branch: `<main-checkout>/.sharpen/data/gates.json` (override with `$SDLC_GATES_PATH`; existing `.claude/data/gates.json` stores remain readable). The path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree and any cwd inside the repo reads and writes the same file. A cycle recorded in one worktree is therefore visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key — no `$SDLC_*` pinning footgun.
 
 The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
 
@@ -99,6 +99,25 @@ The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook
 - `auto-init-gate-cycle.py` (PostToolUse Bash) — starts a gate cycle on the first `git commit` to a non-default branch, which is what makes enforcement opt-out rather than opt-in. Defaults to `small-medium`, auto-downgraded to `tiny` when every file changed since `main`/`master` confidently matches a docs/text/asset allowlist (conservative by construction — an unrecognized extension or an undeterminable diff keeps `small-medium`). It announces the arming (exit 2 — visible, non-blocking; the commit already ran), because for anyone who never runs `/sdlc:gate` that is the only notice of which tier landed and how to widen or narrow it. A commit that leaves the branch with *no* cycle says so the same way; genuinely routine outcomes stay quiet.
 
 `hooks/hooks.json` is auto-loaded when the plugin is installed. Run the suite with `python3 tests/test_gate.py` from this directory, or `python3 scripts/run-tests.py` from the marketplace repo root to run every plugin's tests.
+
+### Portable adapters
+
+Non-Claude hosts can use the same gate evidence with a v1 capability manifest. The manifest declares a non-empty subset of `plan`, `review`, `imagine`, `fix`, `test`, `lint`, `typecheck`, and `ship`; the adapter resolves the highest supported profile (`baseline`, `review`, or `adversarial`). Supply `x-host-command-map` for any capability whose command is host-specific:
+
+```json
+{
+  "protocol_version": "1",
+  "provider": {"name": "my-agent", "agent": "my-agent", "model": "model-id"},
+  "capabilities": ["test", "lint", "typecheck"],
+  "x-host-command-map": {
+    "test": "python3 -m unittest",
+    "lint": "ruff check .",
+    "typecheck": "mypy ."
+  }
+}
+```
+
+On a named feature branch with an initialized gate cycle, run `python3 plugins/sdlc/scripts/generic_adapter.py capabilities.json`. It executes the selected profile's commands and attaches a validated, synthetic review report to the gate store. `local_llm_adapter.py` uses the same manifest and gates, then delegates a diff review to an OpenAI-compatible local endpoint; set `LOCAL_LLM_URL` and optionally `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`. For this adapter, declared `review` is fulfilled by the delegated LLM rather than an `x-host-command-map.review` command. A failed gate, invalid or failed delegated review, or inability to attach the report exits non-zero; attaching a report never marks a gate complete.
 
 **Upgrading to 4.5.0 (docs-only commits auto-arm `tiny` instead of `small-medium`):** `auto-init-gate-cycle.py` now diffs the branch against `origin/main`/`origin/master` (falling back to local `main`/`master`) before arming a *new* cycle, and picks `tiny` when every changed file matches a docs/text/asset allowlist. This only affects the tier a *new* cycle starts at — an in-flight cycle is untouched, and the tier is decided once, at arm time; a docs-only first commit followed by a real code commit does **not** auto-upgrade the tier back to `small-medium` (same as any other post-gate change, a manual `/sdlc:gate --init small-medium` is required — see Gate chain above). If you were relying on every branch starting `small-medium` regardless of content, that assumption no longer holds for docs-only branches.
 
