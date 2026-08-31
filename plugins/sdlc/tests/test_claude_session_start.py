@@ -94,15 +94,26 @@ class SessionStartCliTest(unittest.TestCase):
         self.assertIn("test", manifest["capabilities"])
 
     def test_existing_claude_manifest_root_remains_active_until_neutral_exists(self):
+        # state_file_path() checks for the legacy *file*, not just its
+        # directory (see gate_store.state_file_path) — this simulates an
+        # existing install that already wrote a manifest there, not a repo
+        # that merely has an empty .claude/data/ dir for some other reason.
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            f.write("{}")
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertTrue(os.path.exists(legacy_path))
         self.assertFalse(os.path.exists(self.manifest_path))
 
+        # Same distinction on the other side: state_file_path() prefers an
+        # already-existing neutral *file*, not just its directory, so create
+        # one to simulate the neutral manifest coming into existence.
         os.makedirs(os.path.dirname(self.manifest_path))
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
+            f.write("{}")
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertTrue(os.path.exists(self.manifest_path))

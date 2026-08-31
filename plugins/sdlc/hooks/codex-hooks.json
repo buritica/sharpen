@@ -1,0 +1,30 @@
+{
+  "description": "SDLC gate enforcement for Codex CLI — best-effort port of hooks/hooks.json, NOT hands-on verified against a live Codex session (researched from public docs as of Aug 2026: developers.openai.com/codex/hooks, deepwiki.com/openai/codex Hooks System, agenticcontrolplane.com/blog/codex-cli-hooks-reference). Wires only the two hooks that read the generic {tool_name, tool_input.command} shape and enforce purely through exit code + stderr, which both hosts are documented to honor the same way. Deliberately does NOT port auto-record-skill-gate.py or block-direct-gate-record.py: both depend on a distinct 'Skill' tool call existing in PostToolUse, which is unconfirmed on Codex — porting them on a guess would silently misrecord gates rather than fail loudly. See plugins/sdlc/README.md, 'Codex CLI support', before relying on this in production.",
+  "_setup": "Codex has no plugin-root equivalent to Claude Code's ${CLAUDE_PLUGIN_ROOT}, so the scripts/ directory location is not self-discovering here. Set SDLC_SCRIPTS_ROOT to the absolute path of this sdlc plugin's scripts/ directory (e.g. by exporting it in your shell profile, or in Codex's own env passthrough config) before these hooks can resolve — each command below fails fast with a named-variable error (not a bare python 'file not found') if it's unset, via bash's ${VAR:?msg}. SDLC_HOOK_HOST=codex tells hook_out.py to skip Claude Code's stdout JSON envelope and rely only on exit code + stderr, which every host's PreToolUse/PostToolUse is documented to honor — see hook_out.py's module docstring.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SDLC_HOOK_HOST=codex python3 \"${SDLC_SCRIPTS_ROOT:?set SDLC_SCRIPTS_ROOT to this sdlc plugin's scripts/ directory — see this file's _setup field}/enforce-sdlc-gates.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SDLC_HOOK_HOST=codex python3 \"${SDLC_SCRIPTS_ROOT:?set SDLC_SCRIPTS_ROOT to this sdlc plugin's scripts/ directory — see this file's _setup field}/auto-init-gate-cycle.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
