@@ -67,8 +67,11 @@ def write_manifest(path, manifest):
 class MockLLMHandler(BaseHTTPRequestHandler):
     response_body = b'{"choices":[{"message":{"content":"[]"}}]}'
     status_code = 200
+    received_body = None
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        MockLLMHandler.received_body = self.rfile.read(length)
         self.send_response(self.status_code)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -144,6 +147,7 @@ class LocalLLMAdapterTest(MockLLMServer):
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
         self.old_url = os.environ.get("LOCAL_LLM_URL")
         os.environ["LOCAL_LLM_URL"] = self.url
+        MockLLMHandler.received_body = None
 
     def tearDown(self):
         super().tearDown()
@@ -151,6 +155,7 @@ class LocalLLMAdapterTest(MockLLMServer):
             os.environ["LOCAL_LLM_URL"] = self.old_url
         else:
             os.environ.pop("LOCAL_LLM_URL", None)
+        MockLLMHandler.received_body = None
 
     def test_passing_review(self):
         manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
@@ -164,9 +169,28 @@ class LocalLLMAdapterTest(MockLLMServer):
                 "stderr": "",
             }
         ]
+        self.assertIsNone(MockLLMHandler.received_body)
         report = la.build_review_report(manifest, results, cwd=self.repo)
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["executor"]["adapter"], "local-llm")
+        sent = json.loads(MockLLMHandler.received_body)
+        self.assertEqual(sent["model"], "test-model")
+        self.assertEqual(len(sent["messages"]), 1)
+        user_content = sent["messages"][0]["content"]
+        self.assertEqual(sent["messages"][0]["role"], "user")
+        self.assertIn("You are a code reviewer", user_content)
+        # The prompt must actually carry the diff section (not just the
+        # instructions preamble) — this is what proves the request sent over
+        # the wire is built from the real manifest/gate-results context
+        # rather than a stubbed-out or truncated payload.
+        self.assertIn("```diff", user_content)
+        self.assertIn("Diff:", user_content)
+        # make_repo() creates a fresh repo with a single empty commit, so
+        # there is no real base...head range to diff against — the adapter's
+        # diff extraction falls through to an empty diff. Assert that empty
+        # case explicitly so a future change to the fallback message doesn't
+        # silently swap in something else unnoticed.
+        self.assertIn("(no diff)", user_content)
 
     def test_server_error_falls_back(self):
         self.server.shutdown()
