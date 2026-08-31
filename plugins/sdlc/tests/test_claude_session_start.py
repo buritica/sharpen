@@ -93,7 +93,11 @@ class SessionStartCliTest(unittest.TestCase):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         manifest = self.read_manifest(path)
-        self.assertEqual(manifest.get("protocol_version"), "1", f"{path} was not overwritten by the adapter")
+        self.assertEqual(
+            manifest.get("protocol_version"),
+            "1",
+            f"{path} was not overwritten by the adapter",
+        )
 
     def test_writes_valid_manifest_without_blocking_session(self):
         result = self.run_adapter()
