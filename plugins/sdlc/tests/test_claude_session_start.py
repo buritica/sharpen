@@ -83,12 +83,15 @@ class SessionStartCliTest(unittest.TestCase):
             env=env or self.clean_env(),
         )
 
+    def read_manifest(self, path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
     def test_writes_valid_manifest_without_blocking_session(self):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stdout.decode(), "")
-        with open(self.manifest_path, encoding="utf-8") as f:
-            manifest = json.load(f)
+        manifest = self.read_manifest(self.manifest_path)
         self.assertEqual(manifest["protocol_version"], "1")
         self.assertEqual(manifest["provider"]["name"], "claude-code")
         self.assertIn("test", manifest["capabilities"])
@@ -105,9 +108,7 @@ class SessionStartCliTest(unittest.TestCase):
 
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        with open(legacy_path, encoding="utf-8") as f:
-            manifest = json.load(f)
-        self.assertEqual(manifest["protocol_version"], "1")
+        self.assertEqual(self.read_manifest(legacy_path)["protocol_version"], "1")
         self.assertFalse(os.path.exists(self.manifest_path))
 
         os.makedirs(os.path.dirname(self.manifest_path))
@@ -115,9 +116,7 @@ class SessionStartCliTest(unittest.TestCase):
             json.dump({}, f)
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        with open(self.manifest_path, encoding="utf-8") as f:
-            manifest = json.load(f)
-        self.assertEqual(manifest["protocol_version"], "1")
+        self.assertEqual(self.read_manifest(self.manifest_path)["protocol_version"], "1")
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
