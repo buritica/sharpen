@@ -114,9 +114,15 @@ class SessionStartCliTest(unittest.TestCase):
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
         self.assert_manifest_overwritten(legacy_path)
         self.assertFalse(os.path.exists(self.manifest_path))
+        legacy_content_after_first_phase = self.read_manifest(legacy_path)
 
         os.makedirs(os.path.dirname(self.manifest_path))
         self.assert_manifest_overwritten(self.manifest_path)
+        self.assertEqual(
+            self.read_manifest(legacy_path),
+            legacy_content_after_first_phase,
+            "legacy manifest should be untouched once the neutral path takes over",
+        )
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
