@@ -67,8 +67,11 @@ def write_manifest(path, manifest):
 class MockLLMHandler(BaseHTTPRequestHandler):
     response_body = b'{"choices":[{"message":{"content":"[]"}}]}'
     status_code = 200
+    received_body = None
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        MockLLMHandler.received_body = self.rfile.read(length)
         self.send_response(self.status_code)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -144,6 +147,7 @@ class LocalLLMAdapterTest(MockLLMServer):
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
         self.old_url = os.environ.get("LOCAL_LLM_URL")
         os.environ["LOCAL_LLM_URL"] = self.url
+        MockLLMHandler.received_body = None
 
     def tearDown(self):
         super().tearDown()
@@ -167,6 +171,9 @@ class LocalLLMAdapterTest(MockLLMServer):
         report = la.build_review_report(manifest, results, cwd=self.repo)
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["executor"]["adapter"], "local-llm")
+        sent = json.loads(MockLLMHandler.received_body)
+        self.assertEqual(sent["model"], "test-model")
+        self.assertIn("You are a code reviewer", sent["messages"][0]["content"])
 
     def test_server_error_falls_back(self):
         self.server.shutdown()
