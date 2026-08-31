@@ -469,6 +469,23 @@ class EnforceTest(unittest.TestCase):
         self.assertIn("incomplete", hso["permissionDecisionReason"])
         self.assertIn("/sdlc:gate", hso["permissionDecisionReason"])
 
+    def test_denial_drops_the_stdout_envelope_on_a_declared_non_claude_host(self):
+        # codex-hooks.json sets SDLC_HOOK_HOST=codex on this same script. The
+        # envelope is Claude-specific decoration (see hook_out.py); the
+        # cross-host contract is exit 2 + the reason on stderr, which must
+        # survive with the envelope gone.
+        run_cli(["--init", "tiny"], self.repo, self.gp)
+        r = subprocess.run(
+            ["python3", ENFORCE],
+            input=json.dumps(self.payload("gh pr create --fill")).encode(),
+            capture_output=True,
+            cwd=self.repo,
+            env=dict(os.environ, SDLC_GATES_PATH=self.gp, SDLC_HOOK_HOST="codex"),
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout.decode(), "")
+        self.assertIn("incomplete", r.stderr.decode())
+
     def test_repeated_caveat_is_reported_once(self):
         # Two PR creates behind the same unresolvable `cd` produce the same
         # caveat twice. Without the dedup in check_gates the user gets the

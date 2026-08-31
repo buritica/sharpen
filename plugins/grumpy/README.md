@@ -55,6 +55,16 @@ Every command accepts `--worktree <path>` (alias `--path <path>`). When set, all
 
 Use it when the invoking session's cwd isn't the worktree you want reviewed (orchestrators, parallel `isolation: worktree` agents, `grumpy:audit → grumpy:fix` against a target repo). Flag absent = current directory, unchanged.
 
+## Portability beyond Claude Code
+
+`commands/review.md`'s subagent-fan-out step is written to be agent-neutral:
+it names the capability ("spawn independent subagents in parallel"), not
+Claude's own Task tool, and explicitly falls back to running each review
+pass sequentially in one session on a harness with no fan-out primitive at
+all. The rest of `commands/` still name Claude's tools literally and have not
+been converted yet — see [`../sdlc/README.md`](../sdlc/README.md), "Codex CLI
+support", for the wider porting effort this is a first slice of.
+
 ## Upgrading
 
 **Upgrading to 2.0.0 (Gemini Mode removed):** `--gemini`, `GRUMPY_MODEL`, and

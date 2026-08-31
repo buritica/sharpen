@@ -130,6 +130,42 @@ The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook
 
 **Upgrading from 2.2.0 (per-worktree store):** main-checkout users are unaffected — the path is identical across versions. But if you had an in-flight gate cycle on a **linked worktree**, its state lived in that worktree's `.claude/data/gates.json` and won't be seen at the new shared location. Re-run `/sdlc:gate` on that branch to re-establish the cycle (gates are cheap to re-run and reset on any code change anyway).
 
+## Codex CLI support (proof of concept, best-effort)
+
+Codex CLI ships its own `hooks.json` with the same event names as Claude Code
+(`PreToolUse`/`PostToolUse`, exit-code-2-denies) and reads `tool_name`/
+`tool_input.command` the same way, per public docs as of Aug 2026 — but this
+has **not** been hands-on verified against a live Codex session. Two of the
+five hook scripts port on that basis:
+
+- `hooks/codex-hooks.json` wires `enforce-sdlc-gates.py` (blocks `gh pr
+  create` until gates pass) and `auto-init-gate-cycle.py` (arms a cycle on
+  the first commit to a feature branch). Both key off the generic
+  `{tool_name, tool_input.command}` shape and enforce purely through exit
+  code + stderr — the part of the contract every documented host honors the
+  same way (see `hook_out.py`'s module docstring: its `deny()` payload's
+  Claude-specific stdout JSON is opted out via `SDLC_HOOK_HOST=codex` rather
+  than emitted blindly, since every denial already writes its reason to
+  stderr independently; `warn()`'s payload is never opted out, since some
+  call sites have no other channel at all). Codex has no equivalent of `${CLAUDE_PLUGIN_ROOT}`, so
+  the manifest resolves scripts against `${SDLC_SCRIPTS_ROOT}` instead —
+  set that env var to this plugin's `scripts/` directory before wiring
+  `codex-hooks.json` into a target repo's `.codex/hooks.json`.
+- `auto-record-skill-gate.py` and `block-direct-gate-record.py` are
+  **deliberately not ported**. Both depend on a distinct "Skill" tool call
+  existing in PostToolUse, which is unconfirmed on Codex — porting them on a
+  guess would silently misrecord gates instead of failing loudly. Practical
+  effect: a `small-medium`/`significant` gate cycle enforced via
+  `codex-hooks.json` alone cannot record gates 2–6 (`simplify`, the grumpy
+  passes) the way Claude Code's hooks do; use the `tiny` cycle, or record
+  those gates by hand until this gap closes.
+
+Command prose is the other porting axis: most commands under `commands/`
+still name Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill
+tool`), which a harness without those exact tools can't follow as written.
+See [`../grumpy/README.md`](../grumpy/README.md), "Portability beyond Claude
+Code", for the first converted example and what's still unconverted.
+
 ## Composability
 
 - **grumpy** installed? Gates 3-6 use `/grumpy:review`, `/grumpy:fix`, `/grumpy:imagine`. Without grumpy, the agent performs self-review and announces the fallback at the start of the gate — but note that self-review **cannot record** gates 3-6: only the auto-record hook can, when the skill actually runs. With the hooks registered and grumpy absent, a `small-medium`/`significant` cycle cannot complete, so install grumpy or use the `tiny` cycle where it genuinely applies.
