@@ -94,18 +94,30 @@ class SessionStartCliTest(unittest.TestCase):
         self.assertIn("test", manifest["capabilities"])
 
     def test_existing_claude_manifest_root_remains_active_until_neutral_exists(self):
+        # The legacy fallback is per-file (mirrors gate_store.state_file_path):
+        # an empty .claude/data directory must not redirect a new manifest away
+        # from the neutral location, only an existing legacy *file* does.
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertTrue(os.path.exists(legacy_path))
+        with open(legacy_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["protocol_version"], "1")
         self.assertFalse(os.path.exists(self.manifest_path))
 
         os.makedirs(os.path.dirname(self.manifest_path))
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertTrue(os.path.exists(self.manifest_path))
+        with open(self.manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["protocol_version"], "1")
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
