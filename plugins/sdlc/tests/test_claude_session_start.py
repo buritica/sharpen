@@ -105,9 +105,10 @@ class SessionStartCliTest(unittest.TestCase):
         self.assertIn("test", manifest["capabilities"])
 
     def test_existing_claude_manifest_root_remains_active_until_neutral_exists(self):
-        # The legacy fallback is per-file (mirrors gate_store.state_file_path):
-        # an empty .claude/data directory must not redirect a new manifest away
-        # from the neutral location, only an existing legacy *file* does.
+        # Fallback precedence mirrors gate_store.state_file_path (see
+        # test_gate.py's test_legacy_fallback_is_per_file for the per-file
+        # trigger itself): once a legacy file exists, it stays active until a
+        # neutral file appears.
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
