@@ -109,8 +109,9 @@ class SessionStartCliTest(unittest.TestCase):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         manifest = self.read_manifest(legacy_path)
-        self.assertIn("protocol_version", manifest, f"{legacy_path} was not overwritten by the adapter")
-        self.assertEqual(manifest["protocol_version"], "1")
+        self.assertEqual(
+            manifest.get("protocol_version"), "1", f"{legacy_path} was not overwritten by the adapter"
+        )
         self.assertFalse(os.path.exists(self.manifest_path))
 
         os.makedirs(os.path.dirname(self.manifest_path))
@@ -119,10 +120,11 @@ class SessionStartCliTest(unittest.TestCase):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         manifest = self.read_manifest(self.manifest_path)
-        self.assertIn(
-            "protocol_version", manifest, f"{self.manifest_path} was not overwritten by the adapter"
+        self.assertEqual(
+            manifest.get("protocol_version"),
+            "1",
+            f"{self.manifest_path} was not overwritten by the adapter",
         )
-        self.assertEqual(manifest["protocol_version"], "1")
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
