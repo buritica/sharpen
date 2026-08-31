@@ -115,30 +115,55 @@ If Optional findings exist, skip to Step 5 to offer them. Otherwise respond:
 you've somehow broken my ability to find problems. I'll choose to believe the
 former."
 
-## Step 2: Create a Task per Finding
+## Step 2: Track a Task per Finding
 
-For each finding in the **Auto-fix** bucket, create a task using TaskCreate:
+For each finding in the **Auto-fix** bucket, track it as a task:
 
-- `subject`: Short description of the fix (e.g., "Fix null check missing in
-  parseUser")
-- `description`: Full finding text including file:line reference and what needs
-  to change
-- `activeForm`: Present-tense form (e.g., "Fixing null check in parseUser")
+- **If your harness has a task-tracking feature** (a todo-list primitive that
+  records subject/status per item), create one task per finding there:
+  - `subject`: Short description of the fix (e.g., "Fix null check missing in
+    parseUser")
+  - `description`: Full finding text including file:line reference and what
+    needs to change
+  - `activeForm`: Present-tense form (e.g., "Fixing null check in parseUser")
+- **Otherwise**, keep a plain checklist in your own working notes — one line
+  per finding, with the same subject/description/file:line detail, that you
+  mark off as each is fixed.
 
-Group findings that touch the same file into a single task to avoid conflicts.
+Group findings that touch the same file into a single task (or checklist
+entry) to avoid conflicts.
 
 Announce grumpily how many tasks were created: "Alright. I found [N] things that
 needed fixing. Let's see if we can get through this without making it worse."
 
 ## Step 3: Dispatch Sub-Agents (tier-routed)
 
-For each task, update its status to `in_progress` using TaskUpdate, then
-dispatch a sub-agent via the Task tool.
+For each task, mark it `in_progress` (via the task-tracking feature if you
+have one, otherwise in your working checklist), then act on it:
+
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), dispatch one
+sub-agent per task, using the prompt template below.
+
+**If it doesn't**, there is no separate agent to launch — fix each finding
+yourself, one at a time, in this same session, following the same prompt
+template as your own working instructions for that fix.
 
 Dispatch sub-agents **sequentially per file** (to avoid conflicting edits on the
-same file), but **in parallel across different files**.
+same file), but **in parallel across different files**. Working through
+findings yourself with no subagent primitive is inherently sequential — just
+finish one file's findings before starting the next.
 
 ### Model routing (thrifty split: cheap where it can, strong where it must)
+
+**If your harness lets you choose a model per dispatched subagent**, route by
+the tiers below. **Otherwise**, there is nothing to route — fix everything
+yourself at your own model. The rest of this section (which tier a finding
+maps to, and why) is still useful context for prioritizing your own attention,
+even when there's no model swap behind it; the "Verify + escalate" section's
+tier-based escalation likewise has nothing to escalate *to* without
+per-dispatch model choice, so on a failed verification there just retry the
+fix yourself, more carefully.
 
 The split only has something to route on when the source artifact carries
 `exec:`/`accept:` hints — today that's `/grumpy:audit` alone (see Step 1).
@@ -156,8 +181,8 @@ it isn't readable from where you're running, **say so in the summary**
 defaults below directly — they are the source of truth for dispatch, but a
 user routed by defaults instead of the configured map should learn that from
 the output, not discover it later. Route
-each task by its `exec:` tier hint, passing the resolved model as the Task tool's
-**`model`** argument:
+each task by its `exec:` tier hint, passing the resolved model as the
+subagent dispatch's per-model argument:
 
 - `exec: trivial` → `exec-trivial` role → **`haiku`**
 - `exec: standard` → `exec` role → **`sonnet`**

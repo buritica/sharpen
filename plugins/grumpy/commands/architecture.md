@@ -62,17 +62,30 @@ This is a whole-project review, not a diff review. Get the lay of the land:
 If `$ARGUMENTS` specifies focus areas (e.g., `coupling scalability`), only
 launch those agents. Otherwise launch all five.
 
-## Step 2: Launch Parallel Agents
+## Step 2: Run the Five Review Passes
 
-Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase. Every agent
-prompt below uses the `[WT_PATH]` placeholder — substitute it with the
-literal resolved `$WT` path before dispatch, for every agent, not just the
-first. A sub-agent has no access to this command's shell variables, so an
-unsubstituted "explore the project" instruction otherwise means wherever the
-harness happens to start it, not necessarily `$WT`. Before launching, check
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch one
+per aspect simultaneously. Each agent gets the project context from Step 1
+and independently explores the codebase.
+
+**If it doesn't**, there is no separate agent to launch — work through each
+of the five aspects yourself, sequentially, in this same session. The
+templates below still apply: treat each aspect as its own isolated pass
+(don't let findings from one aspect bleed into how you judge another), and
+produce the same findings format per pass before moving to Step 3's
+aggregation. The only thing that changes is *who* runs the pass, not what it
+does or what it returns.
+
+Every prompt below uses the `[WT_PATH]` placeholder — substitute it with the
+literal resolved `$WT` path before dispatch (or before starting that pass
+yourself, if running sequentially), for every aspect, not just the first. A
+separate subagent process, if you launch one for a pass, does not inherit
+this command's shell variables, so an unsubstituted "explore the project"
+instruction otherwise means wherever the harness happens to start it, not
+necessarily `$WT`. Before launching (or starting a pass yourself), check
 each built prompt for a literal `[WT_PATH]` still present — that means the
-substitution step was skipped for that agent, and it must not be dispatched
+substitution step was skipped for that pass, and it must not proceed
 unsubstituted: it would silently explore the wrong directory with no error.
 
 ### Agent 1: Structure

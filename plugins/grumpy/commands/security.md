@@ -67,16 +67,27 @@ those agents. Otherwise launch all four.
 
 ## Step 2: Launch Parallel Agents
 
-Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase. Every agent
-prompt below uses the `[WT_PATH]` placeholder — substitute it with the
-literal resolved `$WT` path before dispatch, for every agent, not just the
-first. A sub-agent has no access to this command's shell variables, so an
-unsubstituted "explore the project" instruction otherwise means wherever the
-harness happens to start it, not necessarily `$WT`. Before launching, check
-each built prompt for a literal `[WT_PATH]` still present — that means the
-substitution step was skipped for that agent, and it must not be dispatched
-unsubstituted: it would silently explore the wrong directory with no error.
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch the
+four agents below simultaneously. Each agent gets the project context from
+Step 1 and independently explores the codebase. Every agent prompt below uses
+the `[WT_PATH]` placeholder — substitute it with the literal resolved `$WT`
+path before dispatch, for every agent, not just the first. A sub-agent has no
+access to this command's shell variables, so an unsubstituted "explore the
+project" instruction otherwise means wherever the harness happens to start
+it, not necessarily `$WT`. Before launching, check each built prompt for a
+literal `[WT_PATH]` still present — that means the substitution step was
+skipped for that agent, and it must not be dispatched unsubstituted: it would
+silently explore the wrong directory with no error.
+
+**If it doesn't**, there is no separate agent to launch — work through each
+of the four areas below yourself, sequentially, in this same session. The
+prompts still apply as your own working instructions for each pass: treat
+each area as its own isolated pass (don't let findings from one area bleed
+into how you judge another), substitute `[WT_PATH]` with `$WT` as you go, and
+produce the same findings format per pass before moving to Step 3's
+aggregation. The only thing that changes is *who* runs the pass, not what it
+does or what it returns.
 
 ### Agent 1: auth
 

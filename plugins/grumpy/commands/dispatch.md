@@ -115,38 +115,50 @@ State the reasoning in one sentence per selected mode.
 
 ### Single-mode path
 
-If exactly one mode is selected, invoke it as a real Skill call — do **not**
-`cat` the command file and follow its instructions inline. Gate enforcement
-(the `sdlc` plugin's PostToolUse hook that auto-records `grumpy-review` /
-`grumpy-imagine` gates) fires only when the `Skill` tool itself is called with
-a tracked skill name; inlining a command's instructions never makes that
-call, so on a gated branch the gate silently never records:
+If exactly one mode is selected, invoke it the way your harness supports
+invoking one of its own commands from within another (a skill/sub-command
+dispatch mechanism) — do **not** `cat` the command file and follow its
+instructions inline yourself. Gate enforcement (the `sdlc` plugin's
+PostToolUse hook that auto-records `grumpy-review` / `grumpy-imagine` gates)
+fires only when that dispatch mechanism itself is invoked with a tracked
+command/skill name; inlining a command's instructions never makes that call,
+so on a gated branch the gate silently never records. **This gate-recording
+effect is currently Claude Code specific**: the auto-record hook watches for
+Claude Code's own `Skill` tool by name, and has not been ported to other
+hosts (see `sdlc`'s README, "Codex CLI support") — on a host without that
+hook, invoking via a dispatch mechanism vs. inlining makes no difference to
+gate recording either way, since nothing records the gate on that host at
+all yet.
 
 ```
-Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")
+Invoke "grumpy:<mode>" with args "--worktree \"$WT\" --level <level>"
 ```
 
 This is exactly equivalent to the user typing `/grumpy:<mode> --worktree "$WT"
---level <level>` directly — same artifact output, same gate recording.
+--level <level>` directly — same artifact output, same gate recording. If your
+harness has no such mechanism for one command to invoke another, follow that
+command's own instructions inline yourself instead, since there is no
+recorded call to make.
 
 ### Fan-out path
 
-If two or more modes are selected, use `TaskCreate` to create one task per
-mode before dispatching any of them. Mark each task `in_progress` when its
-mode starts and `completed` when it finishes.
+If two or more modes are selected, use your harness's task-tracking feature
+if it has one (one task per mode) — otherwise keep a plain checklist in your
+working notes as you dispatch each mode.
 
 Run the modes **sequentially** (not in parallel — each is already a
 multi-agent pipeline that saturates available capacity):
 
 For each selected mode:
-1. Mark its task `in_progress`.
-2. Invoke it as a real Skill call, same as the single-mode path:
-   `Skill(skill: "grumpy:<mode>", args: "--worktree \"$WT\" --level <level>")`.
+1. Mark it in progress on your task list or checklist.
+2. Invoke it the same way as the single-mode path — via your harness's
+   command/skill dispatch mechanism if it has one:
+   `Invoke "grumpy:<mode>" with args "--worktree \"$WT\" --level <level>"`.
    Each mode still writes its own artifact and — for `review`/`imagine` —
    still records its own gate exactly as a direct invocation would; nothing
    about running inside a fan-out changes that.
 3. Capture the findings (Critical Issues, Serious Concerns, Suggestions).
-4. Mark its task `completed`.
+4. Mark it completed on your task list or checklist.
 
 After all modes complete, synthesize results (see Step 4).
 
@@ -239,8 +251,8 @@ modes in this list:**
   mention it in the verdict as a next step.
 - Fan-out increases runtime significantly. If the diff is clearly dominated by
   one signal, prefer single-mode dispatch and say so.
-- Both paths above call `Skill` directly rather than reading a command file
-  and following it inline, specifically so gate-recording works — see the
-  Single-mode path section above for why.
+- Both paths above use the harness's command/skill dispatch mechanism directly
+  rather than reading a command file and following it inline, specifically so
+  gate-recording works — see the Single-mode path section above for why.
 - `--dry-run` is useful before a large fan-out to confirm the routing makes
   sense without spending the time.

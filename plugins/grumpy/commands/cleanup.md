@@ -80,16 +80,26 @@ those agents. Otherwise launch all four.
 
 ### Step 2: Launch Parallel Agents
 
-Launch agents simultaneously using the Task tool. Each agent gets the project
-context from Step 1 and independently explores the codebase. Every agent
-prompt below uses the `[WT_PATH]` placeholder — substitute it with the
-literal resolved `$WT` path before dispatch, for every agent, not just the
-first. A sub-agent has no access to this command's shell variables, so an
-unsubstituted "explore the project" instruction otherwise means wherever the
-harness happens to start it, not necessarily `$WT`. Before launching, check
-each built prompt for a literal `[WT_PATH]` still present — that means the
-substitution step was skipped for that agent, and it must not be dispatched
-unsubstituted: it would silently explore the wrong directory with no error.
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch one
+agent per focus area simultaneously. Each agent gets the project context from
+Step 1 and independently explores the codebase.
+
+**If it doesn't**, there is no separate agent to launch — work through each
+focus area yourself, sequentially, in this same session, using the same
+prompt template below as your own working instructions for that pass. The
+only thing that changes is *who* runs the pass, not what it does or what it
+returns.
+
+Every agent prompt below uses the `[WT_PATH]` placeholder — substitute it with
+the literal resolved `$WT` path before dispatch (or before starting that pass
+yourself), for every focus area, not just the first. A sub-agent has no
+access to this command's shell variables, so an unsubstituted "explore the
+project" instruction otherwise means wherever the harness happens to start
+it, not necessarily `$WT`. Before launching (or starting a pass yourself),
+check each built prompt for a literal `[WT_PATH]` still present — that means
+the substitution step was skipped, and it must not be run unsubstituted: it
+would silently explore the wrong directory with no error.
 
 #### Agent 1: dead-code
 
@@ -297,23 +307,32 @@ If the user picks "Let me pick individually", present each finding one at a time
 with AskUserQuestion yes/no, including the agent name, description, and file
 reference.
 
-### Step 5: Create Tasks and Dispatch Agents
+### Step 5: Track the Work and Apply the Cleanups
 
-For each selected finding, create a task using TaskCreate:
+Use your harness's task-tracking feature if it has one: create one task per
+selected finding (or per group, if you grouped findings that touch the same
+file — see below), and mark each in-progress/complete as you work through it.
+If your harness has no such feature, keep a plain checklist of the selected
+findings in your own working notes as you go, and update it the same way.
+Each task or checklist item should carry a short description of the cleanup
+(e.g., "Remove unused import in auth.js") and the full finding text,
+including file reference and what needs to be removed or changed.
 
-- `subject`: Short description of the cleanup (e.g., "Remove unused import in
-  auth.js")
-- `description`: Full finding text including file reference and what needs to be
-  removed or changed
-- `activeForm`: Present-tense form (e.g., "Removing unused import from auth.js")
+Group findings that touch the same file into a single task (or checklist
+item) to avoid conflicting edits.
 
-Group findings that touch the same file into a single task to avoid conflicts.
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), dispatch one
+per task. Dispatch **sequentially per file** (to avoid conflicting edits on
+the same file), but **in parallel across different files**.
 
-Dispatch sub-agents via the Task tool. Dispatch **sequentially per file** (to
-avoid conflicting edits on the same file), but **in parallel across different
-files**.
+**If it doesn't**, there is no separate agent to launch — work through each
+task yourself, sequentially, in this same session, following the same
+instructions below. The only thing that changes is *who* applies the
+cleanup, not what it does or what it verifies.
 
-Each sub-agent prompt must include:
+Each sub-agent prompt (or, with no subagent primitive, your own working
+instructions for that task) must include:
 
 - The weary grumpy persona
 - The full finding description with file reference
@@ -336,8 +355,10 @@ After cleaning, verify by reading the changed section back and confirming the fi
 Do NOT commit.
 ```
 
-After each sub-agent completes, update the task status to `completed` using
-TaskUpdate.
+After each task's cleanup lands (whether via a dispatched sub-agent or a pass
+you ran yourself), mark that task complete in your harness's task-tracking
+feature, or check it off in your working notes if you're using a plain
+checklist.
 
 ### Step 6: Commit
 

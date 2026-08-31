@@ -45,12 +45,13 @@ level-appropriate version:
   garbage, call it garbage. Every harsh judgment must be backed by a specific
   technical argument. No softening, no hedging."
 
-The agent prompt examples below show the **grumpy** persona. Replace the opening
-persona line in each prompt with the level-appropriate version above.
+The prompts below show the **grumpy** persona. Replace the opening persona line
+in each prompt with the level-appropriate version above.
 
-For each agent prompt below, replace the opening persona line before issuing it
-as a Task call. The replacement must be applied to every agent — not just the
-first.
+For each prompt below, replace the opening persona line before running it —
+whether that means issuing it to a subagent or working through it yourself in
+this same session (see Step 2). The replacement must be applied to every
+prompt — not just the first.
 
 ## Worktree targeting
 
@@ -108,9 +109,23 @@ worktree when `--worktree` is set. These will be passed directly to agents.
 If the diff is empty: "There's nothing here to imagine. Did you actually write
 any code or just think about it really hard?"
 
-## Step 2: Launch Four Parallel Simulation Agents
+## Step 2: Run Four Simulation Passes
 
-Launch all four agents simultaneously using the Task tool.
+Run one pass per simulation angle below: happy path, state transitions,
+concurrency, observability.
+
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch all
+four agents simultaneously, in parallel for speed, each with its own prompt
+from below.
+
+**If it doesn't**, there is no separate agent to launch — work through each of
+the four prompts yourself, sequentially, in this same session. The prompts
+below still apply: treat each as its own isolated pass (don't let findings
+from one bleed into how you judge another), and produce the same
+CONTEXT/FINDING/HANDLED output per pass before moving to Step 3's aggregation.
+The only thing that changes is *who* runs the pass, not what it does or what
+it returns.
 
 ### Agent 1: Happy Path Simulation (per transport)
 

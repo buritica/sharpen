@@ -87,7 +87,7 @@ For **Significant**:
 
 ## Step 5 — Create the task checklist
 
-Use `TaskCreate` to create all gates as discrete tasks before running any of them. This is the invariant that survives across context windows and agent handoffs.
+Use your harness's task-tracking feature if it has one (one task per gate) — otherwise keep a plain checklist in your working notes as an invariant that survives context resets.
 
 For **Docs-only** (gates vacuously satisfied — no executable change):
 ```
