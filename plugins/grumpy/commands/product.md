@@ -51,12 +51,16 @@ Diff Path and the whole-project path below; otherwise launch all four.
 
 Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere.
 
-Sub-agents launched via the Task tool do not inherit this command's shell
-variables. For the Diff Path, that means the diff must be inlined into each
-prompt as `DIFF_CONTENT`, never handed to the agent as a `git` command to
-run. For the whole-project path, it means every agent prompt's `[WT_PATH]`
-placeholder (see Step 2 below) must be substituted with `$WT`'s literal
-resolved path before the prompt is sent.
+A separate subagent process, if your harness supports spawning one, does not
+inherit this command's shell variables (`$WT`, `$BASE`). For the Diff Path,
+that means the diff must be inlined into each prompt as `DIFF_CONTENT`,
+never handed to the agent as a `git` command to run. For the whole-project
+path, it means every agent prompt's `[WT_PATH]` placeholder (see Step 2
+below) must be substituted with `$WT`'s literal resolved path before the
+prompt is sent. If your harness has no subagent dispatch primitive and
+you're running each pass yourself in this same session instead, the same
+substitution still applies to your own working notes for that pass — keep
+the resolved values on hand rather than re-deriving them per aspect.
 
 ## Scope Detection
 
@@ -105,7 +109,15 @@ Before choosing a path, detect whether there is a diff to review:
 
 ## Diff Path: Launch Parallel Agents
 
-When a diff is detected, launch all four agents simultaneously using the Task tool. Pass `DIFF_CONTENT` directly — agents must not re-fetch the diff.
+When a diff is detected: **if your harness supports spawning independent
+subagents** (a task/agent dispatch primitive that runs separately from this
+conversation), launch all four agents simultaneously, in parallel for speed.
+**If it doesn't**, there is no separate agent to launch — work through each
+of the four prompts below yourself, sequentially, in this same session,
+treating each as its own isolated pass so findings from one lens don't bleed
+into another. The only thing that changes is *who* runs the pass, not what
+it does or what it returns. Either way, pass `DIFF_CONTENT` directly —
+never re-fetch the diff.
 
 ### Diff Agent 1: Experience
 
@@ -245,8 +257,16 @@ those agents. Otherwise launch all four.
 
 ## Step 2: Launch Parallel Agents
 
-Launch agents simultaneously using the Task tool. Each agent independently
-explores the codebase from its product lens. Every agent prompt below uses
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch them
+simultaneously — each agent independently explores the codebase from its
+product lens. **If it doesn't**, there is no separate agent to launch — work
+through each of the four prompts below yourself, sequentially, in this same
+session, treating each as its own isolated pass so findings from one lens
+don't bleed into another. The only thing that changes is *who* runs the
+pass, not what it does or what it returns.
+
+Every agent prompt below uses
 the `[WT_PATH]` placeholder — substitute it with the literal resolved `$WT`
 path before dispatch, for every agent, not just the first. A sub-agent has no
 access to this command's shell variables, so an unsubstituted "explore the

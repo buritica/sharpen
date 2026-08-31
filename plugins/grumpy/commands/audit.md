@@ -55,11 +55,14 @@ obligation as the `wrapper-required` substitution below — a user routed
 entirely to opus because the config file failed to load should learn that
 from the report, not discover it later. Use the `audit` role for
 synthesis/planning and `analysis` for the
-composed reviews. Only `sonnet`/`opus`/`haiku` are natively dispatchable via
-the Task tool's `model` argument; map any role whose model is marked
-`wrapper-required` (e.g. Fable) down to its documented native fallback
-(`opus`) and note the substitution in the report's run header. **Never
-silently downgrade** — say which model actually ran.
+composed reviews. If your harness lets you choose a model per dispatched
+subagent, only `sonnet`/`opus`/`haiku` are natively dispatchable that way;
+map any role whose model is marked `wrapper-required` (e.g. Fable) down to
+its documented native fallback (`opus`) and note the substitution in the
+report's run header. If your harness has no such per-dispatch model
+argument, run every dimension at your own model and say so in the run
+header instead of guessing at a substitution. **Never silently downgrade**
+— say which model actually ran.
 
 ## Phase 1 — Discovery & Mapping (read before judging)
 
@@ -94,9 +97,18 @@ Run the existing grumpy reviews and merge them. Default dimension set:
 `architecture`, `security`, `review` (correctness), `product`, `edge-cases`,
 `cleanup`. `--dimensions a,b,c` restricts to a subset.
 
-Dispatch one sub-agent per dimension **in parallel** via the Task tool, each at
-the `analysis` role's model. Give each the Phase-1 context and instruct it to
-run that dimension's grumpy review over the scope and return findings.
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), dispatch one
+sub-agent per dimension, in parallel, each at the `analysis` role's model.
+Give each the Phase-1 context and instruct it to run that dimension's grumpy
+review over the scope and return findings.
+
+**If it doesn't**, there is no separate agent to dispatch — work through each
+dimension yourself, sequentially, in this same session, at your own model.
+Give yourself the same Phase-1 context per dimension, and run that
+dimension's grumpy review over the scope before moving to the next. The
+finding contract below still applies unchanged. The only thing that changes
+is *who* runs each dimension's pass, not what it does or what it returns.
 
 **Every finding MUST satisfy the finding contract** — this is what makes the
 audit composable and the downstream plan executable:

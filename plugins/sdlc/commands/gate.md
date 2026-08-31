@@ -24,24 +24,27 @@ Run `--unroute` when you finish gating `$WT` and keep working in this session �
 
 ### A skill-gated gate that won't stamp in a long session
 
-If `/simplify` or a `/grumpy:*` skill genuinely ran — real findings, real
-artifacts written — but its gate never landed in `--status`, suspect Skill-tool
-instruction caching before assuming the hook is broken: re-invoking a skill
-already loaded earlier in a long session can make the Skill tool return
-"already loaded above, instructions unchanged" instead of dispatching fresh.
-Reported behavior (sharpen#11) is that `auto-record-skill-gate.py`'s
-PostToolUse hook does not fire for that cached response, since it only fires
-on a genuine dispatch — but this hasn't been pinned down as fully reliable
-across sessions, so a stamp that lands anyway on a re-invocation isn't a sign
-the hook is misbehaving.
+**(Claude Code specific.)** If `/simplify` or a `/grumpy:*` skill genuinely ran
+— real findings, real artifacts written — but its gate never landed in
+`--status`, suspect Claude Code's Skill-tool instruction caching before
+assuming the hook is broken: re-invoking a skill already loaded earlier in a
+long session can make Claude Code's Skill tool return "already loaded above,
+instructions unchanged" instead of dispatching fresh. Reported behavior
+(sharpen#11) is that `auto-record-skill-gate.py`'s PostToolUse hook does not
+fire for that cached response, since it only fires on a genuine dispatch —
+but this hasn't been pinned down as fully reliable across sessions, so a
+stamp that lands anyway on a re-invocation isn't a sign the hook is
+misbehaving. This entire failure mode, and the fix below, is specific to how
+Claude Code's Skill tool caches instructions; it doesn't generalize to other
+hosts.
 
 Fix it forward, in order:
 
 1. **Re-run the skill from a fresh subagent.** A clean context has no cached
-   instructions to short-circuit, so the Skill tool dispatches for real and
-   the hook fires normally. If that subagent isn't the worktree driving the
-   branch's cycle, route it first (`--route-from`, as above) so its stamp
-   lands on the right branch.
+   instructions to short-circuit, so Claude Code's Skill tool dispatches for
+   real and the hook fires normally. If that subagent isn't the worktree
+   driving the branch's cycle, route it first (`--route-from`, as above) so
+   its stamp lands on the right branch.
 2. **Last resort:** `record-gate.py --attest <gate> --reason "<text>"`.
    This stamps the gate on human attestation instead of a hook observation —
    it requires a reason and marks itself in `--status`/`--oneline` with `⚠`
@@ -306,20 +309,20 @@ pyproject.toml [tool.mypy] → mypy .
 
 ## Task tracking
 
-Use `TaskCreate` to create all gates as discrete tasks before running any of them. Mark each complete with `TaskUpdate` as it passes. This is the state that survives context compaction and agent handoffs. Check tasks first when resuming work.
+Use your harness's task-tracking feature if it has one — one task per gate, created before running any of them, marked complete as each passes. This is the state that survives context compaction and agent handoffs; check it first when resuming work. If your harness has no such feature, keep a plain checklist in your working notes instead.
 
 ## Execution
 
 Run each gate in order. After each gate passes:
 1. **For gates 1, 7, and 8 only** — record it using the **Record a gate** block above, always passing `--branch "$BRANCH"` (resolved from `$WT`) so the gate lands on the worktree's branch, not whatever branch the invoking cwd happens to be on. The store is shared per-repo, so the path resolves correctly from any cwd inside the repo. Do **not** run `--record` for gates 2–6: it is refused by the hook and again by the store, and the refusal is a hard tool-call denial, not a no-op.
-2. For the skill-gated gates (2–6) there is nothing to record by hand — but **check that the auto-record actually landed** before moving on:
+2. For the skill-gated gates (2–6) there is nothing to record by hand — but **check that the auto-record actually landed** before moving on (this hook mechanism is Claude Code specific; see the caveats below):
 
    ```bash
    python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --oneline --branch "$BRANCH"
    ```
 
    The hook records on a PostToolUse event. A skip it did not expect — an unreadable or unwritable store, an ambiguous cross-worktree match — exits 2 and says so, so you should see it. The one skip that stays quiet is the normal opt-out: **no cycle for this branch at all**, which looks identical to a clean run. Catching that here costs one command; discovering it at `gh pr create` costs a full re-run of the chain.
-3. Mark the corresponding task complete with `TaskUpdate`
+3. Mark the corresponding task complete (task-tracking feature or plain checklist, per the note above)
 
 On failure:
 1. **Stop.** Do not advance to the next gate.
