@@ -169,6 +169,7 @@ class LocalLLMAdapterTest(MockLLMServer):
                 "stderr": "",
             }
         ]
+        self.assertIsNone(MockLLMHandler.received_body)
         report = la.build_review_report(manifest, results, cwd=self.repo)
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["executor"]["adapter"], "local-llm")
