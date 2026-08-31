@@ -98,6 +98,7 @@ class SessionStartCliTest(unittest.TestCase):
             "1",
             f"{path} was not overwritten by the adapter",
         )
+        return manifest
 
     def test_writes_valid_manifest_without_blocking_session(self):
         result = self.run_adapter()
@@ -116,9 +117,8 @@ class SessionStartCliTest(unittest.TestCase):
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
-        self.assert_manifest_overwritten(legacy_path)
+        legacy_content_after_first_phase = self.assert_manifest_overwritten(legacy_path)
         self.assertFalse(os.path.exists(self.manifest_path))
-        legacy_content_after_first_phase = self.read_manifest(legacy_path)
 
         os.makedirs(os.path.dirname(self.manifest_path))
         self.assert_manifest_overwritten(self.manifest_path)
