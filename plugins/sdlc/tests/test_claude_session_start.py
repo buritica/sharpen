@@ -87,6 +87,14 @@ class SessionStartCliTest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             return json.load(f)
 
+    def assert_manifest_overwritten(self, path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        manifest = self.read_manifest(path)
+        self.assertEqual(manifest.get("protocol_version"), "1", f"{path} was not overwritten by the adapter")
+
     def test_writes_valid_manifest_without_blocking_session(self):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -103,28 +111,11 @@ class SessionStartCliTest(unittest.TestCase):
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
-        with open(legacy_path, "w", encoding="utf-8") as f:
-            json.dump({}, f)
-
-        result = self.run_adapter()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        manifest = self.read_manifest(legacy_path)
-        self.assertEqual(
-            manifest.get("protocol_version"), "1", f"{legacy_path} was not overwritten by the adapter"
-        )
+        self.assert_manifest_overwritten(legacy_path)
         self.assertFalse(os.path.exists(self.manifest_path))
 
         os.makedirs(os.path.dirname(self.manifest_path))
-        with open(self.manifest_path, "w", encoding="utf-8") as f:
-            json.dump({}, f)
-        result = self.run_adapter()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        manifest = self.read_manifest(self.manifest_path)
-        self.assertEqual(
-            manifest.get("protocol_version"),
-            "1",
-            f"{self.manifest_path} was not overwritten by the adapter",
-        )
+        self.assert_manifest_overwritten(self.manifest_path)
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
