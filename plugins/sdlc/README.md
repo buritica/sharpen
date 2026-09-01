@@ -192,9 +192,44 @@ This closes a real, previously-dormant gap: `claude-session-start.py`'s
 capability detection (see "Portable adapters" above) has always checked for
 `plugins/grumpy/skills/{review,imagine,fix}/SKILL.md` to declare those
 capabilities in the v1 manifest, but until these files existed that check
-never found anything — `detect_capabilities()` silently never added
-`review`/`imagine`/`fix` in a real run, only in its own unit tests (which
-inject a stubbed `path_exists`). It's live now.
+never found anything.
+
+**Update**: generating the files alone didn't fully close it. `detect_capabilities()`
+built the sibling-plugin path by going one level up from its own
+`${CLAUDE_PLUGIN_ROOT}` — correct only in a flat dev checkout where
+`plugins/sdlc` and `plugins/grumpy` sit as direct siblings. This repo's own
+`CLAUDE.md` already documents Claude Code's plugin cache as version-nested
+(`cache/<marketplace>/<plugin>/<version>/`) in its "Hook authoring" note, and
+that's now directly confirmed for Codex CLI too — a live installed Codex
+plugin cache showed the join silently resolving to
+`cache/sharpen/sdlc/grumpy/...` (one level too shallow) and never matching.
+`review`/`imagine`/`fix` were still silently absent from every real manifest;
+the gap this section describes stayed open even after this PR shipped,
+invisible to the unit tests because they stub `path_exists` rather than
+exercising real path construction. Now fixed to try both the flat-checkout
+path and a version-glob for the nested one, with an `SDLC_<PLUGIN>_ROOT` env
+override (e.g. `SDLC_GRUMPY_ROOT`) as an escape hatch if a third host's cache
+layout doesn't match either shape — point it directly at the sibling
+plugin's root without waiting on a new sdlc release.
+
+This still builds a cross-plugin path from `${CLAUDE_PLUGIN_ROOT}`, which
+CLAUDE.md's "Hook authoring" note otherwise tells contributors not to do —
+deliberately, here: that note's alternative ("detect sibling capabilities by
+command availability, the way `/sdlc:gate` detects grumpy") relies on an
+agent consulting its own list of available skills, and this file is a plain
+subprocess with no such list. Filesystem detection, widened rather than
+abandoned, is what's actually available to it. Also not fixed: multiple
+cached versions of the sibling plugin aren't disambiguated — the glob
+matches any version directory with the skill file present, so a stale
+leftover after an upgrade could false-positive a capability that's no
+longer there.
+
+If `review`/`imagine`/`fix` are missing from the manifest and it's not
+obvious why, set `SDLC_DEBUG=1` before the SessionStart hook runs: it prints
+one stderr line per skill-backed capability naming which candidate path (if
+any) matched, so you don't have to re-derive the flat/nested/override paths
+by hand the way finding this bug in the first place required. Off by
+default — this hook is quiet on success by design.
 
 ## Composability
 
