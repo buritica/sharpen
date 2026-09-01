@@ -400,8 +400,13 @@ def main():
         # last checked.
         invalidated = holder.get("invalidated") or []
         invalidated_note = (
-            f" — this fixes code inline, so {', '.join(invalidated)} no "
-            "longer verify the current state and must run again"
+            # "can" edit, not "did": this fires unconditionally whenever the
+            # gate records, including a clean "no actionable findings" pass
+            # that touched nothing — the hook has no way to tell the two
+            # apart (see gate_store.CODE_MUTATING_GATES), so the wording
+            # can't claim more certainty than that.
+            f" — this gate can fix code inline, so {', '.join(invalidated)} "
+            "no longer verify the current state and must run again"
             if invalidated
             else ""
         )

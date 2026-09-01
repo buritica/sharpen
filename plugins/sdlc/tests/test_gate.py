@@ -242,6 +242,43 @@ class CodeMutatingGateInvalidationTest(unittest.TestCase):
         self.assertNotIn("typecheck", gates)
 
 
+class RecordGateAndDiffTest(unittest.TestCase):
+    """record_gate_and_diff's own return-value contract, tested directly
+    rather than only indirectly through a subprocess-level hook test — a
+    regression here (unsorted list, wrong names) wouldn't necessarily show
+    up as a failure at that higher level."""
+
+    def setUp(self):
+        self.d = {}
+        gs.init_gates(self.d, "feat/x", "small-medium")
+
+    def test_returns_sorted_names_of_what_it_cleared(self):
+        for g in ("typecheck", "tests", "lint"):  # deliberately out of order
+            gs.record_gate(self.d, "feat/x", g)
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "simplify", authorized=True
+        )
+        self.assertEqual(invalidated, ["lint", "tests", "typecheck"])
+
+    def test_nothing_to_invalidate_returns_empty_list(self):
+        # The very first mutating-gate run on a fresh cycle: nothing was
+        # recorded yet, so there's nothing to clear. Must not report a
+        # phantom invalidation the caller would then surface as "must run
+        # again" for gates that were never run in the first place.
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "simplify", authorized=True
+        )
+        self.assertEqual(invalidated, [])
+
+    def test_non_mutating_gate_invalidates_nothing(self):
+        gs.record_gate(self.d, "feat/x", "tests")
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "grumpy-review", authorized=True
+        )
+        self.assertEqual(invalidated, [])
+        self.assertIn("tests", self.d["feat/x"]["gates"])
+
+
 class HookOutTest(unittest.TestCase):
     """The output convention itself. Reached only through subprocesses
     otherwise, so a mistake in the payload shape or the log prefix would only
@@ -1124,6 +1161,17 @@ class AutoRecordEdgeTest(unittest.TestCase):
         # cross-worktree write, unlike an ordinary same-branch record.
         self.assertEqual(r.returncode, 2, r.stderr.decode())
         self.assertIn("must run again", r.stderr.decode())
+
+    def test_fix_says_nothing_extra_when_nothing_was_recorded_to_clear(self):
+        # The first mutating gate on a fresh cycle: tests/lint/typecheck
+        # were never recorded, so there's nothing to invalidate — the
+        # ordinary same-branch record path (quiet, exit 0) applies, not the
+        # "must run again" surfacing.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.skill("grumpy:review")
+        r = self.skill("grumpy:fix")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn("must run again", r.stderr.decode())
 
     def test_idempotent_second_fire_noop(self):
         run_cli(["--init", "small-medium"], self.repo, self.gp)
@@ -2593,6 +2641,28 @@ class CliAttestTest(unittest.TestCase):
         r = run_cli(["--attest", "simplify"], self.repo, self.gp)
         self.assertEqual(r.returncode, 1)
         self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_attesting_a_mutating_gate_surfaces_the_clear_in_remaining(self):
+        # End-to-end through the actual subprocess, not an in-memory dict:
+        # attest_gate's invalidation must be visible in the CLI's own
+        # user-facing "Remaining: ..." line, the same way a hook-recorded
+        # invalidation is visible in --status.
+        for g in ("tests", "lint", "typecheck"):
+            run_cli(["--record", g], self.repo, self.gp)
+        r = run_cli(
+            ["--attest", "simplify", "--reason", "cache hit, re-ran manually"],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        out = r.stderr.decode()
+        self.assertIn("Remaining:", out)
+        for g in ("tests", "lint", "typecheck"):
+            self.assertIn(g, out)
+        gates = read_json(self.gp)["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
 
     def test_reason_flag_rejected_outside_attest(self):
         r = run_cli(["--record", "tests", "--reason", "nope"], self.repo, self.gp)
