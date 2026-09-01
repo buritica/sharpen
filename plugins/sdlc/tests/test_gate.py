@@ -1041,6 +1041,45 @@ class AutoRecordEdgeTest(unittest.TestCase):
         self.assertEqual(first, second)  # not rewritten
 
 
+class RenamedSkillRedirectTest(unittest.TestCase):
+    """ "simplify" is a real, unrelated Claude-Code-bundled skill that used
+    to double as gate 2's recorder before 4.10.4. A stale invocation of it
+    must not silently join the ordinary untracked-skill quiet path."""
+
+    def setUp(self):
+        self.repo = make_repo()
+        self.gp = os.path.join(self.repo, ".claude", "data", "gates.json")
+
+    def skill(self, name):
+        return run_hook(
+            AUTO,
+            {"tool_name": "Skill", "tool_input": {"skill": name}},
+            self.repo,
+            self.gp,
+        )
+
+    def test_old_name_surfaces_a_redirect_instead_of_recording(self):
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        r = self.skill("simplify")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn("grumpy:simplify", r.stderr.decode())
+        self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_old_name_surfaces_even_with_no_cycle(self):
+        # Distinct from test_no_cycle_does_not_create_store above: a renamed
+        # skill's redirect is a "you're doing this wrong" signal independent
+        # of whether a cycle exists to record into, so it still surfaces —
+        # and still must not create a store file, same as any other no-op.
+        r = self.skill("simplify")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertFalse(os.path.exists(self.gp))
+
+    def test_new_name_records_normally(self):
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.skill("grumpy:simplify")
+        self.assertIn("simplify", read_json(self.gp)["feat/x"]["gates"])
+
+
 class AutoInitTest(unittest.TestCase):
     """auto-init-gate-cycle.py: PostToolUse Bash hook that initializes a gate
     cycle on the first git commit to a non-default branch."""

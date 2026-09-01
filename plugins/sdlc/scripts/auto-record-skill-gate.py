@@ -270,6 +270,18 @@ def main():
     if data_in.get("tool_name") != "Skill":
         return 0
     skill = data_in.get("tool_input", {}).get("skill")
+    if skill in gs.RENAMED_SKILLS:
+        # Distinct from the ordinary "untracked skill" quiet return below:
+        # this name used to record a gate and a caller may reasonably expect
+        # it still does. Surface it so the gap doesn't read as a gate that
+        # simply never got attempted.
+        new_name = gs.RENAMED_SKILLS[skill]
+        return ho.notify(
+            "auto-record",
+            f'"{skill}" was replaced by "{new_name}" — that gate did not '
+            f"record. Run {new_name} instead.",
+            surface=True,
+        )
     if not skill or skill not in gs.SKILL_TO_GATE:
         return 0  # untracked skill — don't even touch the store file
 

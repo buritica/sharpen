@@ -112,6 +112,20 @@ SKILL_FOR_GATE = {
 }
 BASH_GATES = [g for g in ALL_GATE_NAMES if g not in SKILL_FOR_GATE]
 
+# Old skill name -> its replacement, for a name that used to be a key in
+# SKILL_TO_GATE and no longer is. "simplify" is a real, generally-useful
+# Claude-Code-bundled skill unrelated to this rename — before 4.10.4 it
+# happened to double as gate 2's recorder because SKILL_TO_GATE keyed on
+# that exact literal string. A user acting on habit (or a stale doc, or a
+# muscle-memory `/simplify`) after upgrading gets a skill that still runs
+# fine and reports nothing wrong, while gate 2 silently never records —
+# `auto-record-skill-gate.py` checks this map before its ordinary "untracked
+# skill, stay quiet" return, specifically to catch that one name. Remove an
+# entry once its old name has had a full release cycle to fall out of use.
+RENAMED_SKILLS = {
+    "simplify": "grumpy:simplify",  # replaced in 4.10.4
+}
+
 
 def gate_lists_hint():
     """The two-line "which gates are which" tail, shared by every refusal."""

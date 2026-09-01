@@ -106,6 +106,7 @@ class HistoricalGateSemanticsTest(unittest.TestCase):
                 "grumpy:fix": "grumpy-fix",
             },
         )
+        self.assertEqual(gs.RENAMED_SKILLS, {"simplify": "grumpy:simplify"})
 
     def test_direct_recording_requires_authorization_only_for_skill_gates(self):
         data = {}

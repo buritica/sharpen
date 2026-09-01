@@ -275,6 +275,21 @@ response as errored and say so in the report rather than silently dropping
 its section — a metric cluster that never got measured is different from one
 that measured clean, and the report must not conflate them.
 
+**Empty output from an agent is ambiguous by design** — the prompts above say
+"only emit a line when a metric fails," so a genuinely clean cluster and a
+cluster whose agent errored, timed out, or never ran both look identical: no
+lines. Before treating silence as a clean pass, confirm the agent call itself
+actually completed (your harness's own signal for a failed/dropped
+dispatch — not the pipe-line content). If a dispatch itself failed, mark that
+cluster's metrics `unmeasured` in the scorecard, the same as no tool being
+available — never render it as passing.
+
+A line with a MEASURED field claiming `measured:<tool>` is only trustworthy
+if that tool actually ran in this pass — if you're aggregating and can't
+confirm that (a sub-agent claimed a tool ran but the surrounding response
+gives you no reason to believe it), downgrade the line to `estimated` in the
+scorecard rather than repeating an unverified claim as fact.
+
 When multiple lines report the same metric (three functions over cyclomatic
 complexity, five dead-code findings), the scorecard's "Worst observed" column
 takes the single highest numeric value for a per-function metric (complexity,
@@ -379,6 +394,15 @@ If `$PLAN` does not exist, skip this step silently.
 Unlike `/grumpy:review` and `/grumpy:imagine`, this gate fixes inline rather
 than deferring to a separate `/grumpy:fix` pass — gate 2 in the sdlc chain
 passes on "no actionable findings, or findings fixed," not on a report alone.
+
+Group findings that touch the same file into one fix pass, and dispatch
+**sequentially per file, in parallel across different files** — the same
+safeguard `/grumpy:cleanup` and `/grumpy:fix` both use, for the same reason:
+findings from four independent parallel measurement agents can easily name
+the same file, and two uncoordinated fixes landing on it at once will
+corrupt or silently drop one of them. If your harness has no independent-
+subagent primitive, this is moot — you're already applying every fix
+yourself, one at a time, in this same session.
 
 For each 🚨 Must Fix and ⚠️ Should Fix finding: make the minimal change that
 brings the metric under threshold — extract a function to cut cyclomatic/
