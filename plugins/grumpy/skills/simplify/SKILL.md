@@ -71,15 +71,30 @@ never presented as if it were a real number when it isn't one.
 
 ## Phase 0: Gather the diff and changed files
 
+Check HEAD state first: run `git -C "$WT" rev-parse --abbrev-ref HEAD`. If it
+returns `HEAD`, respond: "You're in detached HEAD state. Attach to a branch
+before running simplify — I can't reliably determine what you're diffing
+against." and stop.
+
+Resolve `BASE`, trying each candidate in order until one exists (same
+fallback chain `/grumpy:review` uses, since a bare `origin/HEAD` symref isn't
+always set):
+
 ```bash
 WT="${WT:-.}"
-git -C "$WT" diff @{upstream}...HEAD 2>/dev/null || git -C "$WT" diff origin/main...HEAD 2>/dev/null || git -C "$WT" diff HEAD~1
+BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+if [ -z "$BASE" ]; then
+  for candidate in origin/main origin/master main master; do
+    git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+  done
+fi
 ```
 
-If there are uncommitted changes, or the range diff is empty, also run
-`git -C "$WT" diff HEAD` and include the working-tree changes in scope — the
-gate often runs before the commit. If a PR number, branch name, or file path
-was passed as an argument, use that as the diff target instead.
+If `$BASE` resolved, run `git -C "$WT" diff "$BASE"...HEAD`. If there are
+uncommitted changes, or that diff is empty, also run `git -C "$WT" diff HEAD`
+and include the working-tree changes in scope — the gate often runs before
+the commit. If `$BASE` never resolved and there is no working-tree diff
+either, fall back to `git -C "$WT" diff HEAD~1`.
 
 Also collect the full list of changed files
 (`git -C "$WT" diff --name-only <same range>`) — several of these checks
@@ -172,7 +187,7 @@ Tooling available in this project: [TOOLING]
 For each changed file/function:
 - Test Coverage (threshold: 100% of changed lines) — run the detected coverage tool scoped to the changed files if possible; otherwise read the existing tests and estimate which changed branches/lines have no test exercising them.
 - Surviving mutants (threshold: 0) — run the detected mutation-testing tool scoped to the changed files if one exists and is fast enough to run now; otherwise mark unmeasured — do not guess a mutation score, that is not something a human can eyeball.
-- CRAP score (threshold: < 25) — CRAP = complexity^2 * (1 - coverage)^3 + complexity. You need both a complexity number and a coverage fraction per function to compute this; pull complexity from Agent 1's territory only if you can compute it yourself, otherwise estimate both together and say so.
+- CRAP score (threshold: < 25) — CRAP = complexity^2 * (1 - coverage)^3 + complexity. You need both a complexity number and a coverage fraction per function to compute this; you run in parallel with the complexity-and-size agent and cannot read its output, so compute your own complexity number the same way it does (count independent branches per function) rather than waiting on it, and mark the whole CRAP finding `estimated` whenever either input is your own estimate rather than a tool's.
 
 Return findings as pipe-delimited lines, one per finding:
 
@@ -199,11 +214,12 @@ Tooling available in this project: [TOOLING]
 
 Return findings as pipe-delimited lines, one per finding:
 
-SEVERITY|file:line|what is dead or duplicated, and where the original lives if redundant|MEASURED|domain
+SEVERITY|file:line|count=1, what is dead or duplicated, and where the original lives if redundant|MEASURED|domain
 
 - SEVERITY is CRIT (dead code that will mislead a future reader into thinking it's load-bearing), WARN (redundant logic that will drift out of sync with its twin), or NOTE.
 - MEASURED is `measured:<tool>` or `estimated` (dead/redundant code is close to binary — mark `estimated` only when you're inferring from a Grep rather than a tool that resolves references properly).
 - domain is `dead-code` or `redundant-code`.
+- Each line is exactly one instance (`count=1`) — the scorecard's "worst observed" number for these two metrics is the total line count per domain, not a per-line value, so do not bundle multiple instances into one line just because they're related.
 
 Prefer high-confidence findings — a false "dead code" claim on something called dynamically is worse than missing a genuinely dead branch.
 
@@ -223,10 +239,11 @@ Tooling available in this project: [TOOLING]
 
 Return findings as pipe-delimited lines, one per finding:
 
-SEVERITY|file:line|the untyped/erased value and what it should be typed as instead|MEASURED|type-safety
+SEVERITY|file:line|count=1, the untyped/erased value and what it should be typed as instead|MEASURED|type-safety
 
 - SEVERITY is CRIT (a public API boundary erased to any/unknown), WARN (an internal value erased when a real type was available), or NOTE (a narrow, arguably-justified escape hatch).
 - MEASURED is `measured:<tool>` or `estimated` (a Grep-based sweep without a type checker running).
+- Each line is exactly one instance (`count=1`) — the scorecard's "worst observed" number for this metric is the total line count, same reasoning as the dead-code/redundant-code agent above.
 
 No prose, no markdown headers, no summary — just the pipe lines.
 ```
@@ -244,9 +261,21 @@ response as errored and say so in the report rather than silently dropping
 its section — a metric cluster that never got measured is different from one
 that measured clean, and the report must not conflate them.
 
+When multiple lines report the same metric (three functions over cyclomatic
+complexity, five dead-code findings), the scorecard's "Worst observed" column
+takes the single highest numeric value for a per-function metric (complexity,
+Halstead difficulty, LOC/file, CRAP) and the total count for a
+count-based metric (dead code, redundant code, any/unknown types, surviving
+mutants) — never an arbitrary pick of whichever line was read first. List the
+file:location of the value actually reported, not just any offender.
+
 ## Phase 3: Aggregate into a scorecard and findings
 
-Build a scorecard from every returned line, one row per metric:
+Build a scorecard from every returned line, one row per metric. Status is ✅
+(measured or estimated, under threshold), ⚠️ (over threshold), 🚨 (more than
+double the threshold, or a CRIT-severity finding), or ⚪ (unmeasured — no tool
+available and no honest estimate possible). An ⚪ row is not a pass; say so in
+the verdict.
 
 ```markdown
 # Simplify: [Brief Description]
@@ -267,11 +296,6 @@ _[One grumpy sentence on the overall state of the numbers]_
 | Dead code | 0 | ... | ... | ... |
 | Redundant code | 0 | ... | ... | ... |
 | `any`/`unknown` types | 0 | ... | ... | ... |
-
-Status is ✅ (measured or estimated, under threshold), ⚠️ (over threshold), 🚨
-(more than double the threshold, or a CRIT-severity finding), or ⚪ (unmeasured
-— no tool available and no honest estimate possible). An ⚪ row is not a pass;
-say so in the verdict.
 
 ## 🚨 Must Fix
 
@@ -309,6 +333,32 @@ mkdir -p "$ARTIFACT_DIR"
 
 Write the complete report (from `# Simplify:` through `## Verdict`) to
 `$ARTIFACT_DIR/simplify.md` using the Write tool.
+
+## Phase 3c: Update the Plan
+
+If a plan artifact exists for the current branch, append a summary to its
+`## Notes` section:
+
+```bash
+WT="${WT:-.}"
+BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
+GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
+PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"
+```
+
+If `$PLAN` exists, append under `## Notes`:
+
+```markdown
+### Simplify — YYYY-MM-DD
+- **Verdict**: <ship it / fix first / needs a real refactor>
+- **Failing metrics**: <one-line list, or "none">
+- **Unmeasured**: <metrics with no tooling available, or "none">
+```
+
+Keep it to 3–5 lines. The full scorecard is in `$ARTIFACT_DIR/simplify.md` —
+the plan note is a pointer, not a duplicate.
+
+If `$PLAN` does not exist, skip this step silently.
 
 ## Phase 4: Apply the fixes
 

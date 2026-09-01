@@ -171,7 +171,7 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --record <gate-name> --bran
 
 Re-run `--init` with the same tier — it clears all timestamps (the route survives, but pass `--route-from` anyway so the reset is identical to the init):
 
-**Know the price before you type it.** A reset clears the skill-gated gates too, and those can only be re-earned by running their skills again — there is no `--record` for them. On a `small-medium` cycle that is four grumpy runs (`/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, and `/grumpy:fix` twice). That is the correct cost when the code actually changed (a gate that passed against different code proved nothing), but it means "just re-init" is not a cheap reflex. Batch your fixes and reset once.
+**Know the price before you type it.** A reset clears the skill-gated gates too, and those can only be re-earned by running their skills again — there is no `--record` for them. On a `small-medium` cycle that is five invocations across four grumpy skills (`/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, and `/grumpy:fix` twice — once after review, once after imagine). That is the correct cost when the code actually changed (a gate that passed against different code proved nothing), but it means "just re-init" is not a cheap reflex. Batch your fixes and reset once.
 
 ```bash
 WT="${WT:-.}"

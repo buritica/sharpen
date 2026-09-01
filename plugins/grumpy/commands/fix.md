@@ -67,7 +67,8 @@ ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 
 Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
 `audit.md`, `review.md`, `imagine.md`, `architecture.md`, `edge-cases.md`,
-`product.md`, `security.md`, `cleanup.md`, `simplify.md` (like `cleanup.md`,
+`product.md`, `security.md`, `cleanup.md`, `simplify.md` (unlike `cleanup.md`,
+which stops at a report and waits for the user to pick what to clean up,
 `/grumpy:simplify` already fixes its own Must-Fix/Should-Fix findings inline —
 this artifact is mainly the leftover 🤔 Worth Discussing bucket, plus anything
 its own fix pass skipped as out of scope), `dispatch.md` (a fan-out synthesis —
