@@ -21,6 +21,7 @@ SessionStart capability-detection failure never blocks the session.
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 import gate_store as gs
@@ -76,12 +77,24 @@ def build_manifest(capabilities):
 
 
 def write_manifest(path, manifest):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    # Same atomic-write pattern as gate_store.save_store: tempfile.mkstemp
+    # gives a kernel-guaranteed unique name (safe across concurrent writers,
+    # including same-pid threads), and the finally block removes the temp
+    # file if json.dump raises before os.replace runs.
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix="capabilities-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass  # never let cleanup mask the original error
 
 
 def main():
