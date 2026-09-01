@@ -87,22 +87,39 @@ Automatically detect what to analyze. No questions:
 After determining the correct diff command, run it capped at 200000
 characters (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and
 capture the output as `DIFF_CONTENT`. This diff gets inlined into every one
-of the three parallel agent prompts below, uncapped it multiplies token cost
+of the three parallel passes below, uncapped it multiplies token cost
 by the agent count on a large diff — the cap bounds that the same way
 dispatch already does for its own diff capture. Also capture the diff base
-as `DIFF_BASE`. Sub-agents launched via the Task tool do not inherit this
-command's shell variables (`$WT`), so they cannot re-run `git -C "$WT" diff`
-themselves — the diff must be inlined into each agent's prompt (see below),
-never handed to the agent as a command to execute.
+as `DIFF_BASE`. A separate subagent process, if you launch one for a pass,
+does not inherit this command's shell variables (`$WT`), so it cannot re-run
+`git -C "$WT" diff` itself — the diff must be inlined into each agent's
+prompt (see below), never handed to the agent as a command to execute — or,
+if you're running each pass yourself in one session (see Step 2), kept in
+your own working notes for that pass so you don't re-derive it per angle.
 
 If the diff is empty: "There's nothing here. Did you actually write any code or
 just think about it really hard?"
 
-## Step 2: Launch Three Parallel Agents
+## Step 2: Run Three Edge Case Passes
 
-Launch all three agents simultaneously using the Task tool.
+Run one pass per angle below: code, product/outcome, and security. Each pass
+MUST review in the grumpy principal engineer voice—skeptical, direct,
+exasperated.
 
-### Agent 1: Code Edge Cases
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch one
+per angle, in parallel for speed, each with its own prompt built from the
+templates below.
+
+**If it doesn't**, there is no separate agent to launch — work through each
+angle yourself, sequentially, in this same session. The templates below
+still apply: treat each angle as its own isolated pass (don't let findings
+from one angle bleed into how you judge another), and produce the same
+findings format per pass before moving to Step 3's aggregation. The only
+thing that changes is *who* runs the pass, not what it does or what it
+returns.
+
+### Angle 1: Code Edge Cases
 
 Prompt:
 
@@ -135,7 +152,7 @@ Return findings as:
 Be specific: every finding must state what (the bug), where (`file:line`), and why (concrete consequence — "returns 500", not "may fail"). Prefix observed behavior with `[fact]`, inferences with `[judgment]`.
 ```
 
-### Agent 2: Product/Outcome Edge Cases
+### Angle 2: Product/Outcome Edge Cases
 
 Prompt:
 
@@ -168,7 +185,7 @@ Return findings as:
 Be specific: every finding must state what (the bug), where (`file:line`), and why (concrete consequence — "returns 500", not "may fail"). Prefix observed behavior with `[fact]`, inferences with `[judgment]`.
 ```
 
-### Agent 3: Security Edge Cases
+### Angle 3: Security Edge Cases
 
 Prompt:
 

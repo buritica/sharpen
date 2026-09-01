@@ -107,13 +107,13 @@ KNOWN_HOOK_EVENTS = {
 }
 
 
-def check_hooks(plugin_dir, name):
-    hooks_json = os.path.join(plugin_dir, "hooks", "hooks.json")
+def _check_hooks_file(hooks_json, plugin_dir, name, script_root_var, script_root_dir):
     if not os.path.isfile(hooks_json):
         return
     data = load_json(hooks_json)
     if not data:
         return
+    label = "{}/{}".format(name, os.path.basename(hooks_json))
     # A warning, not an error: KNOWN_HOOK_EVENTS is this checker's best
     # knowledge, not Claude Code's own source of truth, and a false error
     # here would block a legitimate new event this list hasn't caught up to.
@@ -122,18 +122,49 @@ def check_hooks(plugin_dir, name):
             warn(
                 '{}: hooks.json has unrecognized event "{}" — typo, or a '
                 "new event this checker's allowlist needs updating for?".format(
-                    name, event
+                    label, event
                 )
             )
-    # Collect referenced scripts and confirm they exist on disk.
+    # Collect referenced scripts and confirm they exist on disk. The var
+    # reference may carry bash's `:?message` unset-error syntax (see
+    # codex-hooks.json), not just a bare `${VAR}` — `[^}]*` skips over
+    # that optional suffix without swallowing the following `/script.py`.
     blob = json.dumps(data)
-    scripts = set(re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.(?:sh|py))", blob))
+    pattern = r"\$\{" + re.escape(script_root_var) + r"[^}]*\}/(\S+?\.(?:sh|py))"
+    scripts = set(re.findall(pattern, blob))
     for ref in scripts:
-        script = os.path.join(plugin_dir, ref)
+        script = os.path.join(script_root_dir, ref)
         if not os.path.isfile(script):
-            err("{}: hooks.json references missing script {}".format(name, ref))
+            err("{}: references missing script {}".format(label, ref))
         elif ref.endswith(".py"):
-            check_local_imports(script, ref, name)
+            check_local_imports(script, ref, label)
+
+
+# One row per host-flavored hooks manifest this checker knows about. Each
+# resolves its own scripts against a different env var and root — Codex has
+# no plugin-root concept, so codex-hooks.json (see
+# plugins/sdlc/hooks/codex-hooks.json) points SDLC_SCRIPTS_ROOT at scripts/
+# directly rather than the plugin root. A future host adds a row here, not
+# another hand-copied call.
+HOOK_MANIFESTS = (
+    ("hooks.json", "CLAUDE_PLUGIN_ROOT", lambda plugin_dir: plugin_dir),
+    (
+        "codex-hooks.json",
+        "SDLC_SCRIPTS_ROOT",
+        lambda plugin_dir: os.path.join(plugin_dir, "scripts"),
+    ),
+)
+
+
+def check_hooks(plugin_dir, name):
+    for filename, script_root_var, script_root_dir in HOOK_MANIFESTS:
+        _check_hooks_file(
+            os.path.join(plugin_dir, "hooks", filename),
+            plugin_dir,
+            name,
+            script_root_var,
+            script_root_dir(plugin_dir),
+        )
 
 
 def check_local_imports(script, ref, name):

@@ -92,10 +92,13 @@ count on a large diff — the cap bounds that the same way dispatch already
 does for its own diff capture. Also capture the diff base as `DIFF_BASE`
 (e.g., 'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's
 appended separately in the git command), 'staged changes', 'unstaged
-changes', or 'HEAD~1'). These will be passed directly to agents — sub-agents
-launched via the Task tool do not inherit this command's shell variables
-(`$WT`, `$BASE`), so they cannot re-run `git -C "$WT" diff` themselves; the
-diff must be inlined into each agent's prompt.
+changes', or 'HEAD~1'). These will be passed directly to agents — a separate
+subagent process, if you launch one for a review pass, does not inherit this
+command's shell variables (`$WT`, `$BASE`), so it cannot re-run
+`git -C "$WT" diff` itself; the
+diff must be inlined into each agent's prompt (or, if you're running each
+review pass yourself in one session — see Step 3 — into your own working
+notes for that pass, so you don't re-derive it per aspect).
 
 If the diff is empty, respond: "There's nothing here. Did you actually write any
 code or just think about it really hard?"
@@ -123,12 +126,25 @@ Based on the changed files, determine which review aspects apply:
 If the user passed specific aspects in `$ARGUMENTS`, only run those. Otherwise
 run all applicable reviews.
 
-## Step 3: Launch Review Agents
+## Step 3: Run Specialized Review Passes
 
-Launch specialized review agents using the Task tool. Each agent MUST review in
-the grumpy principal engineer voice—skeptical, direct, exasperated.
+Run one specialized review pass per applicable review aspect. Each pass MUST
+review in the grumpy principal engineer voice—skeptical, direct, exasperated.
 
-For each applicable review aspect, launch a Task agent with:
+**If your harness supports spawning independent subagents** (a task/agent
+dispatch primitive that runs separately from this conversation), launch one
+per applicable aspect, in parallel for speed, each with its own prompt built
+from the template below.
+
+**If it doesn't**, there is no separate agent to launch — work through each
+applicable aspect yourself, sequentially, in this same session. The template
+below still applies: treat each aspect as its own isolated pass (don't let
+findings from one aspect bleed into how you judge another), and produce the
+same pipe-delimited output per pass before moving to Step 4's aggregation.
+The only thing that changes is *who* runs the pass, not what it does or what
+it returns.
+
+For each applicable review aspect, the pass needs:
 
 - The diff content or instructions to obtain it
 - The list of changed files
@@ -136,7 +152,8 @@ For each applicable review aspect, launch a Task agent with:
 - Instructions to write findings in the grumpy voice with specific file:line
   references
 
-Launch agents **in parallel** for speed. Each agent prompt must include:
+A subagent's prompt (or, with no subagent primitive, your own working
+instructions for that pass) must include:
 
 - The persona: "You are a grumpy principal engineer who's been paged at 3am too
   many times..."
