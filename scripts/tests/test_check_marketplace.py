@@ -21,17 +21,24 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKER = os.path.join(HERE, "..", "check-marketplace.py")
+GENERATE_SKILL = os.path.join(HERE, "..", "generate-skill.py")
+FRONTMATTER = os.path.join(HERE, "..", "frontmatter.py")
 
 
 def make_marketplace(plugins):
     """A tempdir laid out like this repo: .claude-plugin/marketplace.json,
     plugins/<name>/.claude-plugin/plugin.json, and a copy of the real
-    checker under scripts/. `plugins` is {name: {"version": ..., "hooks":
-    {...} or None, "hook_scripts": {filename: source}}}."""
+    checker under scripts/ (plus generate-skill.py/frontmatter.py, since
+    check_skills imports the former via importlib — its filename has a dash
+    so it can't be a normal `import`). `plugins` is {name: {"version": ...,
+    "hooks": {...} or None, "hook_scripts": {filename: source}, "commands":
+    {filename: source}}}."""
     root = tempfile.mkdtemp()
     os.makedirs(os.path.join(root, "scripts"))
     os.makedirs(os.path.join(root, ".claude-plugin"))
     shutil.copy(CHECKER, os.path.join(root, "scripts", "check-marketplace.py"))
+    shutil.copy(GENERATE_SKILL, os.path.join(root, "scripts", "generate-skill.py"))
+    shutil.copy(FRONTMATTER, os.path.join(root, "scripts", "frontmatter.py"))
     entries = []
     for name, spec in plugins.items():
         pdir = os.path.join(root, "plugins", name)
@@ -56,6 +63,11 @@ def make_marketplace(plugins):
             sdir = os.path.join(pdir, "scripts")
             os.makedirs(sdir, exist_ok=True)
             with open(os.path.join(sdir, fn), "w") as f:
+                f.write(source)
+        for fn, source in spec.get("commands", {}).items():
+            cdir = os.path.join(pdir, "commands")
+            os.makedirs(cdir, exist_ok=True)
+            with open(os.path.join(cdir, fn), "w") as f:
                 f.write(source)
     with open(os.path.join(root, ".claude-plugin", "marketplace.json"), "w") as f:
         json.dump({"plugins": entries}, f)
@@ -201,6 +213,77 @@ class CodexHooksTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         r = run(root)
         self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+
+class SkillsTest(unittest.TestCase):
+    """check_skills calls generate_skill.check_one() in-process (see
+    check-marketplace.py) — a commands/*.md file with no matching, up-to-date
+    skills/<name>/SKILL.md must fail the overall check."""
+
+    COMMAND_SOURCE = '---\ndescription: "Does foo."\n---\n\nBody.\n'
+
+    def test_plugin_with_no_commands_dir_is_unaffected(self):
+        root = make_marketplace({"foo": {}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_missing_skill_md_is_an_error(self):
+        root = make_marketplace({"foo": {"commands": {"bar.md": self.COMMAND_SOURCE}}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("missing", out)
+        self.assertIn("bar", out)
+
+    def test_up_to_date_skill_md_passes(self):
+        root = make_marketplace({"foo": {"commands": {"bar.md": self.COMMAND_SOURCE}}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        subprocess.run(
+            [
+                sys.executable,
+                os.path.join(root, "scripts", "generate-skill.py"),
+                "--write-all-in",
+                os.path.join(root, "plugins", "foo"),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_stale_skill_md_is_an_error(self):
+        root = make_marketplace({"foo": {"commands": {"bar.md": self.COMMAND_SOURCE}}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        skill_dir = os.path.join(root, "plugins", "foo", "skills", "bar")
+        os.makedirs(skill_dir)
+        with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+            f.write('---\nname: bar\ndescription: "stale"\n---\n\nOld body.\n')
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("stale", out)
+
+    def test_malformed_command_frontmatter_is_an_error_not_a_crash(self):
+        # check_skills's `except (OSError, ValueError)` branch — a command
+        # file generate_skill.check_one() can't even parse must surface as
+        # a normal collected error, not an uncaught traceback that aborts
+        # the whole marketplace check.
+        root = make_marketplace(
+            {
+                "foo": {
+                    "commands": {
+                        "broken.md": '---\nargument-hint: "[--x]"\n---\n\nBody.\n'
+                    }
+                }
+            }
+        )
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("no `description`", out)
 
 
 class HookScriptImportTest(unittest.TestCase):

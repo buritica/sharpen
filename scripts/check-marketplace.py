@@ -25,6 +25,7 @@ Exit 0 if clean, 1 if any error. Warnings alone do not fail the run.
 """
 
 import ast
+import importlib.util
 import json
 import os
 import re
@@ -32,6 +33,19 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKETPLACE = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
+
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import frontmatter  # noqa: E402 — needs sys.path set first (see above)
+
+# generate-skill.py's filename has a dash, so it can't be `import`ed
+# normally — load it the same way plugins/sdlc/tests/test_gate.py already
+# loads dash-named scripts like record-gate.py, rather than shelling out to
+# a subprocess and re-parsing its printed output as an API contract.
+_generate_skill_spec = importlib.util.spec_from_file_location(
+    "generate_skill", os.path.join(ROOT, "scripts", "generate-skill.py")
+)
+generate_skill = importlib.util.module_from_spec(_generate_skill_spec)
+_generate_skill_spec.loader.exec_module(generate_skill)
 
 # sys.stdlib_module_names needs Python 3.10+. This repo's own CLAUDE.md
 # promises hook enforcement "works on any box with python3" — None here
@@ -63,20 +77,24 @@ def load_json(path):
 
 
 def frontmatter_description(md_path):
-    """Return the description from a command's frontmatter, or None."""
+    """Return the description from a command's frontmatter, or None. Uses
+    frontmatter.py (see generate-skill.py) rather than its own regex, so a
+    folded multi-line description (most grumpy commands) or a quoted one
+    (most sdlc commands) are both read the same way generate-skill.py reads
+    them — a separate regex here previously only grabbed the first line of
+    a folded description, which could silently diverge from what actually
+    gets generated."""
     try:
-        with open(md_path) as f:
+        with open(md_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return None
-    if not text.startswith("---"):
+    try:
+        front_text, _ = frontmatter.split(text)
+        description = frontmatter.parse(front_text).get("description")
+    except ValueError:
         return None
-    end = text.find("\n---", 3)
-    if end == -1:
-        return None
-    block = text[3:end]
-    m = re.search(r"^\s*description\s*:\s*(.+\S)", block, re.MULTILINE)
-    return m.group(1).strip() if m else None
+    return description or None
 
 
 def check_commands(plugin_dir, name):
@@ -88,7 +106,11 @@ def check_commands(plugin_dir, name):
             continue
         rel = os.path.join(name, "commands", fn)
         if frontmatter_description(os.path.join(cmd_dir, fn)) is None:
-            err("{}: command missing frontmatter description".format(rel))
+            # "Missing" covers both a genuinely absent `description:` field
+            # and frontmatter that failed to parse at all — check_skills
+            # (below) re-parses the same file and reports the precise parse
+            # error separately when that's the actual cause.
+            err("{}: command has no usable frontmatter description".format(rel))
 
 
 # Hook events Claude Code actually dispatches. A typo'd event name (e.g.
@@ -165,6 +187,26 @@ def check_hooks(plugin_dir, name):
             script_root_var,
             script_root_dir(plugin_dir),
         )
+
+
+def check_skills(plugin_dir, name):
+    """Every commands/*.md file's derived skills/<name>/SKILL.md (see
+    generate-skill.py) must be up to date. A plugin with no commands/ dir
+    has nothing to check. Catches OSError alongside ValueError (a file
+    vanishing or becoming unreadable between the glob and the open, e.g. a
+    permissions change or a symlink race) for the same reason every other
+    check_* in this file does: one bad file should collect an error, not
+    crash the whole marketplace check with a raw traceback."""
+    if not os.path.isdir(os.path.join(plugin_dir, "commands")):
+        return
+    for command_path in generate_skill.commands_in(plugin_dir):
+        try:
+            ok, message = generate_skill.check_one(command_path)
+        except (OSError, ValueError) as e:
+            err("{}: {}: {}".format(name, command_path, e))
+            continue
+        if not ok:
+            err("{}: {}".format(name, message))
 
 
 def check_local_imports(script, ref, name):
@@ -255,6 +297,7 @@ def main():
 
         check_commands(plugin_dir, name)
         check_hooks(plugin_dir, name)
+        check_skills(plugin_dir, name)
 
     # Plugin dirs on disk but not in the marketplace listing.
     plugins_root = os.path.join(ROOT, "plugins")

@@ -160,11 +160,41 @@ five hook scripts port on that basis:
   passes) the way Claude Code's hooks do; use the `tiny` cycle, or record
   those gates by hand until this gap closes.
 
-Command prose is the other porting axis: most commands under `commands/`
-still name Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill
-tool`), which a harness without those exact tools can't follow as written.
-See [`../grumpy/README.md`](../grumpy/README.md), "Portability beyond Claude
-Code", for the first converted example and what's still unconverted.
+Command prose was the other porting axis: `commands/*.md` files originally
+named Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill tool`),
+which a harness without those exact tools can't follow as written. Every
+command in `sdlc`, `grumpy`, and `sdlc-guardrails` has been rewritten to
+describe the capability conditionally instead (spawn a subagent if your
+harness supports it, otherwise do the work yourself sequentially) — see
+[`../grumpy/README.md`](../grumpy/README.md), "Portability beyond Claude
+Code", for the two spots (`gate.md`'s Skill-tool-caching note, and
+`dispatch.md`'s gate-recording claim) that stay explicitly Claude-Code-only
+rather than being rewritten to sound portable when the underlying mechanism
+isn't.
+
+**Every `commands/<name>.md` also has a generated `skills/<name>/SKILL.md`**
+— the cross-host format Codex CLI, Gemini CLI, Cursor, and Copilot all read
+(`name` + `description` frontmatter, same body). These are produced by
+`python3 scripts/generate-skill.py <path-to-commands-file>` (or
+`--write-all-in <plugin-dir>` for all of a plugin's commands at once) from
+the repo root, using `scripts/frontmatter.py` — a parser scoped to this
+repo's actual frontmatter shapes, not a general YAML parser. **Generated
+files are committed, not built at install time** — a Claude Code plugin
+marketplace has no build step other hosts would run. `scripts/check-marketplace.py`
+fails if any `skills/*/SKILL.md` is missing or stale relative to its source
+command, so regenerate (`--write-all-in <plugin-dir>`) after editing a
+command's frontmatter or body and before opening a PR. Known limitation: the
+generated body still references `$ARGUMENTS` Claude-command-style — there is
+no cross-host argument-passing convention yet, so a SKILL.md consumer sees
+the same placeholder a Claude Code user would.
+
+This closes a real, previously-dormant gap: `claude-session-start.py`'s
+capability detection (see "Portable adapters" above) has always checked for
+`plugins/grumpy/skills/{review,imagine,fix}/SKILL.md` to declare those
+capabilities in the v1 manifest, but until these files existed that check
+never found anything — `detect_capabilities()` silently never added
+`review`/`imagine`/`fix` in a real run, only in its own unit tests (which
+inject a stubbed `path_exists`). It's live now.
 
 ## Composability
 

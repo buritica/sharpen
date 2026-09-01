@@ -57,13 +57,25 @@ Use it when the invoking session's cwd isn't the worktree you want reviewed (orc
 
 ## Portability beyond Claude Code
 
-`commands/review.md`'s subagent-fan-out step is written to be agent-neutral:
-it names the capability ("spawn independent subagents in parallel"), not
-Claude's own Task tool, and explicitly falls back to running each review
-pass sequentially in one session on a harness with no fan-out primitive at
-all. The rest of `commands/` still name Claude's tools literally and have not
-been converted yet — see [`../sdlc/README.md`](../sdlc/README.md), "Codex CLI
-support", for the wider porting effort this is a first slice of.
+Every command's subagent-fan-out and task-tracking steps are written to be
+agent-neutral: they name the capability ("spawn independent subagents in
+parallel", "use your harness's task-tracking feature if it has one") rather
+than Claude's own Task/TaskCreate/TaskUpdate tools, and explicitly fall back
+to doing the work sequentially / as a plain checklist on a harness with no
+such primitive. Two spots stay deliberately Claude-Code-specific rather than
+rewritten to sound portable when they aren't:
+
+- **`gate.md`**'s note on Skill-tool instruction caching (`sdlc` plugin) —
+  a Claude Code prompt-caching quirk, not a general concept.
+- **`dispatch.md`**'s gate-recording claim — invoking a mode via a
+  skill/sub-command dispatch mechanism only actually records a gate today
+  when that mechanism is Claude Code's own `Skill` tool, since the
+  auto-record hook hasn't been ported elsewhere (see `sdlc`'s README, "Codex
+  CLI support").
+
+Every command also has a generated `skills/<name>/SKILL.md` — see `sdlc`'s
+README, "Codex CLI support", for how generation and the CI staleness check
+work.
 
 ## Upgrading
 
