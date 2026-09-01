@@ -83,40 +83,54 @@ class SessionStartCliTest(unittest.TestCase):
             env=env or self.clean_env(),
         )
 
+    def read_manifest(self, path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def assert_manifest_overwritten(self, path):
+        # Seed with a real (but invalid) file rather than just creating the
+        # parent directory: state_file_path() gates on file existence, not
+        # directory existence, so this is what actually exercises the
+        # "already-active" branch instead of the "created fresh" one.
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        manifest = self.read_manifest(path)
+        self.assertEqual(
+            manifest.get("protocol_version"),
+            "1",
+            f"{path} was not overwritten by the adapter",
+        )
+        return manifest
+
     def test_writes_valid_manifest_without_blocking_session(self):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stdout.decode(), "")
-        with open(self.manifest_path, encoding="utf-8") as f:
-            manifest = json.load(f)
+        manifest = self.read_manifest(self.manifest_path)
         self.assertEqual(manifest["protocol_version"], "1")
         self.assertEqual(manifest["provider"]["name"], "claude-code")
         self.assertIn("test", manifest["capabilities"])
 
     def test_existing_claude_manifest_root_remains_active_until_neutral_exists(self):
-        # state_file_path() checks for the legacy *file*, not just its
-        # directory (see gate_store.state_file_path) — this simulates an
-        # existing install that already wrote a manifest there, not a repo
-        # that merely has an empty .claude/data/ dir for some other reason.
+        # Fallback precedence mirrors gate_store.state_file_path (see
+        # test_gate.py's test_legacy_fallback_is_per_file for the per-file
+        # trigger itself): once a legacy file exists, it stays active until a
+        # neutral file appears.
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
         legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
-        with open(legacy_path, "w", encoding="utf-8") as f:
-            f.write("{}")
-        result = self.run_adapter()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertTrue(os.path.exists(legacy_path))
+        legacy_content_after_first_phase = self.assert_manifest_overwritten(legacy_path)
         self.assertFalse(os.path.exists(self.manifest_path))
 
-        # Same distinction on the other side: state_file_path() prefers an
-        # already-existing neutral *file*, not just its directory, so create
-        # one to simulate the neutral manifest coming into existence.
         os.makedirs(os.path.dirname(self.manifest_path))
-        with open(self.manifest_path, "w", encoding="utf-8") as f:
-            f.write("{}")
-        result = self.run_adapter()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertTrue(os.path.exists(self.manifest_path))
+        self.assert_manifest_overwritten(self.manifest_path)
+        self.assertEqual(
+            self.read_manifest(legacy_path),
+            legacy_content_after_first_phase,
+            "legacy manifest should be untouched once the neutral path takes over",
+        )
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
