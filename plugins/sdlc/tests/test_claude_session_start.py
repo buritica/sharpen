@@ -88,6 +88,10 @@ class SessionStartCliTest(unittest.TestCase):
             return json.load(f)
 
     def assert_manifest_overwritten(self, path):
+        # Seed with a real (but invalid) file rather than just creating the
+        # parent directory: state_file_path() gates on file existence, not
+        # directory existence, so this is what actually exercises the
+        # "already-active" branch instead of the "created fresh" one.
         with open(path, "w", encoding="utf-8") as f:
             json.dump({}, f)
         result = self.run_adapter()
