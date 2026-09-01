@@ -130,35 +130,38 @@ The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook
 
 **Upgrading from 2.2.0 (per-worktree store):** main-checkout users are unaffected — the path is identical across versions. But if you had an in-flight gate cycle on a **linked worktree**, its state lived in that worktree's `.claude/data/gates.json` and won't be seen at the new shared location. Re-run `/sdlc:gate` on that branch to re-establish the cycle (gates are cheap to re-run and reset on any code change anyway).
 
-## Codex CLI support (proof of concept, best-effort)
+## Codex CLI support
 
-Codex CLI ships its own `hooks.json` with the same event names as Claude Code
-(`PreToolUse`/`PostToolUse`, exit-code-2-denies) and reads `tool_name`/
-`tool_input.command` the same way, per public docs as of Aug 2026 — but this
-has **not** been hands-on verified against a live Codex session. Two of the
-five hook scripts port on that basis:
+**Live-verified against an installed Codex CLI session** (not inferred from
+docs): Codex reads this plugin's own `hooks/hooks.json` directly, with no
+translation layer needed. `${CLAUDE_PLUGIN_ROOT}` resolves in the hook
+command string exactly as it does under Claude Code; `SessionStart` runs
+`claude-session-start.py`; a `PreToolUse` hook genuinely denies — confirmed
+by watching `enforce-sdlc-gates.py` block a real `gh pr create` on an
+incomplete gate cycle, full multi-line reason and all, on stdout AND stderr,
+with no schema-validation fallout from the Claude-shaped JSON envelope; and
+`PostToolUse` genuinely fires — confirmed by watching `auto-init-gate-cycle.py`
+arm a cycle on a real `git commit`. An earlier revision of this plugin shipped
+a separate `hooks/codex-hooks.json` manifest and host-detection logic in
+`hook_out.py`, built defensively against public docs alone before this could
+be tested live. Both were removed once live testing showed the theoretical
+risk they hedged against (an unrecognized host choking on Claude's stdout
+JSON shape) didn't hold up — `enforce-sdlc-gates.py` and
+`auto-init-gate-cycle.py` work on Codex via the same `hooks/hooks.json` every
+other host reads, no per-host manifest or env var required.
 
-- `hooks/codex-hooks.json` wires `enforce-sdlc-gates.py` (blocks `gh pr
-  create` until gates pass) and `auto-init-gate-cycle.py` (arms a cycle on
-  the first commit to a feature branch). Both key off the generic
-  `{tool_name, tool_input.command}` shape and enforce purely through exit
-  code + stderr — the part of the contract every documented host honors the
-  same way (see `hook_out.py`'s module docstring: its `deny()` payload's
-  Claude-specific stdout JSON is opted out via `SDLC_HOOK_HOST=codex` rather
-  than emitted blindly, since every denial already writes its reason to
-  stderr independently; `warn()`'s payload is never opted out, since some
-  call sites have no other channel at all). Codex has no equivalent of `${CLAUDE_PLUGIN_ROOT}`, so
-  the manifest resolves scripts against `${SDLC_SCRIPTS_ROOT}` instead —
-  set that env var to this plugin's `scripts/` directory before wiring
-  `codex-hooks.json` into a target repo's `.codex/hooks.json`.
-- `auto-record-skill-gate.py` and `block-direct-gate-record.py` are
-  **deliberately not ported**. Both depend on a distinct "Skill" tool call
-  existing in PostToolUse, which is unconfirmed on Codex — porting them on a
-  guess would silently misrecord gates instead of failing loudly. Practical
-  effect: a `small-medium`/`significant` gate cycle enforced via
-  `codex-hooks.json` alone cannot record gates 2–6 (`simplify`, the grumpy
-  passes) the way Claude Code's hooks do; use the `tiny` cycle, or record
-  those gates by hand until this gap closes.
+**One confirmed real gap, not a hypothetical one**: `auto-record-skill-gate.py`
+and `block-direct-gate-record.py` depend on a distinct `Skill` tool call
+existing in `PostToolUse`. Live-tested by invoking a grumpy review skill on
+Codex — the review genuinely ran (real findings, real artifact written to
+disk) — and checking the gate store afterward: `grumpy-review` was never
+recorded. Codex's own hooks-trust config does track a `Skill`-matcher hook
+entry, so the matcher concept exists there, but whatever tool call a
+natural-language skill invocation produces on Codex doesn't fire it the same
+way Claude Code's `Skill` tool call does. Practical effect: a
+`small-medium`/`significant` gate cycle cannot auto-record gates 2–6
+(`simplify`, the grumpy passes) on Codex today; use the `tiny` cycle, or
+record those gates by hand until this gap closes.
 
 Command prose was the other porting axis: `commands/*.md` files originally
 named Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill tool`),
