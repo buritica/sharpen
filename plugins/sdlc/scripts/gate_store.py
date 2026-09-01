@@ -797,18 +797,30 @@ def record_gate(data, branch, gate, authorized=False):
             f'"{gate}" is not required by the "{bd.get("tier")}" tier for '
             f'"{branch}". Required: {", ".join(required)}'
         )
-    bd.setdefault("gates", {})[gate] = _now()
+    stamp = _now()
+    bd.setdefault("gates", {})[gate] = stamp
+    # This recording is itself proof `gate` is fresh again — drop any trace
+    # saying a PRIOR clear is still outstanding for it, so a re-run gate
+    # doesn't keep showing a stale "cleared by" note after it has, in fact,
+    # been re-verified.
+    bd.get("invalidated_by", {}).pop(gate, None)
     if gate in CODE_MUTATING_GATES:
         # This gate's own pass criterion just may have edited source files —
         # any bash-verifiable gate already stamped ran against code that no
         # longer necessarily matches. Clear them so `missing_gates` (and
         # therefore `gh pr create`) demands they run again, instead of
-        # trusting a timestamp from before the edit. Silent by design at
-        # this layer — the caller (the auto-record hook, or `--attest`)
-        # decides whether and how to surface it; `record_gate` only owns
-        # making the store correct.
+        # trusting a timestamp from before the edit. The one-shot stderr
+        # notify a caller may render alongside this is transient — gone the
+        # moment it scrolls past — so also leave a persisted trace here:
+        # otherwise a reader hitting `--status` or a `gh pr create` block
+        # later sees a bare "missing", indistinguishable from "never ran",
+        # with no way to learn this gate was once green and why it isn't now.
         for invalidated in ("tests", "lint", "typecheck"):
-            bd.get("gates", {}).pop(invalidated, None)
+            if bd.get("gates", {}).pop(invalidated, None) is not None:
+                bd.setdefault("invalidated_by", {})[invalidated] = {
+                    "gate": gate,
+                    "at": stamp,
+                }
     return bd
 
 
@@ -816,18 +828,44 @@ def record_gate_and_diff(data, branch, gate, authorized=False):
     """`record_gate`, plus the list of already-recorded gates it just cleared
     as a side effect of `gate` being in `CODE_MUTATING_GATES`.
 
-    `record_gate` itself stays silent about this (see its own docstring) —
-    every caller that already re-derives `missing_gates` fresh (the CLI's
-    `--record`/`--attest` paths) sees the clear for free with no extra
-    plumbing. This wrapper exists only for the one caller that can't do
-    that: `auto-record-skill-gate.py` renders a one-line notification at the
-    moment of recording, before anything re-reads `missing_gates`, and needs
-    to know what to say in it. A second caller needing the same diff belongs
-    here too, not copy-pasted at its own call site."""
+    `record_gate` itself returns only `bd` (see its own docstring) — every
+    caller that already re-derives `missing_gates`/`format_status` fresh
+    (the CLI's `--record`/`--attest` paths, and anyone re-reading
+    `invalidated_by` later) sees the clear for free with no extra plumbing.
+    This wrapper exists only for the one caller that can't wait for a later
+    read: `auto-record-skill-gate.py` renders a one-line notification at the
+    moment of recording, and needs to know what to say in it right then. A
+    second caller needing the same diff belongs here too, not copy-pasted at
+    its own call site."""
     bd = data.get(branch) or {}
     before = set(bd.get("gates", {}))
     record_gate(data, branch, gate, authorized=authorized)
     return sorted(before - set(bd.get("gates", {})))
+
+
+def invalidation_note(branch_data):
+    """Ready-to-append sentence explaining any currently-missing gate that
+    was cleared by a code-mutating gate (see `record_gate`'s
+    `invalidated_by` bookkeeping), else None. Without this, a reader of
+    `enforce-sdlc-gates.py`'s denial or `record-gate.py --status` sees a
+    bare "missing" — indistinguishable from a gate that simply never ran —
+    with no way to learn it was once green and why it isn't now. One
+    canonical wording shared by both callers, same reasoning as
+    `route_mismatch_note` above."""
+    invalidated = branch_data.get("invalidated_by", {})
+    missing = set(missing_gates(branch_data))
+    stale = {g: info for g, info in invalidated.items() if g in missing}
+    if not stale:
+        return None
+    parts = [
+        f'"{g}" (cleared by {info["gate"]} at {info["at"]})'
+        for g, info in stale.items()
+    ]
+    return (
+        f"{', '.join(parts)} {'was' if len(parts) == 1 else 'were'} cleared "
+        "after passing, not skipped — that gate edits code inline, so the "
+        "code it last validated no longer matches. Re-run it."
+    )
 
 
 def attest_gate(data, branch, gate, reason):
@@ -1002,7 +1040,15 @@ def format_status(branch_data, branch=None):
         elif ts:
             lines.append(f"  {mark} {g} — {ts}")
         else:
-            lines.append(f"  {mark} {g}")
+            cleared = branch_data.get("invalidated_by", {}).get(g)
+            if cleared:
+                # Distinct from a bare ✗: this gate was green, then cleared
+                # by a later code-mutating gate — not simply never run.
+                lines.append(
+                    f"  {mark} {g} (cleared by {cleared['gate']} at {cleared['at']})"
+                )
+            else:
+                lines.append(f"  {mark} {g}")
     missing = missing_gates(branch_data)
     lines += [
         "",

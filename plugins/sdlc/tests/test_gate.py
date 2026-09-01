@@ -231,6 +231,44 @@ class CodeMutatingGateInvalidationTest(unittest.TestCase):
         self.assertIn("lint", gs.missing_gates(self.d["feat/x"]))
         self.assertIn("typecheck", gs.missing_gates(self.d["feat/x"]))
 
+    def test_invalidation_persists_a_trace(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        trace = self.d["feat/x"]["invalidated_by"]
+        for g in ("tests", "lint", "typecheck"):
+            self.assertEqual(trace[g]["gate"], "simplify")
+            self.assertTrue(trace[g]["at"])
+
+    def test_status_distinguishes_invalidated_from_never_run(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        out = gs.format_status(self.d["feat/x"], "feat/x")
+        self.assertIn("cleared by simplify", out)
+
+    def test_re_recording_clears_the_trace(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        gs.record_gate(self.d, "feat/x", "tests")
+        self.assertNotIn("tests", self.d["feat/x"]["invalidated_by"])
+        out = gs.format_status(self.d["feat/x"], "feat/x")
+        # "tests" is fresh again and must not still claim to be cleared —
+        # but lint/typecheck are still genuinely missing, so their own
+        # "cleared by" note must survive right alongside it.
+        self.assertIn("✓ tests", out)
+        self.assertNotIn("tests (cleared by", out)
+        self.assertIn("lint (cleared by", out)
+        self.assertIn("lint", self.d["feat/x"]["invalidated_by"])
+
+    def test_invalidation_note_only_covers_still_missing_gates(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        gs.record_gate(self.d, "feat/x", "tests")
+        note = gs.invalidation_note(self.d["feat/x"])
+        self.assertIn("lint", note)
+        self.assertIn("typecheck", note)
+        self.assertNotIn('"tests"', note)
+
+    def test_invalidation_note_is_none_when_nothing_stale(self):
+        self.assertIsNone(gs.invalidation_note(self.d["feat/x"]))
+        gs.record_gate(self.d, "feat/x", "grumpy-review", authorized=True)
+        self.assertIsNone(gs.invalidation_note(self.d["feat/x"]))
+
     def test_attest_also_invalidates(self):
         # attest_gate calls record_gate(authorized=True) internally — the
         # invalidation must not be bypassable by going through attestation
@@ -418,6 +456,19 @@ class EnforceTest(unittest.TestCase):
         run_cli(["--init", "tiny"], self.repo, self.gp)
         r = run_hook(ENFORCE, self.payload("ls -la"), self.repo, self.gp)
         self.assertEqual(r.returncode, 0)
+
+    def test_blocking_message_explains_an_invalidated_gate(self):
+        # Without this, "tests" missing after having already passed once
+        # reads identical to "tests" that never ran — the reader has no way
+        # to tell a real gap from a mutating gate's own side effect.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        run_cli(["--record", "tests"], self.repo, self.gp)
+        seed_gate(self.gp, "feat/x", "simplify")
+        r = run_hook(ENFORCE, self.payload(), self.repo, self.gp)
+        self.assertEqual(r.returncode, 2)
+        err = r.stderr.decode()
+        self.assertIn('"tests" (cleared by simplify', err)
+        self.assertIn("Re-run it", err)
 
     def test_an_attested_gate_unblocks_exactly_like_a_hook_verified_one(self):
         # The whole point of attest_gate: enforcement reads `gates`, never
