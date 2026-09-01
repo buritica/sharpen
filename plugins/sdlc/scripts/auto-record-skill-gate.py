@@ -185,8 +185,15 @@ def handle_skill_completion(
                 "surprising": True,
             }
         # Routed or not, this hook just watched the skill run.
-        gs.record_gate(data, target_branch, gate, authorized=True)
-        return {"recorded": True, "gate": gate, "target": target_branch}
+        invalidated = gs.record_gate_and_diff(
+            data, target_branch, gate, authorized=True
+        )
+        return {
+            "recorded": True,
+            "gate": gate,
+            "target": target_branch,
+            "invalidated": invalidated,
+        }
 
     if not branch:
         # Distinct from detached HEAD so the message says which happened, but
@@ -254,8 +261,13 @@ def handle_skill_completion(
         return {"recorded": False, "reason": f'"{gate}" already recorded'}
 
     # This hook just watched the skill run — the one authorized recorder.
-    gs.record_gate(data, target_branch, gate, authorized=True)
-    return {"recorded": True, "gate": gate, "target": target_branch}
+    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
+    return {
+        "recorded": True,
+        "gate": gate,
+        "target": target_branch,
+        "invalidated": invalidated,
+    }
 
 
 def main():
@@ -379,10 +391,29 @@ def main():
         # so it also catches the adoption path a `routed`-only check would miss.
         cross_worktree = holder.get("target") != branch
         where = f" on {holder['target']}" if cross_worktree else ""
+        # This skill's own pass criterion can edit source files (see
+        # gate_store.CODE_MUTATING_GATES), so any already-stamped
+        # tests/lint/typecheck just got cleared — surface it, the same as a
+        # cross-worktree write: it's a change to the store nobody watching
+        # this session would otherwise see, and unlike a cross-worktree
+        # stamp it also means the PR is further from ready than the reader
+        # last checked.
+        invalidated = holder.get("invalidated") or []
+        invalidated_note = (
+            # "can" edit, not "did": this fires unconditionally whenever the
+            # gate records, including a clean "no actionable findings" pass
+            # that touched nothing — the hook has no way to tell the two
+            # apart (see gate_store.CODE_MUTATING_GATES), so the wording
+            # can't claim more certainty than that.
+            f" — this gate can fix code inline, so {', '.join(invalidated)} "
+            "no longer verify the current state and must run again"
+            if invalidated
+            else ""
+        )
         return ho.notify(
             "auto-record",
-            f'recorded "{holder["gate"]}"{where} after {skill}',
-            surface=cross_worktree,
+            f'recorded "{holder["gate"]}"{where} after {skill}{invalidated_note}',
+            surface=cross_worktree or bool(invalidated),
         )
     if holder.get("reason"):
         # Surfaced only when the skip is one the caller had no way to predict,

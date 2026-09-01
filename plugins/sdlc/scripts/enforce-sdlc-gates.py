@@ -253,6 +253,13 @@ def _check_one(inv):
     note = gs.route_mismatch_note(data, source_root, branch)
     if note:
         reason += f"\n\n{note} That may be why gates are missing here."
+    # Same reasoning, different cause: a missing bash gate here can also mean
+    # it passed once and was cleared again by a later code-mutating gate —
+    # without this, that reads identical to "never ran" and the reader has
+    # to already know to check --status for the difference.
+    invalidation = gs.invalidation_note(bd)
+    if invalidation:
+        reason += f"\n\n{invalidation}"
     return False, reason, state, notes
 
 

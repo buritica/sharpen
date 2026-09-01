@@ -174,6 +174,149 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(os.listdir(os.path.dirname(p)), ["gates.json"])
 
 
+class CodeMutatingGateInvalidationTest(unittest.TestCase):
+    """A code-mutating gate (gate_store.CODE_MUTATING_GATES) fixes findings
+    inline as part of passing, per gate.md's own "no actionable findings, or
+    findings fixed" pass criterion. tests/lint/typecheck, if already
+    recorded, ran against code that gate may have just changed — so
+    recording it must clear them, closing the gap where gate.md's
+    reset-on-post-gate-change rule was prose-only and easy to forget."""
+
+    def setUp(self):
+        self.d = {}
+        gs.init_gates(self.d, "feat/x", "small-medium")
+        for g in ("tests", "lint", "typecheck"):
+            gs.record_gate(self.d, "feat/x", g)
+
+    def test_recording_simplify_clears_bash_gates(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        gates = self.d["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
+        self.assertIn("simplify", gates)
+
+    def test_recording_fix_post_review_clears_bash_gates(self):
+        gs.record_gate(self.d, "feat/x", "grumpy-fix-post-review", authorized=True)
+        gates = self.d["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
+
+    def test_recording_fix_post_imagine_clears_bash_gates(self):
+        gs.record_gate(self.d, "feat/x", "grumpy-fix-post-imagine", authorized=True)
+        gates = self.d["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
+
+    def test_recording_review_does_not_clear_bash_gates(self):
+        # review/imagine only ever produce a report — never touch source.
+        gs.record_gate(self.d, "feat/x", "grumpy-review", authorized=True)
+        gates = self.d["feat/x"]["gates"]
+        self.assertIn("tests", gates)
+        self.assertIn("lint", gates)
+        self.assertIn("typecheck", gates)
+
+    def test_recording_imagine_does_not_clear_bash_gates(self):
+        gs.record_gate(self.d, "feat/x", "grumpy-imagine", authorized=True)
+        gates = self.d["feat/x"]["gates"]
+        self.assertIn("tests", gates)
+        self.assertIn("lint", gates)
+        self.assertIn("typecheck", gates)
+
+    def test_cleared_gates_reappear_as_missing(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        self.assertIn("tests", gs.missing_gates(self.d["feat/x"]))
+        self.assertIn("lint", gs.missing_gates(self.d["feat/x"]))
+        self.assertIn("typecheck", gs.missing_gates(self.d["feat/x"]))
+
+    def test_invalidation_persists_a_trace(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        trace = self.d["feat/x"]["invalidated_by"]
+        for g in ("tests", "lint", "typecheck"):
+            self.assertEqual(trace[g]["gate"], "simplify")
+            self.assertTrue(trace[g]["at"])
+
+    def test_status_distinguishes_invalidated_from_never_run(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        out = gs.format_status(self.d["feat/x"], "feat/x")
+        self.assertIn("cleared by simplify", out)
+
+    def test_re_recording_clears_the_trace(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        gs.record_gate(self.d, "feat/x", "tests")
+        self.assertNotIn("tests", self.d["feat/x"]["invalidated_by"])
+        out = gs.format_status(self.d["feat/x"], "feat/x")
+        # "tests" is fresh again and must not still claim to be cleared —
+        # but lint/typecheck are still genuinely missing, so their own
+        # "cleared by" note must survive right alongside it.
+        self.assertIn("✓ tests", out)
+        self.assertNotIn("tests (cleared by", out)
+        self.assertIn("lint (cleared by", out)
+        self.assertIn("lint", self.d["feat/x"]["invalidated_by"])
+
+    def test_invalidation_note_only_covers_still_missing_gates(self):
+        gs.record_gate(self.d, "feat/x", "simplify", authorized=True)
+        gs.record_gate(self.d, "feat/x", "tests")
+        note = gs.invalidation_note(self.d["feat/x"])
+        self.assertIn("lint", note)
+        self.assertIn("typecheck", note)
+        self.assertNotIn('"tests"', note)
+
+    def test_invalidation_note_is_none_when_nothing_stale(self):
+        self.assertIsNone(gs.invalidation_note(self.d["feat/x"]))
+        gs.record_gate(self.d, "feat/x", "grumpy-review", authorized=True)
+        self.assertIsNone(gs.invalidation_note(self.d["feat/x"]))
+
+    def test_attest_also_invalidates(self):
+        # attest_gate calls record_gate(authorized=True) internally — the
+        # invalidation must not be bypassable by going through attestation
+        # instead of the hook.
+        gs.attest_gate(self.d, "feat/x", "simplify", "manual re-run, cache hit")
+        gates = self.d["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
+
+
+class RecordGateAndDiffTest(unittest.TestCase):
+    """record_gate_and_diff's own return-value contract, tested directly
+    rather than only indirectly through a subprocess-level hook test — a
+    regression here (unsorted list, wrong names) wouldn't necessarily show
+    up as a failure at that higher level."""
+
+    def setUp(self):
+        self.d = {}
+        gs.init_gates(self.d, "feat/x", "small-medium")
+
+    def test_returns_sorted_names_of_what_it_cleared(self):
+        for g in ("typecheck", "tests", "lint"):  # deliberately out of order
+            gs.record_gate(self.d, "feat/x", g)
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "simplify", authorized=True
+        )
+        self.assertEqual(invalidated, ["lint", "tests", "typecheck"])
+
+    def test_nothing_to_invalidate_returns_empty_list(self):
+        # The very first mutating-gate run on a fresh cycle: nothing was
+        # recorded yet, so there's nothing to clear. Must not report a
+        # phantom invalidation the caller would then surface as "must run
+        # again" for gates that were never run in the first place.
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "simplify", authorized=True
+        )
+        self.assertEqual(invalidated, [])
+
+    def test_non_mutating_gate_invalidates_nothing(self):
+        gs.record_gate(self.d, "feat/x", "tests")
+        invalidated = gs.record_gate_and_diff(
+            self.d, "feat/x", "grumpy-review", authorized=True
+        )
+        self.assertEqual(invalidated, [])
+        self.assertIn("tests", self.d["feat/x"]["gates"])
+
+
 class HookOutTest(unittest.TestCase):
     """The output convention itself. Reached only through subprocesses
     otherwise, so a mistake in the payload shape or the log prefix would only
@@ -314,13 +457,24 @@ class EnforceTest(unittest.TestCase):
         r = run_hook(ENFORCE, self.payload("ls -la"), self.repo, self.gp)
         self.assertEqual(r.returncode, 0)
 
+    def test_blocking_message_explains_an_invalidated_gate(self):
+        # Without this, "tests" missing after having already passed once
+        # reads identical to "tests" that never ran — the reader has no way
+        # to tell a real gap from a mutating gate's own side effect.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        run_cli(["--record", "tests"], self.repo, self.gp)
+        seed_gate(self.gp, "feat/x", "simplify")
+        r = run_hook(ENFORCE, self.payload(), self.repo, self.gp)
+        self.assertEqual(r.returncode, 2)
+        err = r.stderr.decode()
+        self.assertIn('"tests" (cleared by simplify', err)
+        self.assertIn("Re-run it", err)
+
     def test_an_attested_gate_unblocks_exactly_like_a_hook_verified_one(self):
         # The whole point of attest_gate: enforcement reads `gates`, never
         # `attestations`, so a PR with one attested gate must sail through
         # identically to one where every gate was hook-verified.
         run_cli(["--init", "small-medium"], self.repo, self.gp)
-        for g in gs.BASH_GATES:
-            run_cli(["--record", g], self.repo, self.gp)
         for g in gs.SKILL_FOR_GATE:
             if g != "simplify":
                 seed_gate(self.gp, "feat/x", g)
@@ -335,6 +489,12 @@ class EnforceTest(unittest.TestCase):
             self.gp,
         )
         self.assertEqual(r.returncode, 0, r.stderr.decode())
+        # Recorded AFTER the attest, not before: `simplify` is code-mutating
+        # (gate_store.CODE_MUTATING_GATES) and clears these on record, so
+        # seeding them first would just have this test re-discover that
+        # invalidation instead of exercising what it's actually testing.
+        for g in gs.BASH_GATES:
+            run_cli(["--record", g], self.repo, self.gp)
         r = run_hook(ENFORCE, self.payload(), self.repo, self.gp)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.decode(), "")
@@ -854,14 +1014,20 @@ class EnforceEdgeTest(unittest.TestCase):
         self.assertIn("incomplete", r.stderr.decode())
 
     def test_small_medium_post_imagine_missing_blocks(self):
-        # the #1069 case: everything but the final grumpy fix
+        # the #1069 case: everything but the final grumpy fix. `tests` is
+        # recorded LAST, not first: `simplify`/`grumpy-fix-post-review` are
+        # code-mutating (gate_store.CODE_MUTATING_GATES) and clear it on
+        # record, same reasoning gate.md already gives for running
+        # lint/typecheck last — recording it before them would just have
+        # this fixture rediscover that invalidation instead of exercising
+        # what the test is actually about.
         run_cli(["--init", "small-medium"], self.repo, self.gp)
         for g in (
-            "tests",
             "simplify",
             "grumpy-review",
             "grumpy-fix-post-review",
             "grumpy-imagine",
+            "tests",
             "lint",
             "typecheck",
         ):
@@ -1031,6 +1197,32 @@ class AutoRecordEdgeTest(unittest.TestCase):
         self.skill("grumpy:fix")
         gates = read_json(self.gp)["feat/x"]["gates"]
         self.assertIn("grumpy-fix-post-review", gates)
+
+    def test_fix_invalidates_already_recorded_bash_gates_and_says_so(self):
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        for g in ("tests", "lint", "typecheck"):
+            run_cli(["--record", g], self.repo, self.gp)
+        self.skill("grumpy:review")
+        r = self.skill("grumpy:fix")
+        gates = read_json(self.gp)["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
+        # Invalidation is surprising enough to surface even without a
+        # cross-worktree write, unlike an ordinary same-branch record.
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn("must run again", r.stderr.decode())
+
+    def test_fix_says_nothing_extra_when_nothing_was_recorded_to_clear(self):
+        # The first mutating gate on a fresh cycle: tests/lint/typecheck
+        # were never recorded, so there's nothing to invalidate — the
+        # ordinary same-branch record path (quiet, exit 0) applies, not the
+        # "must run again" surfacing.
+        run_cli(["--init", "small-medium"], self.repo, self.gp)
+        self.skill("grumpy:review")
+        r = self.skill("grumpy:fix")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn("must run again", r.stderr.decode())
 
     def test_idempotent_second_fire_noop(self):
         run_cli(["--init", "small-medium"], self.repo, self.gp)
@@ -2500,6 +2692,28 @@ class CliAttestTest(unittest.TestCase):
         r = run_cli(["--attest", "simplify"], self.repo, self.gp)
         self.assertEqual(r.returncode, 1)
         self.assertFalse(read_json(self.gp)["feat/x"]["gates"].get("simplify"))
+
+    def test_attesting_a_mutating_gate_surfaces_the_clear_in_remaining(self):
+        # End-to-end through the actual subprocess, not an in-memory dict:
+        # attest_gate's invalidation must be visible in the CLI's own
+        # user-facing "Remaining: ..." line, the same way a hook-recorded
+        # invalidation is visible in --status.
+        for g in ("tests", "lint", "typecheck"):
+            run_cli(["--record", g], self.repo, self.gp)
+        r = run_cli(
+            ["--attest", "simplify", "--reason", "cache hit, re-ran manually"],
+            self.repo,
+            self.gp,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        out = r.stderr.decode()
+        self.assertIn("Remaining:", out)
+        for g in ("tests", "lint", "typecheck"):
+            self.assertIn(g, out)
+        gates = read_json(self.gp)["feat/x"]["gates"]
+        self.assertNotIn("tests", gates)
+        self.assertNotIn("lint", gates)
+        self.assertNotIn("typecheck", gates)
 
     def test_reason_flag_rejected_outside_attest(self):
         r = run_cli(["--record", "tests", "--reason", "nope"], self.repo, self.gp)

@@ -366,6 +366,10 @@ Fix anything you find, then proceed.
 
 After any post-chain modification, reset gate tracking and re-run the full chain from gate 1.
 
+**Simplify and the fix gates enforce this mechanically for `tests`/`lint`/`typecheck`, so you don't have to remember to.** `simplify`, `grumpy-fix-post-review`, and `grumpy-fix-post-imagine` all pass by *editing code*, not just reporting on it — see each one's own "no actionable findings, or findings fixed" criterion above. `record_gate()` clears any already-recorded `tests`/`lint`/`typecheck` the instant one of those three records, so a stamp from before the edit can never silently outlive it: `--status` shows them missing again, and `gh pr create` blocks until they're re-run. This closes exactly the gap this section used to only describe in prose — but it covers those three gates specifically, not every case. A manual edit you make yourself outside any gate skill, or a fix you apply from `grumpy-review`/`grumpy-imagine` findings without going through `/grumpy:fix`, still needs the full manual reset above; nothing watches for those.
+
+A cleared gate isn't left looking identical to one that never ran: `--status` marks it `(cleared by <gate> at <timestamp>)`, and the `gh pr create` denial explains the same thing in prose, so you don't have to already know to go check `--status` to tell "never ran" from "ran, then got invalidated."
+
 ## Rules
 
 - When uncertain about tier, default to Small-medium (full chain).
@@ -375,7 +379,7 @@ After any post-chain modification, reset gate tracking and re-run the full chain
 ## Gotchas
 
 - Gate ordering is load-bearing: earlier gates are cheaper to fix. Running typecheck before review wastes time when review finds logic bugs.
-- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1. This is mandatory, not advisory.
+- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1. This is mandatory, not advisory — `simplify`/`grumpy-fix-post-review`/`grumpy-fix-post-imagine` enforce it mechanically for `tests`/`lint`/`typecheck` (see "Post-gate changes" above), but a manual edit or a fix applied outside `/grumpy:fix` is not covered and still needs the full reset.
 - When grumpy is not installed, the self-review fallback is significantly less thorough. Acknowledge this in the PR description.
 - The simplify gate (gate 2) is the most commonly skipped. If no grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.
 - `--worktree` without `--route-from` is the quiet failure: the bash gates land on `$WT`'s branch and the skill gates land on this session's, so the chain never completes and nothing says why. `--status --branch "$BRANCH"` shows `Driven from:` when the route is in place.
