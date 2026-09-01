@@ -85,12 +85,7 @@ class ParseArrayTest(unittest.TestCase):
     def test_multiline_array_with_trailing_comma(self):
         # plugins/grumpy/commands/cleanup.md and fix.md's shape.
         text = (
-            "allowed-tools:\n"
-            "  [\n"
-            '    "Bash",\n'
-            '    "Edit",\n'
-            '    "AskUserQuestion",\n'
-            "  ]"
+            'allowed-tools:\n  [\n    "Bash",\n    "Edit",\n    "AskUserQuestion",\n  ]'
         )
         result = fm.parse(text)
         self.assertEqual(result["allowed-tools"], ["Bash", "Edit", "AskUserQuestion"])
@@ -133,7 +128,16 @@ class ParseFullFileTest(unittest.TestCase):
         )
         self.assertEqual(
             data["allowed-tools"],
-            ["Bash", "Glob", "Grep", "Read", "Write", "TaskCreate", "TaskUpdate", "Agent"],
+            [
+                "Bash",
+                "Glob",
+                "Grep",
+                "Read",
+                "Write",
+                "TaskCreate",
+                "TaskUpdate",
+                "Agent",
+            ],
         )
         self.assertTrue(body.startswith("\n# Grumpy Review\n"))
 
@@ -153,7 +157,9 @@ class RealCommandFilesTest(unittest.TestCase):
     def test_every_real_command_file_parses_with_a_description(self):
         repo_root = os.path.abspath(os.path.join(HERE, "..", ".."))
         paths = glob.glob(os.path.join(repo_root, "plugins", "*", "commands", "*.md"))
-        self.assertGreater(len(paths), 0, "no command files found — check the glob/path")
+        self.assertGreater(
+            len(paths), 0, "no command files found — check the glob/path"
+        )
         for path in paths:
             with self.subTest(path=path):
                 with open(path, encoding="utf-8") as f:

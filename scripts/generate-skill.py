@@ -118,12 +118,18 @@ def commands_in(plugin_dir):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command_md", nargs="?", help="path to a commands/<name>.md file")
     parser.add_argument(
-        "--write-all-in", metavar="PLUGIN_DIR", help="regenerate every command in a plugin dir"
+        "command_md", nargs="?", help="path to a commands/<name>.md file"
     )
     parser.add_argument(
-        "--check", action="store_true", help="exit nonzero if generated output is stale/missing"
+        "--write-all-in",
+        metavar="PLUGIN_DIR",
+        help="regenerate every command in a plugin dir",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit nonzero if generated output is stale/missing",
     )
     args = parser.parse_args()
 

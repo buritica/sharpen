@@ -259,7 +259,7 @@ class SkillsTest(unittest.TestCase):
         skill_dir = os.path.join(root, "plugins", "foo", "skills", "bar")
         os.makedirs(skill_dir)
         with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
-            f.write("---\nname: bar\ndescription: \"stale\"\n---\n\nOld body.\n")
+            f.write('---\nname: bar\ndescription: "stale"\n---\n\nOld body.\n')
         r = run(root)
         out = r.stdout.decode()
         self.assertEqual(r.returncode, 1, out)
@@ -271,7 +271,13 @@ class SkillsTest(unittest.TestCase):
         # a normal collected error, not an uncaught traceback that aborts
         # the whole marketplace check.
         root = make_marketplace(
-            {"foo": {"commands": {"broken.md": '---\nargument-hint: "[--x]"\n---\n\nBody.\n'}}}
+            {
+                "foo": {
+                    "commands": {
+                        "broken.md": '---\nargument-hint: "[--x]"\n---\n\nBody.\n'
+                    }
+                }
+            }
         )
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         r = run(root)

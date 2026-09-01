@@ -90,7 +90,7 @@ class RenderTest(unittest.TestCase):
         source = (
             "---\n"
             "description:\n"
-            "  A description with a \"quoted phrase\" inside it.\n"
+            '  A description with a "quoted phrase" inside it.\n'
             "---\n"
             "\n"
             "Body.\n"
@@ -180,7 +180,7 @@ class CliTest(unittest.TestCase):
         # a source error), exercised end-to-end through the CLI rather than
         # just unit-tested against render() directly.
         with open(os.path.join(self.cmd_dir, "broken.md"), "w") as f:
-            f.write("---\nargument-hint: \"[--x]\"\n---\n\nBody.\n")  # no description
+            f.write('---\nargument-hint: "[--x]"\n---\n\nBody.\n')  # no description
         r = self.run_cli(os.path.join(self.cmd_dir, "broken.md"))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no `description`", r.stderr.decode())
@@ -190,8 +190,12 @@ class CliTest(unittest.TestCase):
             f.write('---\ndescription: "Does bar."\n---\n\nBody.\n')
         r = self.run_cli("--write-all-in", self.root)
         self.assertEqual(r.returncode, 0, r.stderr.decode())
-        self.assertTrue(os.path.isfile(os.path.join(self.root, "skills", "foo", "SKILL.md")))
-        self.assertTrue(os.path.isfile(os.path.join(self.root, "skills", "bar", "SKILL.md")))
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.root, "skills", "foo", "SKILL.md"))
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.root, "skills", "bar", "SKILL.md"))
+        )
 
 
 if __name__ == "__main__":
