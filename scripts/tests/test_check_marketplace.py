@@ -49,16 +49,11 @@ def make_marketplace(plugins):
         entries.append(
             {"name": name, "source": f"./plugins/{name}", "version": version}
         )
-        for filename, content in (
-            ("hooks.json", spec.get("hooks")),
-            ("codex-hooks.json", spec.get("codex_hooks")),
-        ):
-            if content is None:
-                continue
+        if spec.get("hooks") is not None:
             hdir = os.path.join(pdir, "hooks")
             os.makedirs(hdir, exist_ok=True)
-            with open(os.path.join(hdir, filename), "w") as f:
-                json.dump(content, f)
+            with open(os.path.join(hdir, "hooks.json"), "w") as f:
+                json.dump(spec["hooks"], f)
         for fn, source in spec.get("hook_scripts", {}).items():
             sdir = os.path.join(pdir, "scripts")
             os.makedirs(sdir, exist_ok=True)
@@ -137,82 +132,6 @@ class HookEventNameTest(unittest.TestCase):
         out = r.stdout.decode()
         self.assertEqual(r.returncode, 0, out)
         self.assertNotIn("WARN", out)
-
-
-class CodexHooksTest(unittest.TestCase):
-    """codex-hooks.json (see plugins/sdlc/hooks/codex-hooks.json) resolves
-    scripts against ${SDLC_SCRIPTS_ROOT} instead of ${CLAUDE_PLUGIN_ROOT}, and
-    that root is the plugin's scripts/ dir directly rather than the plugin
-    root — both need their own check, separate from hooks.json's."""
-
-    def _codex_hooks(self, script_ref):
-        return {
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "^Bash$",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": (
-                                    'SDLC_HOOK_HOST=codex python3 "${SDLC_SCRIPTS_ROOT}'
-                                    f'/{script_ref}"'
-                                ),
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-
-    def test_existing_script_is_fine(self):
-        root = make_marketplace(
-            {
-                "foo": {
-                    "codex_hooks": self._codex_hooks("hook.py"),
-                    "hook_scripts": {"hook.py": "import json\n"},
-                }
-            }
-        )
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        r = run(root)
-        self.assertEqual(r.returncode, 0, r.stdout.decode())
-
-    def test_missing_script_is_an_error(self):
-        root = make_marketplace({"foo": {"codex_hooks": self._codex_hooks("nope.py")}})
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        r = run(root)
-        out = r.stdout.decode()
-        self.assertEqual(r.returncode, 1, out)
-        self.assertIn("nope.py", out)
-        self.assertIn("codex-hooks.json", out)
-
-    def test_claude_plugin_root_reference_is_not_checked_against_scripts_root(self):
-        # A hooks.json-style ${CLAUDE_PLUGIN_ROOT} reference inside
-        # codex-hooks.json (e.g. accidentally copy-pasted) must not be
-        # silently checked against the wrong root and pass by coincidence —
-        # it's simply not a pattern this file's checker looks for at all.
-        codex_hooks = {
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "^Bash$",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": (
-                                    'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hook.py"'
-                                ),
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-        root = make_marketplace({"foo": {"codex_hooks": codex_hooks}})
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        r = run(root)
-        self.assertEqual(r.returncode, 0, r.stdout.decode())
 
 
 class SkillsTest(unittest.TestCase):
