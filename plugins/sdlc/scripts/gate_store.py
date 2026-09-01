@@ -91,6 +91,19 @@ GATES_BY_TIER = {
     "significant": ALL_GATE_NAMES,
 }
 
+# Gates whose own pass criterion is "no actionable findings, OR findings
+# fixed" — the skill records success by editing the actual source tree, not
+# only by writing a report. `record_gate` uses this to auto-clear the
+# bash-verifiable gates below when one of these records: they ran against
+# code that this gate's own skill may have just changed, so a stamp from
+# before that edit no longer verifies the code as it now stands. This closes
+# the gap gate.md's prose-only "post-gate changes invalidate ALL prior
+# gates" rule always described but never enforced — an agent forgetting to
+# manually reset used to leave a stale `tests`/`lint`/`typecheck` stamp in
+# place indefinitely. `grumpy-review` and `grumpy-imagine` are deliberately
+# excluded: both only ever produce a report, never touch source.
+CODE_MUTATING_GATES = {"simplify", "grumpy-fix-post-review", "grumpy-fix-post-imagine"}
+
 # Skill name (as seen on the Skill tool) -> gate it records.
 SKILL_TO_GATE = {
     "grumpy:simplify": "simplify",
@@ -785,6 +798,17 @@ def record_gate(data, branch, gate, authorized=False):
             f'"{branch}". Required: {", ".join(required)}'
         )
     bd.setdefault("gates", {})[gate] = _now()
+    if gate in CODE_MUTATING_GATES:
+        # This gate's own pass criterion just may have edited source files —
+        # any bash-verifiable gate already stamped ran against code that no
+        # longer necessarily matches. Clear them so `missing_gates` (and
+        # therefore `gh pr create`) demands they run again, instead of
+        # trusting a timestamp from before the edit. Silent by design at
+        # this layer — the caller (the auto-record hook, or `--attest`)
+        # decides whether and how to surface it; `record_gate` only owns
+        # making the store correct.
+        for invalidated in ("tests", "lint", "typecheck"):
+            bd.get("gates", {}).pop(invalidated, None)
     return bd
 
 

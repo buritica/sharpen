@@ -107,16 +107,25 @@ class HistoricalGateSemanticsTest(unittest.TestCase):
             },
         )
         self.assertEqual(gs.RENAMED_SKILLS, {"simplify": "grumpy:simplify"})
+        self.assertEqual(
+            gs.CODE_MUTATING_GATES,
+            {"simplify", "grumpy-fix-post-review", "grumpy-fix-post-imagine"},
+        )
 
     def test_direct_recording_requires_authorization_only_for_skill_gates(self):
         data = {}
         gs.init_gates(data, "feat/x", "small-medium")
-        for gate in ("tests", "lint", "typecheck"):
-            gs.record_gate(data, "feat/x", gate)
         for gate in gs.SKILL_FOR_GATE:
             with self.subTest(gate=gate), self.assertRaises(ValueError):
                 gs.record_gate(data, "feat/x", gate)
             gs.record_gate(data, "feat/x", gate, authorized=True)
+        # Recorded AFTER the skill gates: some of those are code-mutating
+        # (gate_store.CODE_MUTATING_GATES) and clear these three on record,
+        # so seeding them first would just rediscover that invalidation
+        # instead of exercising authorization, which is what this test is
+        # actually about.
+        for gate in ("tests", "lint", "typecheck"):
+            gs.record_gate(data, "feat/x", gate)
         self.assertEqual(gs.missing_gates(data["feat/x"]), [])
 
 
@@ -296,12 +305,13 @@ class CurrentEnforcementContractTest(unittest.TestCase):
 
     def test_complete_legacy_full_cycle_permits_pr_creation(self):
         run_cli(["--init", "small-medium"], self.repo, self.gates_path)
-        for gate in ("tests", "lint", "typecheck"):
-            result = run_cli(["--record", gate], self.repo, self.gates_path)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
         # Skill-gated records enter only through authorized store calls (the
-        # auto-record hook path), not through manual CLI recording.
+        # auto-record hook path), not through manual CLI recording. Recorded
+        # BEFORE tests/lint/typecheck: some of these are code-mutating
+        # (gate_store.CODE_MUTATING_GATES) and clear those three on record,
+        # so seeding them second would just rediscover that invalidation
+        # instead of exercising a complete, PR-ready cycle.
         gs.update_store(
             self.gates_path,
             lambda d: [
@@ -309,6 +319,10 @@ class CurrentEnforcementContractTest(unittest.TestCase):
                 for gate in gs.SKILL_FOR_GATE
             ],
         )
+
+        for gate in ("tests", "lint", "typecheck"):
+            result = run_cli(["--record", gate], self.repo, self.gates_path)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
         result = run_enforce(self.repo, self.gates_path)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
