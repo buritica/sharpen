@@ -185,9 +185,9 @@ def handle_skill_completion(
                 "surprising": True,
             }
         # Routed or not, this hook just watched the skill run.
-        before = set(bd.get("gates", {}))
-        gs.record_gate(data, target_branch, gate, authorized=True)
-        invalidated = sorted(before - set(bd.get("gates", {})))
+        invalidated = gs.record_gate_and_diff(
+            data, target_branch, gate, authorized=True
+        )
         return {
             "recorded": True,
             "gate": gate,
@@ -261,9 +261,7 @@ def handle_skill_completion(
         return {"recorded": False, "reason": f'"{gate}" already recorded'}
 
     # This hook just watched the skill run — the one authorized recorder.
-    before = set(bd.get("gates", {}))
-    gs.record_gate(data, target_branch, gate, authorized=True)
-    invalidated = sorted(before - set(bd.get("gates", {})))
+    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
     return {
         "recorded": True,
         "gate": gate,

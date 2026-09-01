@@ -812,6 +812,24 @@ def record_gate(data, branch, gate, authorized=False):
     return bd
 
 
+def record_gate_and_diff(data, branch, gate, authorized=False):
+    """`record_gate`, plus the list of already-recorded gates it just cleared
+    as a side effect of `gate` being in `CODE_MUTATING_GATES`.
+
+    `record_gate` itself stays silent about this (see its own docstring) —
+    every caller that already re-derives `missing_gates` fresh (the CLI's
+    `--record`/`--attest` paths) sees the clear for free with no extra
+    plumbing. This wrapper exists only for the one caller that can't do
+    that: `auto-record-skill-gate.py` renders a one-line notification at the
+    moment of recording, before anything re-reads `missing_gates`, and needs
+    to know what to say in it. A second caller needing the same diff belongs
+    here too, not copy-pasted at its own call site."""
+    bd = data.get(branch) or {}
+    before = set(bd.get("gates", {}))
+    record_gate(data, branch, gate, authorized=authorized)
+    return sorted(before - set(bd.get("gates", {})))
+
+
 def attest_gate(data, branch, gate, reason):
     """Stamp a skill-gated `gate` on human attestation, not a hook observation.
 
