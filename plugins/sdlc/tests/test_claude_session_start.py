@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the Claude SessionStart capability adapter."""
 
+import glob
 import importlib.util
 import json
 import os
@@ -8,7 +9,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
@@ -60,6 +63,73 @@ class DetectCapabilitiesTest(unittest.TestCase):
         self.assertEqual(manifest["provider"], {"name": "claude-code"})
         self.assertEqual(manifest["capabilities"], ["test", "typecheck"])
         self.assertEqual(manifest["x-source"], "claude-session-start")
+
+
+class WriteManifestConcurrencyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        self.path = os.path.join(self.tmpdir, "capabilities.claude.json")
+
+    def test_concurrent_write_manifest_calls_do_not_corrupt_the_output(self):
+        # Drive the actual write_manifest function (not a hand-rolled
+        # stand-in) from multiple threads racing on the same manifest path,
+        # the way two SessionStart hooks starting at once would. With the
+        # old fixed "<path>.tmp" name this could read/clobber a partial
+        # write; mkstemp's kernel-unique name means every writer's temp
+        # file is exclusive to it, so the final manifest is always one
+        # writer's complete, valid output, never a mix of two.
+        errors = []
+
+        def write(n):
+            try:
+                session_start.write_manifest(
+                    self.path, session_start.build_manifest([f"cap-{n}"])
+                )
+            except Exception as e:  # noqa: BLE001 - surfaced via `errors`
+                errors.append(e)
+
+        threads = [threading.Thread(target=write, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        with open(self.path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(len(manifest["capabilities"]), 1)
+        self.assertTrue(manifest["capabilities"][0].startswith("cap-"))
+        leftover = glob.glob(os.path.join(self.tmpdir, "capabilities-*.tmp"))
+        self.assertEqual(leftover, [])
+
+    def test_write_manifest_cleans_up_temp_file_when_replace_fails(self):
+        manifest = session_start.build_manifest(["test"])
+        with mock.patch.object(
+            session_start.os, "replace", side_effect=OSError("boom")
+        ):
+            with self.assertRaises(OSError):
+                session_start.write_manifest(self.path, manifest)
+        self.assertFalse(os.path.exists(self.path))
+        leftover = glob.glob(os.path.join(self.tmpdir, "capabilities-*.tmp"))
+        self.assertEqual(leftover, [])
+
+    def test_write_manifest_leaves_no_temp_file_behind(self):
+        manifest = session_start.build_manifest(["test"])
+        session_start.write_manifest(self.path, manifest)
+        self.assertFalse(os.path.exists(f"{self.path}.tmp"))
+        leftover = glob.glob(os.path.join(self.tmpdir, "capabilities-*.tmp"))
+        self.assertEqual(leftover, [])
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["capabilities"], ["test"])
+
+    def test_write_manifest_cleans_up_temp_file_when_dump_fails(self):
+        manifest = {"not": "json-serializable", "bad": object()}
+        with self.assertRaises(TypeError):
+            session_start.write_manifest(self.path, manifest)
+        self.assertFalse(os.path.exists(self.path))
+        leftover = glob.glob(os.path.join(self.tmpdir, "capabilities-*.tmp"))
+        self.assertEqual(leftover, [])
 
 
 class SessionStartCliTest(unittest.TestCase):
