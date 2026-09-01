@@ -18,6 +18,7 @@ Output is quiet on success. Problems are written to stderr but exit 0 so a
 SessionStart capability-detection failure never blocks the session.
 """
 
+import glob
 import json
 import os
 import sys
@@ -50,19 +51,76 @@ def _plugin_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
-def _sibling_skill_paths():
-    root = os.path.abspath(os.path.join(_plugin_root(), ".."))
-    return {
-        capability: os.path.join(root, plugin, "skills", skill, "SKILL.md")
-        for capability, (plugin, skill) in CAPABILITY_BY_SKILL.items()
-    }
+def _sibling_skill_candidates(plugin, skill, plugin_root=None):
+    """Every plausible on-disk location for <plugin>'s skills/<skill>/SKILL.md.
+
+    A single `${CLAUDE_PLUGIN_ROOT}/../<plugin>` join (this function's
+    previous shape) only works in a flat dev checkout, where `plugins/sdlc`
+    and `plugins/grumpy` sit as direct siblings. It breaks under the *real*
+    installed layout: this repo's own CLAUDE.md already documents Claude
+    Code's plugin cache as version-nested (`cache/<marketplace>/<plugin>/
+    <version>/`) in its "Hook authoring" note, and the same is now directly
+    confirmed for Codex CLI too — a live installed Codex plugin cache showed
+    this join silently resolving to `cache/sharpen/sdlc/grumpy/...` (one
+    level too shallow) and never matching. `grumpy`'s own version segment is
+    unknown to `sdlc` at that point (the two plugins version independently),
+    so the nested case globs for it rather than guessing a fixed depth.
+
+    CLAUDE.md's "Hook authoring" note also says to "detect sibling
+    capabilities by command availability instead, the way /sdlc:gate detects
+    grumpy" — deliberately not followed here. That pattern relies on an LLM
+    agent consulting its own list of available skills/commands; this file is
+    a plain Python subprocess invoked by a SessionStart hook, with no such
+    list to consult. Filesystem detection is the only signal available to
+    it, so the fix widens it (two shapes instead of one, plus an override)
+    rather than switching to a mechanism this script has no access to.
+
+    These two shapes are what's confirmed today, not a closed set — a third
+    host with a different cache layout would reproduce this exact bug
+    silently (this adapter fails open by design; see the module docstring).
+    Multiple cached versions of the sibling plugin are also not
+    disambiguated: the glob matches any version directory that has the
+    skill file, so a stale leftover from a since-upgraded install could
+    false-positive a capability that's no longer actually there. Neither
+    gap has a fix here — both are accepted limitations, not oversights.
+    `SDLC_<PLUGIN>_ROOT` (e.g. `SDLC_GRUMPY_ROOT`) is the escape hatch for
+    the former: point it directly at the sibling plugin's root to add one
+    more candidate, without waiting on a new sdlc release — same naming
+    convention as this file's own `SDLC_CAPABILITIES_PATH` override."""
+    root = plugin_root or _plugin_root()
+    flat_root = os.path.abspath(os.path.join(root, ".."))
+    nested_marketplace_root = os.path.abspath(os.path.join(root, "..", ".."))
+    candidates = [os.path.join(flat_root, plugin, "skills", skill, "SKILL.md")]
+    candidates += glob.glob(
+        os.path.join(nested_marketplace_root, plugin, "*", "skills", skill, "SKILL.md")
+    )
+    override = os.environ.get(f"SDLC_{plugin.upper()}_ROOT")
+    if override:
+        candidates.append(os.path.join(override, "skills", skill, "SKILL.md"))
+    return candidates
 
 
-def detect_capabilities(path_exists=os.path.isfile):
+def detect_capabilities(path_exists=os.path.isfile, plugin_root=None):
+    """`SDLC_DEBUG=1` writes one stderr line per skill-backed capability,
+    naming which candidate path (if any) matched — this bug (silently
+    missing capabilities under a real plugin cache) took a live debugging
+    session to find precisely because nothing said which of the candidate
+    shapes, if any, was actually checked. Off by default: this hook's
+    contract is quiet on success (see module docstring), and this is
+    diagnostic noise on every session, not something a normal run should
+    print."""
+    debug = os.environ.get("SDLC_DEBUG") == "1"
     capabilities = set(BASE_CAPABILITIES)
-    for capability, path in _sibling_skill_paths().items():
-        if path_exists(path):
+    for capability, (plugin, skill) in CAPABILITY_BY_SKILL.items():
+        candidates = _sibling_skill_candidates(plugin, skill, plugin_root=plugin_root)
+        matched = next((path for path in candidates if path_exists(path)), None)
+        if matched:
             capabilities.add(capability)
+        if debug:
+            sys.stderr.write(
+                f"[gate] session-start debug: {capability!r} ({plugin}/{skill}) "
+                f"{'matched ' + matched if matched else 'no match among ' + repr(candidates)}\n"
+            )
     return sorted(capabilities)
 
 

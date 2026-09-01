@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tests for the Claude SessionStart capability adapter."""
 
+import contextlib
 import glob
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -36,6 +38,14 @@ def make_repo(branch="feat/x"):
     return repo
 
 
+def _touch(*parts):
+    path = os.path.join(*parts)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")
+    return path
+
+
 class DetectCapabilitiesTest(unittest.TestCase):
     def test_base_capabilities_are_always_present(self):
         result = session_start.detect_capabilities(path_exists=lambda _path: False)
@@ -63,6 +73,96 @@ class DetectCapabilitiesTest(unittest.TestCase):
         self.assertEqual(manifest["provider"], {"name": "claude-code"})
         self.assertEqual(manifest["capabilities"], ["test", "typecheck"])
         self.assertEqual(manifest["x-source"], "claude-session-start")
+
+
+class RealLayoutDetectionTest(unittest.TestCase):
+    """Regression coverage against actual on-disk layouts, not the
+    `path_exists` stub above — that stub says nothing about whether the
+    *path being checked* is even correct. Confirmed live against an
+    installed Codex CLI plugin cache: the previous single
+    `${CLAUDE_PLUGIN_ROOT}/../grumpy/...` join resolved to
+    `cache/sharpen/sdlc/grumpy/...` (nested inside sdlc's own directory, one
+    level too shallow) and never matched, so `review`/`imagine`/`fix` were
+    silently absent from every real manifest despite grumpy being installed
+    — invisible to the stubbed test above, which never exercises real path
+    construction at all."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+
+    def test_flat_dev_checkout_layout(self):
+        # plugins/sdlc and plugins/grumpy as direct siblings.
+        sdlc_root = os.path.join(self.tmpdir, "plugins", "sdlc")
+        _touch(self.tmpdir, "plugins", "grumpy", "skills", "review", "SKILL.md")
+        os.makedirs(sdlc_root, exist_ok=True)
+        result = session_start.detect_capabilities(plugin_root=sdlc_root)
+        self.assertIn("review", result)
+        self.assertNotIn("imagine", result)  # only review's SKILL.md exists
+        self.assertNotIn("fix", result)
+
+    def test_version_nested_installed_cache_layout(self):
+        # cache/<marketplace>/<plugin>/<version>/ — sdlc and grumpy version
+        # independently, so grumpy's version segment differs from sdlc's.
+        sdlc_root = os.path.join(self.tmpdir, "cache", "sharpen", "sdlc", "4.10.0")
+        os.makedirs(sdlc_root, exist_ok=True)
+        _touch(
+            self.tmpdir,
+            "cache",
+            "sharpen",
+            "grumpy",
+            "2.4.0",
+            "skills",
+            "imagine",
+            "SKILL.md",
+        )
+        result = session_start.detect_capabilities(plugin_root=sdlc_root)
+        self.assertIn("imagine", result)
+        self.assertNotIn("review", result)
+        self.assertNotIn("fix", result)
+
+    def test_version_nested_layout_with_no_grumpy_installed(self):
+        sdlc_root = os.path.join(self.tmpdir, "cache", "sharpen", "sdlc", "4.10.0")
+        os.makedirs(sdlc_root, exist_ok=True)
+        result = session_start.detect_capabilities(plugin_root=sdlc_root)
+        self.assertNotIn("review", result)
+        self.assertNotIn("imagine", result)
+        self.assertNotIn("fix", result)
+
+    def test_sdlc_grumpy_root_env_override_unblocks_an_unrecognized_layout(self):
+        # A layout neither candidate above finds — the escape hatch this
+        # bug report exists for: fix it via an env var, not a new release.
+        sdlc_root = os.path.join(self.tmpdir, "somewhere", "unrecognized", "sdlc")
+        grumpy_root = os.path.join(self.tmpdir, "elsewhere", "grumpy")
+        os.makedirs(sdlc_root, exist_ok=True)
+        _touch(grumpy_root, "skills", "fix", "SKILL.md")
+        with mock.patch.dict(os.environ, {"SDLC_GRUMPY_ROOT": grumpy_root}):
+            result = session_start.detect_capabilities(plugin_root=sdlc_root)
+        self.assertIn("fix", result)
+        self.assertNotIn("review", result)
+
+    def test_debug_env_var_reports_which_candidate_matched(self):
+        # The observability gap that made this bug take a live debugging
+        # session to find: with no SDLC_DEBUG, troubleshooting "why isn't
+        # review showing up" has nothing to go on but re-deriving the paths
+        # by hand, same as this bug's own investigation had to.
+        sdlc_root = os.path.join(self.tmpdir, "plugins", "sdlc")
+        _touch(self.tmpdir, "plugins", "grumpy", "skills", "review", "SKILL.md")
+        os.makedirs(sdlc_root, exist_ok=True)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            session_start.detect_capabilities(plugin_root=sdlc_root)
+        self.assertEqual(stderr.getvalue(), "")  # quiet by default
+
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, {"SDLC_DEBUG": "1"}):
+            with contextlib.redirect_stderr(stderr):
+                session_start.detect_capabilities(plugin_root=sdlc_root)
+        output = stderr.getvalue()
+        self.assertIn("'review'", output)
+        self.assertIn("matched", output)
+        self.assertIn("no match", output)  # imagine/fix, neither installed
 
 
 class WriteManifestConcurrencyTest(unittest.TestCase):
