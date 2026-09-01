@@ -458,9 +458,8 @@ def main():
         else:
             detail = (
                 f'It armed a {tier} gate cycle for "{branch}"{profile_note}: gates 2-6 '
-                "need /simplify and the grumpy skills to record, so without "
-                "them, re-init as tiny (/sdlc:gate --init tiny) if the "
-                "change qualifies."
+                "need the grumpy skills to record, so without them, re-init "
+                "as tiny (/sdlc:gate --init tiny) if the change qualifies."
             )
         return ho.notify("auto-init", f"{COMMIT_OK}. {detail}")
     return 0

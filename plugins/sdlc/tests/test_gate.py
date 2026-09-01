@@ -1936,7 +1936,7 @@ class CrossRepoAutoRecordTest(unittest.TestCase):
         return run_hook(AUTO, payload, self.source, self.gp)
 
     def test_records_into_the_target_store_from_the_source_cwd(self):
-        r = self.auto("simplify", self.source)
+        r = self.auto("grumpy:simplify", self.source)
         # A cross-repo stamp is a cross-worktree write from the hook's own
         # perspective (target != the source's own detected branch), which
         # this hook deliberately surfaces via exit 2 (see
@@ -1952,7 +1952,7 @@ class CrossRepoAutoRecordTest(unittest.TestCase):
         # per-repo `routed_from` entry ever existed) and confirm the hook
         # genuinely cannot find the target's cycle from the source's cwd.
         run_cli(["--unroute"], self.source, self.gp)
-        self.auto("simplify", self.source)
+        self.auto("grumpy:simplify", self.source)
         self.assertNotIn(
             "simplify", read_json(self.gp).get("feat/target", {}).get("gates", {})
         )
@@ -1963,7 +1963,7 @@ class CrossRepoAutoRecordTest(unittest.TestCase):
         # branch (always "checked out" there), so if the hook mistakenly ran
         # `git worktree list` against the SOURCE instead, this would fail as
         # a stale-route skip instead of recording.
-        r = self.auto("simplify", self.source)
+        r = self.auto("grumpy:simplify", self.source)
         self.assertIn(r.returncode, (0, 2), r.stderr.decode())
         self.assertNotIn("stale route", r.stderr.decode())
 
@@ -2068,7 +2068,7 @@ class CrossRepoUnrouteTest(unittest.TestCase):
         run_cli(["--unroute"], self.source, self.gp)
         payload = {
             "tool_name": "Skill",
-            "tool_input": {"skill": "simplify"},
+            "tool_input": {"skill": "grumpy:simplify"},
             "cwd": self.source,
         }
         run_hook(AUTO, payload, self.source, self.gp)
@@ -2423,7 +2423,7 @@ class CliSkillGatedGuardTest(unittest.TestCase):
         # the auto-record hook is the one authorized caller
         run_hook(
             AUTO,
-            {"tool_name": "Skill", "tool_input": {"skill": "simplify"}},
+            {"tool_name": "Skill", "tool_input": {"skill": "grumpy:simplify"}},
             self.repo,
             self.gp,
         )
@@ -2623,7 +2623,7 @@ class AutoRecordAmbiguityTest(unittest.TestCase):
     def test_tiny_cycle_does_not_collect_skill_gates(self):
         data = {}
         gs.init_gates(data, "feat/x", "tiny")
-        for skill in ("grumpy:review", "simplify", "grumpy:imagine"):
+        for skill in ("grumpy:review", "grumpy:simplify", "grumpy:imagine"):
             self.assertIsNone(gs.determine_gate(skill, data["feat/x"]), skill)
         res = auto.handle_skill_completion(
             "grumpy:review", data, branch="feat/x", active_branches={"feat/x"}
@@ -3022,7 +3022,12 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
 
     def test_full_skill_chain_lands_on_target(self):
         self.init_routed("feat/c", self.wt_b)
-        for skill in ("simplify", "grumpy:review", "grumpy:fix", "grumpy:imagine"):
+        for skill in (
+            "grumpy:simplify",
+            "grumpy:review",
+            "grumpy:fix",
+            "grumpy:imagine",
+        ):
             self.skill(skill, self.wt_b)
         self.assertEqual(
             set(self.gates("feat/c")),
@@ -3207,7 +3212,7 @@ class CrossWorktreeRoutingTest(unittest.TestCase):
         self.init_routed("feat/a", self.wt_b)
         self.init_routed("feat/a", self.wt_c)
         self.skill("grumpy:review", self.wt_b)
-        self.skill("simplify", self.wt_c)
+        self.skill("grumpy:simplify", self.wt_c)
         self.assertEqual(set(self.gates("feat/a")), {"grumpy-review", "simplify"})
         self.assertNotIn("feat/b", read_json(self.gp))
         self.assertNotIn("feat/c", read_json(self.gp))

@@ -2,7 +2,7 @@
 """
 PostToolUse hook: auto-record SDLC gates after a gate-tracked skill completes.
 
-When simplify / grumpy:review / grumpy:imagine / grumpy:fix finishes, record the
+When grumpy:simplify / grumpy:review / grumpy:imagine / grumpy:fix finishes, record the
 corresponding gate in the JSON store. This is the ONLY path to record skill-gated
 gates: gate_store.record_gate() refuses them unless the caller passes
 `authorized=True`, and this hook is the only caller that does.
@@ -191,8 +191,8 @@ def handle_skill_completion(
     if not branch:
         # Distinct from detached HEAD so the message says which happened, but
         # NOT surfaced: the overwhelmingly common cause is running a skill
-        # outside a git repo at all, and surfacing turns every /simplify in a
-        # scratch directory into an interrupt the caller can't act on. Nothing
+        # outside a git repo at all, and surfacing turns every /grumpy:simplify
+        # in a scratch directory into an interrupt the caller can't act on. Nothing
         # was lost there — there was no cycle to record against either way.
         return {
             "recorded": False,

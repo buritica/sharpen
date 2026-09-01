@@ -23,7 +23,7 @@ Run `--unroute` when you finish gating `$WT` and keep working in this session �
 
 ### A skill-gated gate that won't stamp in a long session
 
-**(Claude Code specific.)** If `/simplify` or a `/grumpy:*` skill genuinely ran
+**(Claude Code specific.)** If a `/grumpy:*` skill genuinely ran
 — real findings, real artifacts written — but its gate never landed in
 `--status`, suspect Claude Code's Skill-tool instruction caching before
 assuming the hook is broken: re-invoking a skill already loaded earlier in a
@@ -66,7 +66,7 @@ the auto-record hook resolves ITS OWN git state (which store to open, which
 branches are checked out) from the session's own cwd, and for this topology
 that cwd is repo A, which has no idea repo B or its branches exist. Without
 anything else, the route would record in B's store at `--init` time but never
-actually fire when `/simplify`/`/grumpy:*` run later.
+actually fire when `/grumpy:*` runs later.
 
 `--init --route-from <path>` closes this by **also registering the route** in
 a small, repo-independent file (`gate_store.cross_repo_registry_path()`,
@@ -129,14 +129,14 @@ is the reliable workaround.
 
 Before initializing the gate cycle, detect which optional capabilities are available and announce the mode.
 
-**Skill detection — do NOT probe the filesystem.** Detect by **command availability**: `/simplify`, `/grumpy:review`, `/grumpy:fix`, and `/grumpy:imagine` are listed in your available skills/commands for this session if and only if they are installed. Check that list directly — do not run `ls "$CLAUDE_PLUGIN_ROOT/../grumpy/..."`, since `$CLAUDE_PLUGIN_ROOT` is empty in the skill-execution context and that probe always fails.
+**Skill detection — do NOT probe the filesystem.** Detect by **command availability**: `/grumpy:simplify`, `/grumpy:review`, `/grumpy:fix`, and `/grumpy:imagine` are listed in your available skills/commands for this session if and only if they are installed. Check that list directly — do not run `ls "$CLAUDE_PLUGIN_ROOT/../grumpy/..."`, since `$CLAUDE_PLUGIN_ROOT` is empty in the skill-execution context and that probe always fails.
 
-**`/simplify` is gate 2's recorder, and it does not ship with this plugin.** Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only when the `/simplify` skill runs, and a manual `--record simplify` is refused by the store. So check for it in the same breath as grumpy — if it is missing, a `small-medium`/`significant` cycle cannot complete either, and the same "say it before you initialize" rule below applies.
+Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only when `/grumpy:simplify` runs, and a manual `--record simplify` is refused by the store. All four skills ship together with the `grumpy` plugin, so check for all of them in one breath.
 
-- All three grumpy commands available → **grumpy mode** for gates 3–6.
-- Otherwise → **self-review fallback**. Announce it loudly: `⚠️ grumpy not available — gates 3–6 use the weaker self-review fallback`, and note it in the PR description.
-  **The fallback cannot satisfy gates 3–6 when the hooks are installed.** Those gates are recorded only by the auto-record hook when the real skill runs; `record-gate.py --record grumpy-review` is refused by the store, by design. So with hooks registered and grumpy absent, a `small-medium`/`significant` cycle never completes and `gh pr create` stays blocked.
-  **Say this before you initialize, not after the work is done.** If the tier you are about to init is `small-medium` or `significant` and grumpy (or `/simplify`) is unavailable, stop and tell the user: the cycle cannot complete, and their options are to install grumpy or (only if the change genuinely qualifies) run `tiny`. Failing at init costs them a sentence; failing at `gh pr create` costs them the whole chain. Do not present the self-review as having satisfied a gate it cannot record.
+- All four grumpy commands available → **grumpy mode** for gates 2–6.
+- Otherwise → **self-review fallback**. Announce it loudly: `⚠️ grumpy not available — gates 2–6 use the weaker self-review fallback`, and note it in the PR description.
+  **The fallback cannot satisfy gates 2–6 when the hooks are installed.** Those gates are recorded only by the auto-record hook when the real skill runs; `record-gate.py --record grumpy-review` is refused by the store, by design. So with hooks registered and grumpy absent, a `small-medium`/`significant` cycle never completes and `gh pr create` stays blocked.
+  **Say this before you initialize, not after the work is done.** If the tier you are about to init is `small-medium` or `significant` and grumpy is unavailable, stop and tell the user: the cycle cannot complete, and their options are to install grumpy or (only if the change genuinely qualifies) run `tiny`. Failing at init costs them a sentence; failing at `gh pr create` costs them the whole chain. Do not present the self-review as having satisfied a gate it cannot record.
 - If you are genuinely unsure, **ask** rather than silently downgrading.
 
 Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no external runtime. So enforcement works on any box: the `enforce-sdlc-gates.py` hook blocks `gh pr create` when gates are incomplete. State the mode in one line, e.g. `Mode: grumpy + enforced gates`.
@@ -171,7 +171,7 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --record <gate-name> --bran
 
 Re-run `--init` with the same tier — it clears all timestamps (the route survives, but pass `--route-from` anyway so the reset is identical to the init):
 
-**Know the price before you type it.** A reset clears the skill-gated gates too, and those can only be re-earned by running their skills again — there is no `--record` for them. On a `small-medium` cycle that is `/simplify` plus three grumpy runs. That is the correct cost when the code actually changed (a gate that passed against different code proved nothing), but it means "just re-init" is not a cheap reflex. Batch your fixes and reset once.
+**Know the price before you type it.** A reset clears the skill-gated gates too, and those can only be re-earned by running their skills again — there is no `--record` for them. On a `small-medium` cycle that is four grumpy runs (`/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, and `/grumpy:fix` twice). That is the correct cost when the code actually changed (a gate that passed against different code proved nothing), but it means "just re-init" is not a cheap reflex. Batch your fixes and reset once.
 
 ```bash
 WT="${WT:-.}"
@@ -196,7 +196,7 @@ The **Key** column is the exact gate name `record-gate.py` accepts and stores. `
 | # | Gate | Key | How | Pass when |
 |---|------|-----|-----|-----------|
 | 1 | **Test** | `tests` | Auto-detect runner (see below) | Exit 0 |
-| 2 | **Simplify** | `simplify` | If `/simplify` is available: run it. Otherwise: review for unnecessary complexity, dead code, over-abstraction — but see the note below, the gate cannot be recorded | No actionable findings, or findings fixed |
+| 2 | **Simplify** | `simplify` | If `grumpy` plugin installed: `/grumpy:simplify`. Otherwise: review for unnecessary complexity, dead code, over-abstraction — but see the note below, the gate cannot be recorded | No actionable findings, or findings fixed |
 | 3 | **Review** | `grumpy-review` | If `grumpy` plugin installed: `/grumpy:review`. Otherwise: self-review for correctness bugs, edge cases, security | No critical findings |
 | 4 | **Fix** | `grumpy-fix-post-review` | If grumpy: `/grumpy:fix`. Otherwise: fix findings from step 3 | All critical findings resolved |
 | 5 | **Imagine** | `grumpy-imagine` | If `grumpy` plugin installed: `/grumpy:imagine`. Otherwise: mental production walkthrough | No critical findings |
@@ -330,10 +330,11 @@ On failure:
 
 Lint and typecheck run last because the review/fix gates modify code.
 
-## Simplify gate (gate 2)
+## Self-review (gates 2-6, when grumpy is not installed)
 
-When grumpy is not installed, perform the simplify review yourself. Run `git diff origin/main...HEAD` and check for:
+When grumpy is not installed, perform the review yourself:
 
+**Simplify (gate 2):** Run `git diff origin/main...HEAD` and check for:
 - Dead code or unused imports
 - Over-abstraction (helper functions called once, unnecessary indirection)
 - Duplicated logic that could be consolidated
@@ -341,10 +342,6 @@ When grumpy is not installed, perform the simplify review yourself. Run `git dif
 - Comments that restate the code
 
 Fix anything you find, then proceed.
-
-## Self-review (gates 3-6, when grumpy is not installed)
-
-When grumpy is not installed, perform the review yourself:
 
 **Review (gate 3):** Read the full diff. Check for:
 - Correctness bugs (off-by-one, null handling, race conditions)
@@ -378,7 +375,7 @@ After any post-chain modification, reset gate tracking and re-run the full chain
 - Gate ordering is load-bearing: earlier gates are cheaper to fix. Running typecheck before review wastes time when review finds logic bugs.
 - Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1. This is mandatory, not advisory.
 - When grumpy is not installed, the self-review fallback is significantly less thorough. Acknowledge this in the PR description.
-- The simplify gate (gate 2) is the most commonly skipped. If no simplify skill or grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.
+- The simplify gate (gate 2) is the most commonly skipped. If no grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.
 - `--worktree` without `--route-from` is the quiet failure: the bash gates land on `$WT`'s branch and the skill gates land on this session's, so the chain never completes and nothing says why. `--status --branch "$BRANCH"` shows `Driven from:` when the route is in place.
 - Gate tracking + enforcement are pure python (stdlib), so the `gh pr create` block works without `bun`. (`bun` may still be the project's *test* runner — that's a separate, per-project toolchain concern.)
 - Enforcement is **local-hook state, not a hosted backend**: a PR opened with `--head owner:branch` (a fork) has no cycle in this checkout's shared store, no matter what the fork contributor's own hooks recorded on their side — it reads as "no cycle -> allow" and ships ungated. This system does not defend against unreviewed external contributions; a repo that accepts fork PRs needs a CI-side gate too, not just this hook.

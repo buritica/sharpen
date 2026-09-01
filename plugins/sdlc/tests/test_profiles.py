@@ -89,7 +89,7 @@ class HistoricalGateSemanticsTest(unittest.TestCase):
         self.assertEqual(
             gs.SKILL_FOR_GATE,
             {
-                "simplify": "/simplify",
+                "simplify": "/grumpy:simplify",
                 "grumpy-review": "/grumpy:review",
                 "grumpy-fix-post-review": "/grumpy:fix",
                 "grumpy-imagine": "/grumpy:imagine",
@@ -100,7 +100,7 @@ class HistoricalGateSemanticsTest(unittest.TestCase):
         self.assertEqual(
             gs.SKILL_TO_GATE,
             {
-                "simplify": "simplify",
+                "grumpy:simplify": "simplify",
                 "grumpy:review": "grumpy-review",
                 "grumpy:imagine": "grumpy-imagine",
                 "grumpy:fix": "grumpy-fix",

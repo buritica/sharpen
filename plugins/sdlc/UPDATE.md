@@ -1,4 +1,4 @@
-# sdlc UPDATE — v4.4.0
+# sdlc UPDATE — v4.10.4
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
@@ -36,13 +36,15 @@ never touched. Fix that one first.
 
 ## Gate cycles
 
-The chain records to `.claude/data/gates.json`, keyed by branch and shared across every
-worktree of the repo. Two things worth knowing before you run it:
+The chain records to `.sharpen/data/gates.json` (an existing install that still only has
+`.claude/data/gates.json` keeps using that file until the newer path exists), keyed by
+branch and shared across every worktree of the repo. Two things worth knowing before you
+run it:
 
 - **Gates 2–6 are skill-gated.** They are recorded only when their skill actually runs.
   `record-gate.py --record grumpy-review` is refused by the hook and again by the store.
-  If `grumpy` and `/simplify` are not installed, a `small-medium` cycle cannot complete —
-  `/sdlc:gate` says so before it initializes rather than after you've done the work.
+  If `grumpy` is not installed, a `small-medium` cycle cannot complete — `/sdlc:gate` says
+  so before it initializes rather than after you've done the work.
 - **A reset clears the skill-gated gates too**, and they can only be re-earned by running
   their skills again. That is correct — a gate that passed against different code proved
   nothing — but it means "just re-init" is not a cheap reflex. Batch your fixes and reset

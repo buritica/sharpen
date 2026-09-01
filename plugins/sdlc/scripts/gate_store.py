@@ -93,7 +93,7 @@ GATES_BY_TIER = {
 
 # Skill name (as seen on the Skill tool) -> gate it records.
 SKILL_TO_GATE = {
-    "simplify": "simplify",
+    "grumpy:simplify": "simplify",
     "grumpy:review": "grumpy-review",
     "grumpy:imagine": "grumpy-imagine",
     "grumpy:fix": "grumpy-fix",
@@ -104,7 +104,7 @@ SKILL_TO_GATE = {
 # bash-verifiable gates stay manually recordable. One map, so the gate list and
 # the "run this instead" text can't drift apart.
 SKILL_FOR_GATE = {
-    "simplify": "/simplify",
+    "simplify": "/grumpy:simplify",
     "grumpy-review": "/grumpy:review",
     "grumpy-fix-post-review": "/grumpy:fix",
     "grumpy-imagine": "/grumpy:imagine",

@@ -8,6 +8,7 @@ production incidents and is tired of pretending your code is fine.
 | Command | Scope | Description |
 | --- | --- | --- |
 | `/grumpy:audit` | Whole project | Composes every grumpy review into one picture + a prioritized, honestly-sized improvement plan |
+| `/grumpy:simplify` | Current diff | Hard code-quality thresholds (complexity, coverage, dead/redundant code, type safety) — fixes what fails |
 | `/grumpy:review` | Current diff | Comprehensive code review across 7 parallel aspects |
 | `/grumpy:imagine` | Current diff | Production imagination: UX, logs, metrics, concurrency, error paths |
 | `/grumpy:edge-cases` | Current diff | Code, product, and security blind spots |
