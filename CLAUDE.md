@@ -88,6 +88,17 @@ Note that `sdlc` and `grumpy` share a path contract (`.claude/sdlc/<branch>/` an
 reads what grumpy writes. If you change that contract, both plugins move together; a skew
 leaves one side reading a directory the other never wrote.
 
+## Editing a command's frontmatter or body regenerates its SKILL.md
+
+Every `commands/<name>.md` has a generated `skills/<name>/SKILL.md` (the cross-host format
+Codex CLI, Gemini CLI, Cursor, and Copilot read — see `plugins/sdlc/README.md`, "Codex CLI
+support"). After editing a command's `description`/`name` frontmatter or its body, run
+`python3 scripts/generate-skill.py --write-all-in <plugin-dir>` before opening a PR.
+`scripts/check-marketplace.py` fails if any `skills/*/SKILL.md` is missing or stale, and
+this repo's own pre-merge hook (`scripts/pre-merge-check.sh`) blocks `gh pr create`/`gh pr
+merge` on that failure — so a branch that edited a command before this check existed will
+need one `--write-all-in` run the first time it rebases past this point.
+
 ## Hook authoring
 
 - Always quote `${CLAUDE_PLUGIN_ROOT}` in hook commands and paths.

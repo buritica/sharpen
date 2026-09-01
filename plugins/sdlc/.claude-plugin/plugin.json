@@ -1,6 +1,6 @@
 {
   "name": "sdlc",
-  "version": "4.9.1",
+  "version": "4.10.0",
   "description": "The full single-repo SDLC: spec, plan, gate, ship, plus repo bootstrap (new), CI + deploy pipeline scaffolding (init, audit, secrets) with ci-pass as the one required enforcement check, and test-quality depth (test-gaps, test-critique, test-flake). Absorbs the former ci, scaffold, test, and deploy plugins. Pair with grumpy for review depth and sdlc-guardrails for opt-in main-branch protection.",
   "author": {
     "name": "buritica"
