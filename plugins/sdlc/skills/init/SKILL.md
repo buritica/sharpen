@@ -322,34 +322,63 @@ Finally, state the rollback **floor**: how many previous releases the mechanism
 retains (usually one), and that the recovery path past that is deploying a
 known-good ref.
 
-## 10. Wire CLAUDE.md
+## 10. Wire AGENTS.md (and CLAUDE.md)
 
-Add a "Run gates before every PR" section to the repo's `CLAUDE.md` (create it
-if absent). Append — do not overwrite existing content. The section must include:
+Everything this command derived — the toolchain commands, tier rules, PR
+conventions, artifact paths, grumpy availability — has to live where every
+agent host reads it. That is `AGENTS.md`: Codex, Gemini, Cursor and Copilot
+read it directly, and Claude Code reads it through a one-line `CLAUDE.md`
+that says `@AGENTS.md`. Do not hand-write the block; the plugin's script
+renders it from `templates/agents-sdlc.md` and upserts it between
+`<!-- sdlc:begin -->` / `<!-- sdlc:end -->` markers, so a re-run replaces
+exactly its own block and nothing a human wrote:
 
-- The mandatory `/sdlc:gate` command (fenced as a shell block).
-- One sentence explaining the hook enforces this and blocks `gh pr create` until
-  gates pass.
-- The escape hatch: `/sdlc:gate --init tiny` before the first commit for
-  docs-only or trivial changes.
-
-If a `## Run gates` / `## Gates` / `sdlc:gate` section already exists, skip
-(idempotent). Use this exact prose as a template (adapt the fence style to match
-the existing CLAUDE.md if it differs):
-
-```markdown
-## Run gates before every PR
-
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/agents_md.py" --root . \
+  --test-cmd "<test command from step 3>" \
+  --lint-cmd "<lint command>" \
+  --format-cmd "<format command>" \
+  --typecheck-cmd "<typecheck command, or omit>" \
+  --default-branch "<default branch>" \
+  --grumpy   # only when step 0b found the grumpy skills
+  # --deploy "<one line on how the repo deploys>"   # only if step 9 generated a deploy workflow
 ```
-/sdlc:gate
-```
 
-This is mandatory for any change with executable code. The `sdlc` hook blocks
-`gh pr create` until all gates pass.
+Pass every command exactly as CI runs it (step 4), and omit a flag rather
+than inventing a command — the block renders "not configured" for it, which
+is honest (the script warns on stderr when no command flag was given at
+all). In a monorepo, repeat a command flag once per area and name the area
+inside the value (`--test-cmd "web: bun test" --test-cmd "api: pytest"`);
+the block renders them as nested bullets. Pass `--no-claude` for a repo
+with no Claude Code users — AGENTS.md is managed, CLAUDE.md is not created.
+Nested `CLAUDE.md` files (a `runtime/CLAUDE.md`) are never touched; if the
+repo has any, say so and suggest their rules move to AGENTS.md too.
 
-For docs-only or trivial changes, run `/sdlc:gate --init tiny` before your
-first commit.
-```
+The script prints one `path | action` line per file:
+
+- `AGENTS.md` — created (with a `# <repo>` heading) or updated in place;
+  content outside the markers is preserved byte for byte.
+- `CLAUDE.md` — created as exactly `@AGENTS.md`, or given that line at the
+  top if it lacked it. If it still carries the reminder an older init
+  appended (`## Run gates before every PR`), the script removes that section
+  and says so — AGENTS.md carries it now. Anything else in CLAUDE.md is left
+  alone; if the repo keeps hand-written rules there, tell the user they
+  belong in AGENTS.md so every host sees them.
+
+`--check` reports what would change without writing and exits 1 on drift —
+run it by hand, or from CI, when the toolchain changes. `--check` with no
+other flags only compares the version stamped inside the block against the
+installed sdlc, which is how `/sdlc:gate` notices a block that predates an
+upgrade without re-deriving the toolchain.
+
+If `${CLAUDE_PLUGIN_ROOT}` is unset on this host (Codex, Gemini, Cursor
+reading this as a SKILL.md), the script still exists on disk — it is at
+`<sdlc plugin root>/scripts/agents_md.py`, two directories above this
+SKILL.md. When the plugin was installed through Claude Code's marketplace,
+`ls -d ~/.claude/plugins/cache/*/sdlc/*/scripts/agents_md.py | sort -V | tail -1`
+finds the newest copy. If you genuinely cannot locate it, say so and stop
+here rather than writing the block by hand — a hand-written block drifts
+from the template on the next run.
 
 ## 11. Verify and report
 
@@ -357,8 +386,9 @@ first commit.
 - Print a table of files created/changed/skipped, the derived toolchain, whether
   branch protection on `ci-pass` was applied (or the command to run), and the
   next steps (run `/sdlc:secrets`).
-- Confirm that CLAUDE.md now contains the gate reminder (created or already
-  present).
+- Confirm `AGENTS.md` contains the managed SDLC block (between the
+  `sdlc:begin`/`sdlc:end` markers) and `CLAUDE.md` contains `@AGENTS.md`, by
+  reading both back — not by trusting the script's table alone.
 - **Parse every generated workflow with a real parser** — a YAML file that does
   not parse is a workflow GitHub silently never runs, and "I read it and it
   looked fine" is not a parse. Use whatever the repo's stack already provides

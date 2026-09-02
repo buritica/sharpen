@@ -142,6 +142,20 @@ Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only wh
 
 Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no external runtime. So enforcement works on any box: the `enforce-sdlc-gates.py` hook blocks `gh pr create` when gates are incomplete. State the mode in one line, e.g. `Mode: grumpy + enforced gates`.
 
+## Is AGENTS.md current?
+
+If the repo has an `AGENTS.md` with a managed SDLC block, check it before
+initializing — one command, no toolchain needed:
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/agents_md.py" --root "${WT:-.}" --check
+```
+
+`stale` means the block was rendered by an older sdlc than the one enforcing
+this cycle (tiers or the gate chain may have changed); say so in one line and
+suggest re-running `/sdlc:init` step 10. It does not block the chain. A repo
+with no block at all is simply pre-4.11; mention it once.
+
 ## Gate tracking
 
 Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how the auto-record hook in this session finds `$WT`'s cycle.

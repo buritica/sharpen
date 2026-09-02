@@ -128,9 +128,33 @@ The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook
 - Piping a payload to `auto-record-skill-gate.py` from Bash is now blocked; call it from python if you are testing the hook.
 - **If you don't have `/simplify` and grumpy installed, this is the release where that stops being survivable.** `auto-init-gate-cycle.py` starts a `small-medium` cycle on the first commit to any non-default branch, and gates 2-6 can now only be recorded by their skills — the manual `--record` that used to slip through is gone. Install the skills, or start the branch with `/sdlc:gate --init tiny` where the change genuinely qualifies. Editing `gates.json` by hand is the last resort and the store does not stop you; it is a deliberate hole, not an oversight.
 
+**Upgrading to 4.11.0 (`AGENTS.md` carries the contract):** `/sdlc:init` step 10 now writes a managed block to `AGENTS.md` and reduces its `CLAUDE.md` footprint to `@AGENTS.md`. Re-run `/sdlc:init` on an existing repo to get the block; the old `## Run gates before every PR` reminder in `CLAUDE.md` is removed in the same run. Nothing about gates, hooks, or the store changed.
+
 **Upgrading to 4.10.4 (`/simplify` replaced by `/grumpy:simplify`):** the gate-2 recorder was a Claude-Code-only bundled skill, invisible to every other host — unlike gates 3-6, which have always come from the portable `grumpy` plugin. The `simplify` gate *key* is unchanged (stored JSON, `--record`/`--attest` arguments, all identical); only the skill that records it changed. Re-running the chain after this upgrade means running `/grumpy:simplify` where the docs above still say `/simplify`.
 
 **Upgrading from 2.2.0 (per-worktree store):** main-checkout users are unaffected — the path is identical across versions. But if you had an in-flight gate cycle on a **linked worktree**, its state lived in that worktree's `.claude/data/gates.json` and won't be seen at the new shared location. Re-run `/sdlc:gate` on that branch to re-establish the cycle (gates are cheap to re-run and reset on any code change anyway).
+
+## AGENTS.md is the contract
+
+`/sdlc:init` writes the SDLC contract — lifecycle, tiers, gate enforcement, the
+derived test/lint/format/typecheck commands, PR conventions, artifact paths —
+into `AGENTS.md` between `<!-- sdlc:begin -->` / `<!-- sdlc:end -->` markers,
+and makes `CLAUDE.md` include it with a single `@AGENTS.md` line. Re-running
+init replaces only the marked block; everything outside it is yours. Hosts that
+read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same
+contract Claude Code gets through the include. The block is inline in
+`AGENTS.md` rather than a separate included file on purpose: those hosts do
+not resolve `@` includes, so an include there would be inert text for exactly
+the readers `AGENTS.md` exists to serve. The first line inside the block stamps
+the sdlc version that rendered it; `scripts/agents_md.py --check` with no
+other flags compares that stamp against the installed plugin (exit 1 when
+stale — `/sdlc:gate` runs this once per cycle and mentions it), and with the
+command flags it reports full drift without writing. Command flags repeat
+once per area in a monorepo; `--no-claude` manages AGENTS.md only. The
+template lives at `templates/agents-sdlc.md`. Repos that already carried the older
+`## Run gates before every PR` reminder in `CLAUDE.md` (a heading, a fenced
+`/sdlc:gate`, and two sentences) have it migrated on the next init run; a
+symlinked `CLAUDE.md` or `AGENTS.md` is refused rather than written through.
 
 ## Codex CLI support
 
