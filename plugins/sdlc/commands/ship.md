@@ -38,7 +38,14 @@ Then create the PR with `gh pr create`. Follow these conventions:
 - `docs(scope):` — documentation
 - `refactor(scope):` — restructure without behavior change
 
-**Body:** Include `Closes #XXX` when a linked issue exists.
+**Body:** Include `Closes #XXX` when a linked issue exists. Include `## Deferred`
+only when the branch added at least one `ponytail:` marker — check
+`.claude/grumpy/<branch>/fix.md`'s own `## Deferred` section first; if that
+artifact doesn't exist (gated with an older installed grumpy, or fixed by
+hand with no `/grumpy:fix` run), fall back to
+`git diff origin/main...HEAD | grep -E '^\+.*ponytail:'` so a marker never
+ships invisibly just because the report wasn't written. Omit the whole
+section when neither source finds anything — most PRs defer nothing.
 
 ```bash
 gh pr create --title "<prefix>(<scope>): <short description>" --body "$(cat <<'EOF'
@@ -49,6 +56,10 @@ Closes #XXX
 
 ## Verification
 <how to verify this works — manual test steps, key scenarios to check>
+
+## Deferred
+<one line per marker this branch added: file:line — ceiling/trigger — #issue or "not filed">
+<omit this whole section when the branch added no markers>
 
 ## Confirmation
 Window: 24h

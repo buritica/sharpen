@@ -15,7 +15,7 @@ allowed-tools:
     "TaskUpdate",
     "AskUserQuestion",
   ]
-argument-hint: "[--level grumpy|grumpier|linus] [--max-tier exec-trivial|exec|analysis] [--worktree <path>]"
+argument-hint: "[--level grumpy|grumpier|linus] [--max-tier exec-trivial|exec|analysis] [--worktree <path>] [--file-issues]"
 ---
 
 # Grumpy Fix
@@ -103,7 +103,8 @@ label, since different grumpy commands use different labels:
 - **Auto-fix** — any finding marked 🚨 (Critical Issues / Will Break) or ⚠️
   (Serious Concerns / Will Eventually Break)
 - **Optional** — any finding marked 🤔 (Questionable Decisions / Probably Fine
-  Until It Isn't)
+  Until It Isn't). These route through Step 3b (defer) before Step 5 offers
+  whatever is left.
 - **Skip** — any section with no emoji-marked findings (narrative sections,
   verdicts, uncomfortable questions, etc.), and `simplify.md`'s 🧾 **Legacy
   debt** section: those are pre-existing violations the diff did not cause,
@@ -265,6 +266,96 @@ A task with no `accept:` command cannot be machine-verified — it routes at the
 `analysis` (strong) tier by default; have the sub-agent self-verify, and flag it
 for human review in the summary.
 
+## Step 3b: Defer Eligible Findings
+
+Not every finding gets fixed or asked about — some get **deferred**: left in
+place with a `ponytail:` comment marking the ceiling and the trigger for
+revisiting it, borrowed from the [ponytail](https://github.com/DietrichGebert/ponytail)
+convention. This replaces silently dropping Optional findings and gives them
+a home at the line instead.
+
+**Eligibility is fixed, not a judgment call you make per finding:**
+
+| Finding (severity / `FACT` tag) | Deferrable? |
+| --- | --- |
+| 🚨 Critical, any `FACT` | Never. Fix it or leave it in the Auto-fix bucket for human escalation. |
+| ⚠️ Serious, `fact` | Never. |
+| ⚠️ Serious, `judgment`, aspect/domain is `perf`, `simplify`, `ux`, `observability`, `concurrency`, `metrics`, or `logging` | Deferrable — **and an issue must be filed or offered** (Step 3c). Never defer a Serious finding silently. |
+| ⚠️ Serious, `judgment`, any other aspect/domain | Never. |
+| 🤔 Questionable, any `FACT` | Deferrable. |
+
+Never defer a finding that touches correctness, security, data loss, or a
+trust-boundary validation, regardless of what this table says — those get
+fixed or they get a human's eyes, not a comment. If the rendered finding
+carries no `FACT`/judgment tag at all (older reports predate this), treat it
+as `fact` and do not defer it.
+
+For each finding eligible per the table above, before writing the fix, offer
+deferral instead: write a one-line comment immediately above the finding's
+site, in the file's own comment syntax (`#`, `//`, `--`, `<!-- ... -->`),
+naming the ceiling and an **observable trigger** — a number, a metric, a
+condition someone can check later. "Later" is not a trigger and is not a
+valid deferral; if you can't name a concrete trigger, fix the finding or
+leave it in Optional for Step 5 instead.
+
+```
+# ponytail: full table scan, add an index when accounts pass 10k
+# ponytail: global lock, per-account locks if p99 exceeds 200ms, see #142
+```
+
+Track each deferred finding (file:line, the marker text, whether an issue
+was filed) for the Step 4 summary and the persisted report in Step 4b.
+
+## Step 3c: File Issues (`--file-issues`)
+
+Detect `--file-issues` in `$ARGUMENTS` (no value, a bare flag). This only
+matters for findings deferred in Step 3b — it is not a general-purpose issue
+filer.
+
+```bash
+command -v gh >/dev/null 2>&1 || { echo "gh not found — skipping issue creation, deferred findings still get a marker"; }
+```
+
+If `--file-issues` was NOT passed, or `gh` is unavailable: do not file
+anything. Every deferred finding still gets a `## Would file` entry in the
+Step 4b report with a ready-to-paste title and body, so nothing is lost —
+just not filed automatically.
+
+If `--file-issues` WAS passed and `gh` is available, for each finding that
+requires or benefits from an issue (every Serious deferral is required; a
+Questionable deferral is optional — file it too if it's the kind of thing
+worth tracking, skip trivial ones):
+
+1. **Dedupe first** — search before creating:
+   ```bash
+   gh issue list --state open --search ""<file>:<line>" grumpy" --json number,title
+   ```
+   If a title match already references this `file:line`, skip creation and
+   record the existing issue number instead.
+2. **Create** with one label and a fixed body shape:
+   ```bash
+   gh issue create      --title "grumpy: <one-line finding summary> (<file>:<line>)"      --body "$(cat <<'EOF'
+   ## Deferred finding from /grumpy:fix
+
+   **Severity:** <CRIT/WARN/NOTE, but only WARN/NOTE ever reach here>
+   **Confidence:** <fact/judgment>
+   **Aspect/domain:** <aspect or domain tag>
+   **Location:** <file:line>
+   **Branch:** <branch>
+   **Date:** <date>
+
+   ### Finding
+   <full finding text>
+
+   ### Deferred as
+   <the exact ponytail: marker text written at the site>
+   EOF
+   )"      --label "grumpy"
+   ```
+3. Print each created (or matched-existing) issue URL, and record the number
+   against that finding for the marker text (append `, see #N` to the marker
+   already written in Step 3b) and the Step 4b report.
+
 ## Step 4: Commit All Fixes
 
 Once all sub-agents have completed, before committing, check each sub-agent's
@@ -293,14 +384,60 @@ Fixed [N] issues. Here's what your code needed to survive contact with reality:
 - [task subject]: [one grumpy sentence about what was wrong]
 ...
 
+Deferred [N]: [marked, not fixed — the ceiling is documented, not ignored]
+- [file:line]: [marker text] — [#issue number, or "would file" if --file-issues wasn't passed]
+- [file:line]: [marker text] — [#issue number, or "would file"]
+...
+
 [If all fixes applied cleanly]: "You're welcome."
 [If any sub-agent flagged uncertainty]: "Double-check [file] — I fixed what I could but that section had 'here be dragons' energy."
+[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"]
 ```
+
+## Step 4b: Persist the Fix Report
+
+Save the fix report so `/sdlc:ship` can read it, the same pattern as
+`/grumpy:review` Step 5:
+
+```bash
+WT="${WT:-.}"
+BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
+GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
+ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+mkdir -p "$ARTIFACT_DIR"
+```
+
+Write (or append to, with a dated `### Fix — YYYY-MM-DD` header — this
+command runs at least twice per gate cycle, once after review and once after
+imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fix.md`:
+
+```markdown
+### Fix — YYYY-MM-DD
+
+## Fixed
+- [file:line]: [one-line description of what changed]
+
+## Deferred
+- [file:line]: [marker text] — [#issue or "not filed"]
+
+## Would file
+[Only present when --file-issues was not passed or gh was unavailable —
+ready-to-paste title + body per deferred finding, so filing later is a
+copy-paste, not a re-derivation]
+
+## Uncertain
+- [file]: [why it needs manual review before committing]
+```
+
+Omit any section with nothing in it — an empty `## Deferred` heading is
+noise, not signal.
 
 ## Step 5: Offer Optional Fixes
 
-If there are findings in the **Optional** bucket (🤔 Questionable), ask using
-AskUserQuestion:
+Findings that Step 3b already deferred (wrote a marker for) are not offered
+here — they're handled. If there are **remaining** findings in the
+**Optional** bucket — 🤔 Questionable findings that couldn't be deferred
+because no observable trigger could be named — ask using AskUserQuestion:
 
 ```json
 {
@@ -361,4 +498,4 @@ If yes, repeat Steps 2–4 for the Optional bucket.
 
 - Fix reads persisted artifacts under `.claude/grumpy/<branch>/` first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
 - Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
-- Fix only addresses critical and serious findings by default. Medium/low findings are logged but not fixed — file them as issues if they warrant follow-up.
+- Fix addresses Critical and Serious findings by dispatching a sub-agent, defers what Step 3b's eligibility table allows (never Critical, Serious only when judgment-tagged in a handful of aspects and only with an issue attached), and asks about whatever Optional findings are left. Nothing is silently dropped anymore — check `## Would file` in the persisted report if `--file-issues` wasn't passed.

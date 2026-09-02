@@ -187,6 +187,15 @@ SEVERITY|file:line|what is wrong and the concrete consequence if left unfixed|FA
   (your call — "this abstraction feels wrong").
 - ASPECT is the review focus you were given (e.g. `errors`, `tests`).
 
+Before reporting a NOTE-severity, `judgment`-tagged finding (a taste call,
+not a bug — the kind that lands under `simplify`), check the 2-3 lines above
+its site for a `ponytail:` comment. If one already documents this exact
+tradeoff and nothing in the diff crosses the trigger it names, skip the
+line — it's already recorded, don't re-raise it every review. Never skip a
+CRIT or WARN finding this way, and never skip a `fact`-tagged finding this
+way, even with a marker nearby: a marker documents a known ceiling, not a
+license to stop looking for new problems in that area.
+
 Example:
 CRIT|client.ts:142|swallows the network error, retry never fires|fact|errors
 NOTE|client.ts:88|this abstraction feels wrong for a single call site|judgment|simplify
@@ -196,6 +205,13 @@ healthy, do not emit a line for it — silence means "nothing found," you do
 not need a line saying so. Do not invent problems. No other output — no
 preamble, no summary, no markdown headers.
 ```
+
+Append `(judgment)` after `[agent-aspect]` on a Serious Concerns bullet only
+when that line's source FACT tag was `judgment` — leave `fact`-tagged and all
+Critical/Questionable bullets untagged. `/grumpy:fix` reads this tag back to
+decide whether a Serious finding is eligible for deferral; without it, every
+Serious finding must be fixed, since fix treats an untagged Serious bullet as
+`fact`.
 
 ## Audit discipline
 
@@ -221,6 +237,7 @@ _[One grumpy sentence summarizing your overall impression]_
 [Should fix. Will cause problems eventually.]
 
 - [agent-aspect]: Issue description [file:line]
+- [agent-aspect] (judgment): Issue description [file:line]
 
 ## Questionable Decisions 🤔
 
@@ -231,6 +248,10 @@ _[One grumpy sentence summarizing your overall impression]_
 ## Simplify This ✂️
 
 [Code that could be deleted, shortened, or doesn't need to exist.]
+
+[If one or more findings were skipped because a `ponytail:` marker already
+covered them: one line, `Deferred findings honored: N — already marked at
+the line, not re-raised.` Omit entirely when the count is zero.]
 
 ## Strengths
 

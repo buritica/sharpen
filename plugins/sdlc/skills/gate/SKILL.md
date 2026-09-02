@@ -221,6 +221,8 @@ The **Key** column is the exact gate name `record-gate.py` accepts and stores. `
 
 Gates 2-6 are **skill-gated**: they are recorded only by the auto-record hook when the skill itself runs. `record-gate.py --record simplify` (or any `grumpy-*` gate) is refused — by the hook, and by the store behind it, however you spell it. The self-review in the "Otherwise" column is a quality practice, not a way to satisfy the gate.
 
+**"All critical findings resolved" (gates 4 and 6) allows one other outcome besides a fix:** a non-critical finding may instead be deferred with a `ponytail:` comment at its site, per `/grumpy:fix`'s eligibility table — Critical findings are never deferred, so this never weakens what "resolved" means for gates 4/6's own pass criterion.
+
 **Gate 1 proves the suite ran, not that it means anything.** Exit 0 is satisfied
 by tests that assert nothing and by source files no test touches. When the diff
 adds real behavior, deepen gate 1 before recording it:

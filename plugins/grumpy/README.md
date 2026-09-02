@@ -193,6 +193,53 @@ and artifacts are never measured as source.
 Artifacts land next to `simplify.md`'s other output: `.claude/grumpy/<branch>/simplify-loc.json`
 and `.claude/grumpy/<branch>/simplify-findings.json`.
 
+## Deferring findings (`ponytail:` markers)
+
+`/grumpy:fix` doesn't just fix or drop a finding — some findings get
+**deferred**: left in place with a one-line comment marking the ceiling and
+the trigger for revisiting it. The convention is borrowed verbatim from
+[ponytail](https://github.com/DietrichGebert/ponytail), so it reads the same
+whether or not that plugin is installed:
+
+```
+# ponytail: full table scan, add an index when accounts pass 10k
+// ponytail: in-memory queue, move to a real broker past 1k msgs/sec
+```
+
+A marker with no observable trigger — a number, a metric, a condition
+someone can check — isn't a valid deferral. "Later" doesn't count.
+
+Eligibility is a fixed table, not a judgment call the fix agent makes per
+finding:
+
+| Finding | Deferrable? |
+| --- | --- |
+| 🚨 Critical | Never |
+| ⚠️ Serious, fact-based | Never |
+| ⚠️ Serious, judgment call, in `perf`/`simplify`/`ux`/`observability`/`concurrency`/`metrics`/`logging` | Yes — **and an issue must be filed or offered** |
+| ⚠️ Serious, judgment call, any other aspect | Never |
+| 🤔 Questionable | Yes |
+
+Anything touching correctness, security, data loss, or trust-boundary
+validation is never deferred, regardless of tag.
+
+`/grumpy:review` and `/grumpy:imagine` read existing markers back: a
+finding already covered by a valid, un-triggered marker at that site is not
+re-raised on the next pass. `/grumpy:simplify` treats a marker the same way
+it treats a documented `.sharpen/simplify.json` debt record, but only for
+its own estimated findings (dead code, redundant code, unnecessary
+abstractions) — never for a `measured:<tool>` metric like complexity or
+coverage.
+
+Pass `--file-issues` to `/grumpy:fix` to open a GitHub issue for each
+deferred finding that needs one (`gh` required; deduped by search before
+creating). Without the flag, or without `gh`, the fix report still lists a
+ready-to-paste `## Would file` entry per deferral, so nothing is lost.
+
+No separate ledger command ships here — `grep -rnE '(#|//|--) ?ponytail:' .`
+lists every marker in the repo, and `/ponytail:ponytail-debt` is the ledger
+when the ponytail plugin is installed.
+
 ## Grumpy Levels
 
 All commands support `--level` to control intensity:

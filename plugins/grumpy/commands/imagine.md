@@ -169,6 +169,13 @@ FINDING lines, one per finding —
 - FACT is `fact` or `judgment`.
 - Prefix a HANDLED line for things already done well: `HANDLED|area|one-line why it's fine` (only for genuinely notable strengths, not every quiet area).
 
+Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
+not a bug), check the 2-3 lines above its site for a `ponytail:` comment. If
+one already documents this exact tradeoff and nothing in the diff crosses
+the trigger it names, skip the line — don't re-raise what's already
+recorded. Never skip a CRIT or WARN finding this way, and never skip a
+`fact`-tagged finding this way, even with a marker nearby.
+
 Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
 on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
@@ -224,6 +231,13 @@ FINDING lines, one per finding —
 - DOMAIN is one of `state-transition`, `cleanup`, `first-deploy`.
 - Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
 
+Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
+not a bug), check the 2-3 lines above its site for a `ponytail:` comment. If
+one already documents this exact tradeoff and nothing in the diff crosses
+the trigger it names, skip the line — don't re-raise what's already
+recorded. Never skip a CRIT or WARN finding this way, and never skip a
+`fact`-tagged finding this way, even with a marker nearby.
+
 Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
 on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
@@ -274,6 +288,13 @@ FINDING lines, one per finding —
 - SEVERITY is CRIT/WARN/NOTE, FACT is `fact`/`judgment`.
 - DOMAIN is one of `rate-limit`, `concurrency`.
 - Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
+
+Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
+not a bug), check the 2-3 lines above its site for a `ponytail:` comment. If
+one already documents this exact tradeoff and nothing in the diff crosses
+the trigger it names, skip the line — don't re-raise what's already
+recorded. Never skip a CRIT or WARN finding this way, and never skip a
+`fact`-tagged finding this way, even with a marker nearby.
 
 Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
 on a healthy area needs no line. No preamble, no markdown headers, no summary.
@@ -327,6 +348,13 @@ HANDLED line for genuinely notable strengths, nothing else:
 - DOMAIN is one of `logging-gap`, `metric-gap`, `silent-failure`, `ux-observability`.
 - Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
 
+Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
+not a bug), check the 2-3 lines above its site for a `ponytail:` comment. If
+one already documents this exact tradeoff and nothing in the diff crosses
+the trigger it names, skip the line — don't re-raise what's already
+recorded. Never skip a CRIT or WARN finding this way, and never skip a
+`fact`-tagged finding this way, even with a marker nearby.
+
 Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
 on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
@@ -378,6 +406,12 @@ bullets already shown there. `first-deploy` has no CONTEXT line format by
 design (it's a compatibility check, not a narrative flow) — its subsection is
 findings-only.
 
+Append `(judgment)` after `[agent-domain]` on a Serious Concerns bullet only
+when that FINDING line's FACT was `judgment` — leave `fact`-tagged and all
+Bugs Found/Questionable Decisions bullets untagged. `/grumpy:fix` reads this
+tag back to decide whether a Serious finding is eligible for deferral; an
+untagged Serious bullet is treated as `fact` and must be fixed.
+
 Once all agents complete, combine findings into one report:
 
 ```markdown
@@ -399,6 +433,7 @@ _[One grumpy sentence about what you found overall]_
 gaps that make debugging hard, missing error handling for non-critical paths]
 
 - [agent-domain]: Description [file:line]
+- [agent-domain] (judgment): Description [file:line]
 
 ## 🤔 Questionable Decisions (Worth Discussing)
 
@@ -465,6 +500,10 @@ won't catch regressions]
 
 [What's already handled well — error paths that clean up, observability that's
 actually present, design choices that hold up. One sentence per area. Required.]
+
+[If one or more findings were skipped because a `ponytail:` marker already
+covered them: one line, `Deferred findings honored: N — already marked at
+the line, not re-raised.` Omit entirely when the count is zero.]
 
 ## Verdict
 

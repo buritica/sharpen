@@ -54,6 +54,10 @@ parts of it that are easy to get wrong here:
 - **The installed plugin cache may lag this repo.** The chain runs whatever version is
   installed; if a branch changes a command, exercise its mechanics directly as the
   dogfood step and say in the PR body which installed versions ran the gates.
+- **This repo dogfoods the `ponytail:` marker convention too.** A deferred finding needs
+  a comment naming an observable trigger, not "later" — and gates 4/6's "all critical
+  findings resolved" never accepts a deferral for a Critical finding, on this repo or any
+  other. See the grumpy plugin README for the full eligibility table.
 
 ## Plugin changes need a version bump in two places
 
