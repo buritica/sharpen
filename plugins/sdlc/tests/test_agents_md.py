@@ -18,6 +18,7 @@ SCRIPT = os.path.join(SCRIPTS, "agents_md.py")
 sys.path.insert(0, SCRIPTS)
 
 import agents_md as am  # noqa: E402
+import gate_store as gs  # noqa: E402
 
 FACTS = {
     "test_cmd": "bun test",
@@ -87,6 +88,35 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIn("origin/master", block)
         self.assertIn("required check on `master`", block)
+
+
+class EnforcerConsistencyTests(unittest.TestCase):
+    """The block must describe the tiers the store accepts and the chain gate.md
+    runs — drift here is authoritative for non-Claude hosts."""
+
+    def test_tier_names_come_from_gate_store(self):
+        block = am.render(FACTS)
+        for tier in gs.TIERS:
+            self.assertIn("**%s**" % tier, block)
+        self.assertNotIn("**docs-only**", block)
+        self.assertIn("uses the `tiny` cycle", block)
+        self.assertEqual(set(am.TIER_NOTES), set(gs.TIERS))
+
+    def test_grumpy_chain_comes_from_gate_store(self):
+        line = am.grumpy_on_line()
+        for skill in set(gs.SKILL_FOR_GATE.values()):
+            self.assertIn("`%s`" % skill, line)
+        self.assertEqual(
+            am.skill_chain(),
+            [
+                "/grumpy:simplify",
+                "/grumpy:review",
+                "/grumpy:fix",
+                "/grumpy:imagine",
+                "/grumpy:fix",
+            ],
+        )
+        self.assertTrue(line.startswith("Gates 2–6 are `/grumpy:simplify`, then"))
 
 
 class UpsertTests(unittest.TestCase):
@@ -197,6 +227,15 @@ class WireTests(unittest.TestCase):
         self.assertIn("prepended @AGENTS.md", results[1][2])
         self.assertEqual(read(self.p("CLAUDE.md")), "@AGENTS.md\n\n# repo\n\nrules\n")
         self.assertIn("/sdlc:gate --init tiny", read(self.p("AGENTS.md")))
+
+    def test_leftover_gate_mention_is_reported_not_removed(self):
+        write(self.p("CLAUDE.md"), "# repo\n\n## Gates\n\nrun /sdlc:gate first\n")
+        results = am.wire(self.root, FACTS)
+        self.assertIn("still mentions /sdlc:gate at line 7", results[1][2])
+        self.assertEqual(
+            read(self.p("CLAUDE.md")),
+            "@AGENTS.md\n\n# repo\n\n## Gates\n\nrun /sdlc:gate first\n",
+        )
 
     def test_claude_already_including_is_unchanged(self):
         write(self.p("CLAUDE.md"), "@AGENTS.md\n")

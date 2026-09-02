@@ -5,14 +5,7 @@ This repo **is** the `sharpen` Claude Code plugin marketplace. It ships the SDLC
 through the same workflow the plugins enforce elsewhere. If a command is awkward to use on
 this repo, that is a bug report about the command, not a reason to skip it.
 
-## The workflow
-
-| Step | Command | When |
-|---|---|---|
-| Scope it | `/sdlc:plan` | Before writing code. Classifies the change, names the files, opens a worktree. |
-| Spec it | `/sdlc:spec` | Only when there are open product decisions. Skip for a bug fix. |
-| Gate it | `/sdlc:gate` | Before every PR. See below. |
-| Ship it | `/sdlc:ship` | Push, open the PR, squash merge. |
+## Beyond the managed block
 
 `/sdlc:audit` grades this repo's own pipeline against
 [`plugins/sdlc/templates/spec.md`](plugins/sdlc/templates/spec.md). Run it when you touch
@@ -123,7 +116,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - `/sdlc:ship` pushes, opens the PR, and squash-merges once CI is green.
 
 ### Gates
-- Tiers: **docs-only** (no executable files; tests/lint/typecheck vacuously satisfied), **tiny** (≤3 lines, no behavior change), **small-medium** (any code change — the default), **significant** (new behavior, new integration, >3 files or >200 lines).
+- Tiers: **tiny** (≤3 lines, no behavior change), **small-medium** (any code change — the default), **significant** (new behavior, new integration, >3 files or >200 lines). A docs-only diff (no executable files) uses the `tiny` cycle; its tests/lint/typecheck gates are vacuously satisfied — say that you classified it docs-only.
 - The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - Gates 2–6 are `/grumpy:simplify`, then `/grumpy:review` → `/grumpy:fix` → `/grumpy:imagine` → `/grumpy:fix`. Run the skills; reviewing the diff in your head records nothing.
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.

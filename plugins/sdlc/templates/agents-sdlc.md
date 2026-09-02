@@ -9,7 +9,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - `/sdlc:ship` pushes, opens the PR, and squash-merges once CI is green.
 
 ### Gates
-- Tiers: **docs-only** (no executable files; tests/lint/typecheck vacuously satisfied), **tiny** (≤3 lines, no behavior change), **small-medium** (any code change — the default), **significant** (new behavior, new integration, >3 files or >200 lines).
+- Tiers: {tiers_line}. A docs-only diff (no executable files) uses the `tiny` cycle; its tests/lint/typecheck gates are vacuously satisfied — say that you classified it docs-only.
 - The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - {grumpy_line}
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.

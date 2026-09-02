@@ -29,6 +29,13 @@ import argparse
 import os
 import sys
 
+# Same-directory sibling (the plugin cache is version-nested, so this is the
+# only kind of cross-file import a plugin script may make). The tier names
+# and the gate → skill chain come from the enforcer, so the block cannot
+# describe a tier the store rejects or a chain gate.md doesn't run.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gate_store as gs  # noqa: E402
+
 BEGIN = "<!-- sdlc:begin -->"
 END = "<!-- sdlc:end -->"
 INCLUDE = "@AGENTS.md"
@@ -40,11 +47,42 @@ TEMPLATE = os.path.join(
 )
 NOT_CONFIGURED = "not configured — wire one and re-run `/sdlc:init`"
 
-GRUMPY_ON = (
-    "Gates 2–6 are `/grumpy:simplify`, then `/grumpy:review` → `/grumpy:fix` → "
-    "`/grumpy:imagine` → `/grumpy:fix`. Run the skills; reviewing the diff in your "
-    "head records nothing."
-)
+# One-line judgment per tier; the names themselves come from gate_store.TIERS.
+TIER_NOTES = {
+    "tiny": "≤3 lines, no behavior change",
+    "small-medium": "any code change — the default",
+    "significant": "new behavior, new integration, >3 files or >200 lines",
+}
+
+
+def tiers_line():
+    return ", ".join(
+        "**%s** (%s)" % (tier, TIER_NOTES.get(tier, "see `/sdlc:gate`"))
+        for tier in gs.TIERS
+    )
+
+
+def skill_chain():
+    """The skill-gated gates of a full cycle, in order, as skill names."""
+    return [
+        gs.SKILL_FOR_GATE[g]
+        for g in gs.GATES_BY_TIER["small-medium"]
+        if g in gs.SKILL_FOR_GATE
+    ]
+
+
+def grumpy_on_line():
+    chain = ["`%s`" % s for s in skill_chain()]
+    return (
+        "Gates 2–%d are %s, then %s. Run the skills; reviewing the diff in your head records nothing."
+        % (
+            1 + len(chain),
+            chain[0],
+            " → ".join(chain[1:]),
+        )
+    )
+
+
 GRUMPY_OFF = (
     "`grumpy` is not installed: small-medium and significant cycles cannot complete "
     "until it is. Install it, or use `tiny` only when the change genuinely qualifies."
@@ -72,7 +110,8 @@ def render(facts, template_path=TEMPLATE):
             "lint_cmd": _cmd(facts.get("lint_cmd")),
             "format_cmd": _cmd(facts.get("format_cmd")),
             "typecheck_cmd": _cmd(facts.get("typecheck_cmd")),
-            "grumpy_line": GRUMPY_ON if facts.get("grumpy") else GRUMPY_OFF,
+            "tiers_line": tiers_line(),
+            "grumpy_line": grumpy_on_line() if facts.get("grumpy") else GRUMPY_OFF,
             "deploy_line": ("- deploy: %s\n" % deploy) if deploy else "",
         }
     )
@@ -88,10 +127,10 @@ def upsert_block(text, block):
         raise WireError("found one of %s / %s but not the other" % (BEGIN, END))
     if has_begin:
         start = text.index(BEGIN)
-        stop = text.index(END, start) + len(END) if text.index(END) >= start else None
-        if stop is None:
+        end_at = text.find(END, start)
+        if end_at < 0:
             raise WireError("%s appears before %s" % (END, BEGIN))
-        return text[:start] + block + text[stop:]
+        return text[:start] + block + text[end_at + len(END) :]
     if not text:
         return block + "\n"
     if not text.endswith("\n"):
@@ -135,12 +174,17 @@ def plan_agents(root, block):
     path = os.path.join(root, "AGENTS.md")
     current = _read(path)
     if current is None:
-        return (
-            path,
-            None,
-            "# %s\n\n%s\n" % (os.path.basename(os.path.abspath(root)), block),
-        )
-    return path, current, upsert_block(current, block)
+        heading = "# %s\n\n" % os.path.basename(os.path.abspath(root))
+        return path, None, heading + block + "\n", []
+    return path, current, upsert_block(current, block), []
+
+
+def leftover_gate_mentions(text):
+    """1-based line numbers of `/sdlc:gate` mentions that survive migration —
+    an older init may have written the reminder under a different heading,
+    and a hand-varied copy left beside the include is two contracts loaded
+    at once. Reported, never auto-removed."""
+    return [i for i, line in enumerate(text.splitlines(), 1) if "/sdlc:gate" in line]
 
 
 def plan_claude(root):
@@ -158,6 +202,12 @@ def plan_claude(root):
     if not any(line.strip() == INCLUDE for line in new.splitlines()):
         new = INCLUDE + "\n" + ("\n" + new if new.strip() else "")
         notes.append("prepended %s" % INCLUDE)
+    leftover = leftover_gate_mentions(new)
+    if leftover:
+        notes.append(
+            "CLAUDE.md still mentions /sdlc:gate at line %s — AGENTS.md carries that now; "
+            "move or drop it" % ", ".join(str(n) for n in leftover)
+        )
     return path, current, new, notes
 
 
@@ -169,12 +219,7 @@ def wire(root, facts, check=False):
         raise WireError("not a directory: %s" % root)
     block = render(facts)
     results = []
-    a_path, a_cur, a_new = plan_agents(root, block)
-    c_path, c_cur, c_new, c_notes = plan_claude(root)
-    for path, cur, new, notes in (
-        (a_path, a_cur, a_new, []),
-        (c_path, c_cur, c_new, c_notes),
-    ):
+    for path, cur, new, notes in (plan_agents(root, block), plan_claude(root)):
         if cur is None:
             action = "created"
         elif cur == new:

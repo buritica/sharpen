@@ -142,7 +142,10 @@ into `AGENTS.md` between `<!-- sdlc:begin -->` / `<!-- sdlc:end -->` markers,
 and makes `CLAUDE.md` include it with a single `@AGENTS.md` line. Re-running
 init replaces only the marked block; everything outside it is yours. Hosts that
 read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same
-contract Claude Code gets through the include. `scripts/agents_md.py --check`
+contract Claude Code gets through the include. The block is inline in
+`AGENTS.md` rather than a separate included file on purpose: those hosts do
+not resolve `@` includes, so an include there would be inert text for exactly
+the readers `AGENTS.md` exists to serve. `scripts/agents_md.py --check`
 reports drift without writing (exit 1), and the template lives at
 `templates/agents-sdlc.md`. Repos that already carried the older
 `## Run gates before every PR` reminder in `CLAUDE.md` have it migrated on the

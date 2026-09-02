@@ -357,8 +357,8 @@ is honest. The script prints one `path | action` line per file:
   alone; if the repo keeps hand-written rules there, tell the user they
   belong in AGENTS.md so every host sees them.
 
-`--check` reports what would change without writing and exits 1 on drift;
-`/sdlc:audit` uses it. If the script is missing (`${CLAUDE_PLUGIN_ROOT}`
+`--check` reports what would change without writing and exits 1 on drift —
+run it by hand, or from CI, when the toolchain changes. If the script is missing (`${CLAUDE_PLUGIN_ROOT}`
 unset on this host), say so and stop here rather than writing the block by
 hand — a hand-written block drifts from the template on the next run.
 
