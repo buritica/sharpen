@@ -8,6 +8,11 @@ Main-branch protection for the [sdlc](../sdlc) workflow, agent-side (it acts on 
 
 This hook is agent-side only. It reads JSON from stdin (Claude Code hook protocol) and acts on Claude's tool calls; it does not install git hooks or affect commits you make by hand outside Claude Code.
 
+```sh
+claude plugin marketplace add buritica/sharpen
+claude plugin install sdlc-guardrails@sharpen
+```
+
 ## Main-branch protection is opt-in
 
 `block-main-commits` stays silent until a repo opts in, so it never gets in the way of personal or scratch repos where committing to `main` is fine. Turn it on where you run a trunk-based PR flow:
