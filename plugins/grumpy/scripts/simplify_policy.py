@@ -199,9 +199,7 @@ def _git(worktree, *args, check=True):
         text=True,
     )
     if check and proc.returncode != 0:
-        raise RuntimeError(
-            "git %s failed: %s" % (" ".join(args), proc.stderr.strip())
-        )
+        raise RuntimeError("git %s failed: %s" % (" ".join(args), proc.stderr.strip()))
     return proc
 
 
@@ -240,7 +238,10 @@ def _validate_metric_map(name, mapping, allow_list_for=()):
             if not (
                 isinstance(value, list)
                 and len(value) == 3
-                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+                and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in value
+                )
                 and value[0] <= value[1] <= value[2]
             ):
                 raise ConfigError(
@@ -256,9 +257,13 @@ def _validate(raw):
     known = set(DEFAULT_CONFIG)
     for key in raw:
         if key not in known:
-            print("simplify_policy: ignoring unknown config key %r" % key, file=sys.stderr)
+            print(
+                "simplify_policy: ignoring unknown config key %r" % key, file=sys.stderr
+            )
     if "thresholds" in raw:
-        _validate_metric_map("thresholds", raw["thresholds"], allow_list_for=("loc_per_file",))
+        _validate_metric_map(
+            "thresholds", raw["thresholds"], allow_list_for=("loc_per_file",)
+        )
     if "tolerance" in raw:
         _validate_metric_map("tolerance", raw["tolerance"])
     if "languages" in raw:
@@ -278,7 +283,9 @@ def _validate(raw):
                     allow_list_for=("loc_per_file",),
                 )
             if "tolerance" in override:
-                _validate_metric_map("languages.%s.tolerance" % ext, override["tolerance"])
+                _validate_metric_map(
+                    "languages.%s.tolerance" % ext, override["tolerance"]
+                )
     for key in ("exclude", "test_patterns"):
         if key in raw:
             _check_type(key, raw[key], list)
@@ -289,7 +296,9 @@ def _validate(raw):
             _check_type(key, raw[key], list)
             for metric in raw[key]:
                 if metric not in METRICS:
-                    raise ConfigError("config %s names unknown metric %r" % (key, metric))
+                    raise ConfigError(
+                        "config %s names unknown metric %r" % (key, metric)
+                    )
     if "debt" in raw:
         _check_type("debt", raw["debt"], list)
         for i, rec in enumerate(raw["debt"]):
@@ -432,7 +441,10 @@ def debt_record(config, path, metric):
     every same-named file in the tree) and whose `metric` is absent or equal."""
     norm = path.replace(os.sep, "/")
     for rec in config.get("debt", []):
-        if fnmatch.fnmatchcase(norm, rec["path"]) and rec.get("metric") in (None, metric):
+        if fnmatch.fnmatchcase(norm, rec["path"]) and rec.get("metric") in (
+            None,
+            metric,
+        ):
             return rec
     return None
 
@@ -536,7 +548,9 @@ def judge_finding(finding, config):
         raise FindingError("finding must be an object")
     metric = finding.get("metric")
     if metric not in METRICS:
-        raise FindingError("unknown metric %r (expected one of %s)" % (metric, ", ".join(METRICS)))
+        raise FindingError(
+            "unknown metric %r (expected one of %s)" % (metric, ", ".join(METRICS))
+        )
     path = finding.get("file")
     if not isinstance(path, str) or not path:
         raise FindingError("finding is missing 'file'")
@@ -544,7 +558,9 @@ def judge_finding(finding, config):
     mkind = METRIC_KIND[metric]
     kind = finding.get("kind") or file_kind(path, config)
     out["kind"] = kind
-    confidence = finding.get("confidence") or ("estimated" if mkind == "count" else "unmeasured")
+    confidence = finding.get("confidence") or (
+        "estimated" if mkind == "count" else "unmeasured"
+    )
     out["confidence"] = confidence
     conf_kind = _confidence_kind(confidence)
     where = path
@@ -558,7 +574,8 @@ def judge_finding(finding, config):
     if finding.get("applicable", True) is False:
         status = "compliant"
         note = "%s: %s not applicable%s" % (
-            where, metric.replace("_", " "),
+            where,
+            metric.replace("_", " "),
             " (%s)" % finding["note"] if finding.get("note") else "",
         )
     elif mkind == "count":
@@ -584,7 +601,11 @@ def judge_finding(finding, config):
             out["tier"] = _loc_tier(head, threshold)
             delta = "" if base is None else " (%+d)" % (head - base)
             note = "%s: %s lines at head, %s at base%s; tier %s" % (
-                where, _fmt(head), _fmt(base), delta, out["tier"]
+                where,
+                _fmt(head),
+                _fmt(base),
+                delta,
+                out["tier"],
             )
         else:
             note = "%s: %s=%s at head, %s at base (target %s%s)" % (
@@ -592,7 +613,9 @@ def judge_finding(finding, config):
                 metric,
                 _fmt(head),
                 _fmt(base),
-                "%s%%" % threshold if metric in HIGHER_IS_BETTER else "< %s" % threshold,
+                "%s%%" % threshold
+                if metric in HIGHER_IS_BETTER
+                else "< %s" % threshold,
                 ", tolerance %s" % tolerance if tolerance else "",
             )
 
@@ -600,7 +623,9 @@ def judge_finding(finding, config):
     blocking_reason = None
     debt = None
     if status in ("new", "regressed"):
-        reasons = _suppressions(metric, status, head, threshold, kind, conf_kind, config)
+        reasons = _suppressions(
+            metric, status, head, threshold, kind, conf_kind, config
+        )
         if reasons:
             blocking_reason = "; ".join(reasons)
             note += "; does not block: " + blocking_reason
@@ -617,9 +642,12 @@ def judge_finding(finding, config):
     out["blocking"] = blocking
     out["blocking_reason"] = blocking_reason
     out["severity"] = (
-        "CRIT" if blocking
-        else "WARN" if status in ("new", "regressed", "excepted")
-        else "NOTE" if status in ("held", "improved")
+        "CRIT"
+        if blocking
+        else "WARN"
+        if status in ("new", "regressed", "excepted")
+        else "NOTE"
+        if status in ("held", "improved")
         else "INFO"
     )
     out["note"] = note
@@ -640,7 +668,8 @@ def plugin_version():
     """Version from the plugin manifest two levels up, or "unknown"."""
     manifest = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        ".claude-plugin", "plugin.json",
+        ".claude-plugin",
+        "plugin.json",
     )
     try:
         with open(manifest, encoding="utf-8") as fh:
@@ -661,9 +690,15 @@ def judge_all(findings, config, excluded=None, base=None):
     for i, finding in enumerate(findings, 1):
         try:
             path = finding.get("file") if isinstance(finding, dict) else None
-            reason = excluded_reason(path, config) if isinstance(path, str) and path else None
+            reason = (
+                excluded_reason(path, config)
+                if isinstance(path, str) and path
+                else None
+            )
             if reason:
-                excluded.append({"file": path, "reason": reason, "metric": finding.get("metric")})
+                excluded.append(
+                    {"file": path, "reason": reason, "metric": finding.get("metric")}
+                )
                 continue
             judged.append(judge_finding(finding, config))
         except FindingError as exc:
@@ -674,7 +709,9 @@ def judge_all(findings, config, excluded=None, base=None):
         counts[f["status"]] += 1
         confidence[_confidence_kind(f["confidence"])] += 1
     blocking = sum(1 for f in judged if f["blocking"])
-    debt = [_debt_line(f) for f in judged if f["status"] in ("held", "improved", "excepted")]
+    debt = [
+        _debt_line(f) for f in judged if f["status"] in ("held", "improved", "excepted")
+    ]
     if not judged:
         verdict = "unmeasured"
     elif blocking:
@@ -712,7 +749,9 @@ def changed_files(worktree, base_sha):
     # -z: NUL-separated, no C-style quoting of non-ASCII or special paths.
     # Paths are repo-root-relative (no --relative), matching `git show
     # <sha>:<path>`, so a --worktree that is a subdirectory still resolves.
-    fields = _git(worktree, "diff", "--name-status", "-M", "-z", base_sha).stdout.split("\0")
+    fields = _git(worktree, "diff", "--name-status", "-M", "-z", base_sha).stdout.split(
+        "\0"
+    )
     rows = []
     seen = set()
     i = 0
@@ -896,10 +935,14 @@ def main(argv=None):
         p.add_argument("--worktree", default=".")
         p.add_argument("--config", dest="config_path", default=None)
         if name == "loc":
-            p.add_argument("--base", required=True, help="merge-base commit to compare against")
+            p.add_argument(
+                "--base", required=True, help="merge-base commit to compare against"
+            )
         if name == "judge":
             p.add_argument(
-                "--loc", dest="loc_path", default=None,
+                "--loc",
+                dest="loc_path",
+                default=None,
                 help="a `loc` output to fold in (its findings, excluded paths and base)",
             )
     args = parser.parse_args(argv)
