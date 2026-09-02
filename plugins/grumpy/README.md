@@ -216,7 +216,7 @@ finding:
 | --- | --- |
 | 🚨 Critical | Never |
 | ⚠️ Serious, fact-based | Never |
-| ⚠️ Serious, judgment call, in `perf`/`simplify`/`ux`/`observability`/`concurrency`/`metrics`/`logging` | Yes — **and an issue must be filed or offered** |
+| ⚠️ Serious, judgment call, naming a performance/simplification/UX/observability/logging/metrics/concurrency concern (review.md's `simplify` aspect, or imagine.md's `ux-observability`/`logging-gap`/`metric-gap`/`rate-limit`/`concurrency` domains) | Yes — **and an issue must be filed or offered** |
 | ⚠️ Serious, judgment call, any other aspect | Never |
 | 🤔 Questionable | Yes |
 

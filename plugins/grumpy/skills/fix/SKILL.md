@@ -265,7 +265,7 @@ a home at the line instead.
 | --- | --- |
 | 🚨 Critical, any `FACT` | Never. Fix it or leave it in the Auto-fix bucket for human escalation. |
 | ⚠️ Serious, `fact` | Never. |
-| ⚠️ Serious, `judgment`, aspect/domain is `perf`, `simplify`, `ux`, `observability`, `concurrency`, `metrics`, or `logging` | Deferrable — **and an issue must be filed or offered** (Step 3c). Never defer a Serious finding silently. |
+| ⚠️ Serious, `judgment`, aspect/domain names a taste call in performance, simplification, UX, observability, logging, metrics, or concurrency — review.md's `simplify` ASPECT, or imagine.md's `ux-observability`, `logging-gap`, `metric-gap`, `rate-limit`, or `concurrency` DOMAIN, or a sub-agent's own equivalent free-form tag for the same concern | Deferrable — **and an issue must be filed or offered** (Step 3c). Never defer a Serious finding silently. |
 | ⚠️ Serious, `judgment`, any other aspect/domain | Never. |
 | 🤔 Questionable, any `FACT` | Deferrable. |
 
@@ -313,13 +313,15 @@ worth tracking, skip trivial ones):
 
 1. **Dedupe first** — search before creating:
    ```bash
-   gh issue list --state open --search ""<file>:<line>" grumpy" --json number,title
+   gh issue list --state open --search "<file>:<line> grumpy" --json number,title
    ```
    If a title match already references this `file:line`, skip creation and
    record the existing issue number instead.
 2. **Create** with one label and a fixed body shape:
    ```bash
-   gh issue create      --title "grumpy: <one-line finding summary> (<file>:<line>)"      --body "$(cat <<'EOF'
+   gh issue create \
+     --title "grumpy: <one-line finding summary> (<file>:<line>)" \
+     --body "$(cat <<'EOF'
    ## Deferred finding from /grumpy:fix
 
    **Severity:** <CRIT/WARN/NOTE, but only WARN/NOTE ever reach here>
