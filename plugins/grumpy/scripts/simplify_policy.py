@@ -15,7 +15,8 @@ review, so two runs on the same diff reach the same verdict:
 
 Only `regressed`/`new` block gate 2, and only at sufficient confidence:
 `measured:<tool>` always can; `estimated` only for metrics whose estimation is
-mechanical (LOC, dead code, any/unknown); `unmeasured` never.
+mechanical (by default LOC, dead code, any/unknown — `block_on_estimate` in
+config); `unmeasured` never.
 
 The one metric this module measures itself is lines-of-code-per-file, because
 it is cheap and always measurable from git. Everything else is judged from
@@ -74,6 +75,9 @@ METRIC_KIND = {
     "any_unknown": "count",
 }
 HIGHER_IS_BETTER = {"coverage"}
+# Metrics whose target is "at most T" rather than "strictly under T": a
+# perfect mutation run is 0 survivors, and 0 must read as compliant.
+INCLUSIVE_TARGET = {"mutants"}
 COUNT_METRICS = {m for m, k in METRIC_KIND.items() if k == "count"}
 STATUSES = ("compliant", "improved", "held", "regressed", "new", "excepted")
 CONFIDENCES = ("measured", "estimated", "unmeasured")
@@ -380,9 +384,14 @@ def _glob_hit(path, pattern):
 
 
 def excluded_reason(path, config, head_text=None):
-    """Why `path` is out of scope: `glob:<pattern>`, `generated-header`, or None."""
-    for pattern in config["exclude"]:
-        if _glob_hit(path, pattern):
+    """Why `path` is out of scope: `glob:<pattern>`, `generated-header`, or
+    None. A `!pattern` entry un-excludes: it wins over every positive
+    pattern, so a real `apps/foo/build/` can be pulled back into scope."""
+    patterns = config["exclude"]
+    if any(_glob_hit(path, p[1:]) for p in patterns if p.startswith("!")):
+        return None
+    for pattern in patterns:
+        if not pattern.startswith("!") and _glob_hit(path, pattern):
             return "glob:%s" % pattern
     if head_text:
         head = "\n".join(head_text.splitlines()[:5]).lower()
@@ -409,8 +418,12 @@ def file_kind(path, config=None):
 
 
 def debt_record(config, path, metric):
+    """First debt record whose `path` glob matches the repo-relative path
+    exactly (no suffix matching — an exception covers what was written, not
+    every same-named file in the tree) and whose `metric` is absent or equal."""
+    norm = path.replace(os.sep, "/")
     for rec in config.get("debt", []):
-        if _glob_hit(path, rec["path"]) and rec.get("metric") in (None, metric):
+        if fnmatch.fnmatchcase(norm, rec["path"]) and rec.get("metric") in (None, metric):
             return rec
     return None
 
@@ -446,7 +459,9 @@ def _judge_value(metric, base, head, threshold, tolerance):
     # For lower-is-better, `>= threshold` is over; for coverage, `< target`
     # is over. Both are "worse-or-equal than the bar", except coverage's bar
     # is inclusive of the target itself.
-    if sign == 1:
+    if metric in INCLUSIVE_TARGET:
+        over = lambda v: v > threshold  # noqa: E731
+    elif sign == 1:
         over = lambda v: v >= threshold  # noqa: E731
     else:
         over = lambda v: v < threshold  # noqa: E731
@@ -503,8 +518,11 @@ def _fmt(v):
 
 
 def judge_finding(finding, config):
-    """Return a copy of `finding` with threshold/tolerance/status/blocking/
-    severity/note/debt filled in. Raises FindingError on bad input."""
+    """Return a copy of `finding` with `kind`, `confidence`, `status`,
+    `blocking`, `blocking_reason`, `severity`, `note`, `debt` filled in, plus
+    `threshold`/`tolerance` (and `tier` for LOC) for numeric metrics. A
+    finding with `applicable: false` (a metric that has no meaning in this
+    language) is `compliant`, not debt. Raises FindingError on bad input."""
     if not isinstance(finding, dict):
         raise FindingError("finding must be an object")
     metric = finding.get("metric")
@@ -524,7 +542,13 @@ def judge_finding(finding, config):
     head = None
     threshold = None
 
-    if mkind == "count":
+    if finding.get("applicable", True) is False:
+        status = "compliant"
+        note = "%s: %s not applicable%s" % (
+            where, metric.replace("_", " "),
+            " (%s)" % finding["note"] if finding.get("note") else "",
+        )
+    elif mkind == "count":
         label = metric.replace("_", " ")
         if finding.get("removed"):
             status = "improved"
@@ -638,26 +662,32 @@ def changed_files(worktree, base_sha):
     detected. Deleted files are skipped — there is nothing at head to size.
     Untracked (not yet `git add`ed) files count as added: the gate often runs
     before the commit, and a brand-new module is exactly what it must see."""
-    out = _git(
-        worktree, "diff", "--name-status", "-M", "--relative", base_sha
-    ).stdout
+    # -z: NUL-separated, no C-style quoting of non-ASCII or special paths.
+    # Paths are repo-root-relative (no --relative), matching `git show
+    # <sha>:<path>`, so a --worktree that is a subdirectory still resolves.
+    fields = _git(worktree, "diff", "--name-status", "-M", "-z", base_sha).stdout.split("\0")
     rows = []
     seen = set()
-    for line in out.splitlines():
-        if not line.strip():
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if not status:
+            i += 1
             continue
-        parts = line.split("\t")
-        status = parts[0]
+        if status.startswith("R"):
+            old_path, new_path = fields[i + 1], fields[i + 2]
+            i += 3
+        else:
+            old_path = new_path = fields[i + 1]
+            i += 2
         if status.startswith("D"):
             continue
-        if status.startswith(("R", "C")) and len(parts) >= 3:
-            rows.append((status[0], parts[1], parts[2]))
-            seen.add(parts[2])
-        else:
-            rows.append((status[0], parts[1], parts[1]))
-            seen.add(parts[1])
-    untracked = _git(worktree, "ls-files", "--others", "--exclude-standard").stdout
-    for path in untracked.splitlines():
+        rows.append((status[0], old_path, new_path))
+        seen.add(new_path)
+    untracked = _git(
+        worktree, "ls-files", "--others", "--exclude-standard", "-z", "--full-name"
+    ).stdout.split("\0")
+    for path in untracked:
         if path and path not in seen:
             rows.append(("A", path, path))
     return rows
@@ -678,13 +708,33 @@ def count_lines(text):
     return n
 
 
-def base_text(worktree, base_sha, path):
-    proc = _git(worktree, "show", "%s:%s" % (base_sha, path), check=False)
-    return proc.stdout if proc.returncode == 0 else None
+# git's own wording for "that path is not in that tree". Anything else
+# (bad sha, corrupt object, permissions) is a real failure.
+_MISSING_AT_BASE = (
+    "does not exist in",
+    "exists on disk, but not in",
+)
 
 
-def head_text(worktree, path):
-    full = os.path.join(worktree, path)
+def base_text(root, base_sha, path):
+    """Content of `path` at `base_sha`, or None when the path genuinely did
+    not exist there. Any other git failure raises — a corrupt object or a
+    bad sha must not be mistaken for "new file" and then block the gate."""
+    proc = _git(root, "show", "%s:%s" % (base_sha, path), check=False)
+    if proc.returncode == 0:
+        return proc.stdout
+    err = proc.stderr.strip()
+    if any(marker in err for marker in _MISSING_AT_BASE):
+        return None
+    raise RuntimeError("git show %s:%s failed: %s" % (base_sha, path, err))
+
+
+def head_text(root, path):
+    """Working-tree content of the repo-root-relative `path`, or None when it
+    is not a readable regular file (submodule entry, dangling symlink)."""
+    full = os.path.join(root, path)
+    if not os.path.isfile(full):
+        return None
     try:
         with open(full, encoding="utf-8", errors="surrogateescape") as fh:
             return fh.read()
@@ -695,15 +745,23 @@ def head_text(worktree, path):
 def measure_loc(worktree, base_sha, config):
     """(findings, excluded) — one loc_per_file finding per in-scope changed file."""
     findings, excluded = [], []
+    root = git_root(worktree)
+    # Verify the base once. `git show <sha>:<path>` reports a bad sha with
+    # the same wording as a missing path, so without this a typo'd base
+    # would make every file "new" instead of failing loudly.
+    _git(root, "rev-parse", "--verify", "-q", "%s^{commit}" % base_sha)
     for _status, old_path, new_path in changed_files(worktree, base_sha):
         # Path-only exclusion first: the default list is exactly the files
         # most likely to be huge, so don't read them just to discard them.
         reason = excluded_reason(new_path, config)
-        head = None if reason else head_text(worktree, new_path)
+        head = None if reason else head_text(root, new_path)
         if not reason:
             if head is None:
-                continue
-            reason = excluded_reason(new_path, config, head)
+                # Not a readable regular file. Say so — "skipped" must never
+                # look like "measured clean".
+                reason = "unreadable"
+            else:
+                reason = excluded_reason(new_path, config, head)
         if reason:
             excluded.append({"file": new_path, "reason": reason})
             continue
@@ -711,7 +769,7 @@ def measure_loc(worktree, base_sha, config):
         if head_n is None:
             excluded.append({"file": new_path, "reason": "binary"})
             continue
-        base_n = count_lines(base_text(worktree, base_sha, old_path))
+        base_n = count_lines(base_text(root, base_sha, old_path))
         findings.append(
             {
                 "metric": "loc_per_file",
@@ -793,7 +851,9 @@ def main(argv=None):
             out = loc_report(args.worktree, args.base, config)
         else:
             out = judge_all(_read_findings(sys.stdin), config)
-    except (ConfigError, FindingError, RuntimeError) as exc:
+    except (ConfigError, FindingError, RuntimeError, OSError) as exc:
+        # OSError covers a missing `git` binary (FileNotFoundError) and
+        # unreadable paths — an exit-2 message, never a traceback.
         print("simplify_policy: %s" % exc, file=sys.stderr)
         return 2
     json.dump(out, sys.stdout, indent=2, sort_keys=True)

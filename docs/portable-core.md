@@ -64,7 +64,12 @@ Portable state uses `.sharpen/` for new shared data:
   data/capabilities.claude.json
   sdlc/<branch>/plan.md
   reviews/<branch>/review.json
+  simplify.json
 ```
+
+`simplify.json` is the one committed file under `.sharpen/` (the
+`/grumpy:simplify` policy config), unlike `data/`, which is gitignored
+per-run state.
 
 The gate store and capability-manifest adapter now resolve shared data in this order: an explicit environment override, `.sharpen/data/`, then existing `.claude/data/` as a compatibility fallback. Existing installs therefore keep reading and writing active state until `.sharpen/data/` exists; fresh state starts in the neutral root.
 

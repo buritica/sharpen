@@ -184,6 +184,8 @@ class ConfigTests(unittest.TestCase):
             {"block_on_estimate": ["bogus"]},
             {"test_advisory": "loc_per_file"},
             {"test_patterns": [1]},
+            {"debt": ["oops"]},
+            {"languages": "x"},
         ):
             with self.subTest(bad=bad):
                 p = self._write(bad)
@@ -257,6 +259,17 @@ class ClassificationTests(unittest.TestCase):
         self.assertIsNone(sp.debt_record(c, "src/main.rs", "cyclomatic"))
         self.assertEqual(sp.debt_record(c, "legacy/a/b.py", "cyclomatic")["reason"], "r2")
         self.assertIsNone(sp.debt_record(c, "src/other.rs", "loc_per_file"))
+
+    def test_debt_record_matches_exactly_not_by_suffix(self):
+        c = cfg(debt=[{"path": "main.rs", "reason": "r"}])
+        self.assertIsNone(sp.debt_record(c, "src/main.rs", "loc_per_file"))
+        self.assertIsNotNone(sp.debt_record(c, "main.rs", "loc_per_file"))
+
+    def test_exclude_negation_wins(self):
+        c = cfg()
+        c["exclude"] = c["exclude"] + ["!apps/foo/build/**"]
+        self.assertIsNone(sp.excluded_reason("apps/foo/build/index.ts", c))
+        self.assertEqual(sp.excluded_reason("apps/bar/build/index.ts", c), "glob:build/**")
 
 
 # ------------------------------------------------------- value metrics ---
@@ -372,6 +385,32 @@ class ValueMetricTests(unittest.TestCase):
                   confidence="measured:x", _cfg=c)
         self.assertEqual((f["status"], f["threshold"]), ("compliant", 30))
 
+    def test_mutants_zero_is_compliant_and_positive_is_advisory(self):
+        mut = lambda b, h: judge(metric="mutants", file="a.py", symbol="f", base=b, head=h,  # noqa: E731
+                                 confidence="measured:mutmut")
+        self.assertEqual(mut(0, 0)["status"], "compliant")
+        self.assertEqual(mut(None, 0)["status"], "compliant")
+        f = mut(None, 3)
+        self.assertEqual((f["status"], f["blocking"], f["blocking_reason"]),
+                         ("new", False, "advisory metric"))
+        self.assertTrue(mut(None, 3, )["severity"] == "WARN")
+        c = cfg(advisory=[])
+        self.assertTrue(judge(metric="mutants", file="a.py", symbol="f", base=None, head=1,
+                              confidence="measured:mutmut", _cfg=c)["blocking"])
+
+    def test_bool_values_are_rejected(self):
+        with self.assertRaises(sp.FindingError):
+            self.cyc(None, True)
+        with self.assertRaises(sp.FindingError):
+            self.cyc(False, 30)
+
+    def test_not_applicable_is_compliant_not_debt(self):
+        f = judge(metric="any_unknown", file="-", applicable=False, note="not applicable: C")
+        self.assertEqual((f["status"], f["blocking"], f["severity"]), ("compliant", False, "INFO"))
+        self.assertIn("not applicable: C", f["note"])
+        r = sp.judge_all([{"metric": "any_unknown", "file": "-", "applicable": False}], cfg())
+        self.assertEqual(r["summary"]["verdict"], "compliant")
+
     def test_crap_tolerance(self):
         crap = lambda b, h: judge(metric="crap", file="a.py", symbol="f", base=b, head=h,  # noqa: E731
                                   confidence="measured:x")["status"]
@@ -402,6 +441,14 @@ class LocMetricTests(unittest.TestCase):
     def test_new_file_over_hard_tier_blocks(self):
         f = self.loc(None, 1600)
         self.assertEqual((f["status"], f["blocking"], f["tier"]), ("new", True, "hard"))
+
+    def test_tier_boundaries_are_inclusive(self):
+        self.assertTrue(self.loc(None, 1500)["blocking"])       # == strong blocks
+        self.assertFalse(self.loc(None, 1499)["blocking"])
+        self.assertTrue(self.loc(900, 1000)["blocking"])        # regressed, == warn blocks
+        self.assertFalse(self.loc(900, 999)["blocking"])
+        self.assertEqual(self.loc(None, 500)["status"], "new")  # == healthy is over
+        self.assertEqual(self.loc(None, 499)["status"], "compliant")
 
     def test_new_file_strong_warn_tier_does_not_block(self):
         f = self.loc(None, 1200)
@@ -647,6 +694,50 @@ class LocMeasurementTests(unittest.TestCase):
         self.repo.write("src/lib.rs", lines(11, "lib"))
         self.assertEqual(list(self.by_file(self.report())), ["src/lib.rs"])
 
+    def test_subdirectory_worktree_still_reads_base(self):
+        self.repo.write("src/main.rs", lines(8243, "main"))
+        sub = os.path.join(self.repo.dir, "src")
+        r = sp.loc_report(sub, self.base, sp.load_config(worktree=sub))
+        f = self.by_file(r)["src/main.rs"]
+        self.assertEqual((f["base"], f["head"], f["status"]), (8471, 8243, "improved"))
+
+    def test_non_ascii_path_is_measured(self):
+        self.repo.write("src/café.rs", lines(1600, "x"))
+        r = self.report()
+        self.assertEqual(self.by_file(r)["src/café.rs"]["status"], "new")
+        self.assertEqual(r["summary"]["verdict"], "blocked")
+
+    def test_base_equal_to_head_with_untracked_only(self):
+        self.repo.write("src/routing.rs", lines(252))
+        head = self.repo.git("rev-parse", "HEAD").strip()
+        r = sp.loc_report(self.repo.dir, head, self.cfg)
+        self.assertEqual(list(self.by_file(r)), ["src/routing.rs"])
+
+    def test_gitignored_untracked_file_is_not_measured(self):
+        self.repo.write(".gitignore", "scratch/\n")
+        self.repo.commit("ignore")
+        self.repo.write("scratch/huge.py", lines(3000))
+        self.assertNotIn("scratch/huge.py", self.by_file(self.report()))
+
+    def test_pure_rename_is_held(self):
+        self.repo.git("mv", "src/main.rs", "src/app.rs")
+        f = self.by_file(self.report())["src/app.rs"]
+        self.assertEqual((f["base"], f["head"], f["status"]), (8471, 8471, "held"))
+
+    def test_unreadable_path_is_listed_as_excluded(self):
+        os.symlink("/nonexistent/target", os.path.join(self.repo.dir, "src", "dangling.rs"))
+        r = self.report()
+        self.assertNotIn("src/dangling.rs", self.by_file(r))
+        self.assertIn({"file": "src/dangling.rs", "reason": "unreadable"},
+                      r["summary"]["excluded"])
+
+    def test_bad_base_is_not_mistaken_for_new_files(self):
+        self.assertIsNone(sp.base_text(self.repo.dir, self.base, "src/nope.rs"))
+        with self.assertRaises(RuntimeError):
+            sp.loc_report(self.repo.dir, "0" * 40, self.cfg)
+        with self.assertRaises(RuntimeError):
+            sp.loc_report(self.repo.dir, "not-a-ref", self.cfg)
+
     def test_count_lines_semantics(self):
         self.assertEqual(sp.count_lines(""), 0)
         self.assertEqual(sp.count_lines("a\n"), 1)
@@ -740,6 +831,13 @@ class CliTests(unittest.TestCase):
         p = self.run_cli("config", "--worktree", self.repo.dir)
         self.assertEqual(p.returncode, 2)
         self.assertIn("simplify.json", p.stderr)
+
+    def test_missing_git_binary_exits_2(self):
+        env = dict(os.environ, PATH="/nonexistent")
+        p = subprocess.run([sys.executable, SCRIPT, "config", "--worktree", self.repo.dir],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 2)
+        self.assertNotIn("Traceback", p.stderr)
 
     def test_loc_bad_base_exits_2(self):
         p = self.run_cli("loc", "--worktree", self.repo.dir, "--base", "deadbeef")

@@ -109,6 +109,10 @@ Tolerances (default): complexity +2, LOC +10 lines, CRAP +5. Count metrics
 occurrence this diff introduced is `new`, a pre-existing one in a touched file
 is `held`, one this diff deleted is `improved`.
 
+A diff that only *improves* legacy debt still verdicts as **passes with
+legacy debt**, not compliant — the file or function is still over target;
+the credit is in the wording, not in the status.
+
 ### Confidence
 
 | Confidence | Can block? |
@@ -124,7 +128,11 @@ Generated and vendored files (`vendor/`, `node_modules/`, `*.min.js`, a
 (`exclude` in config extends the list). Test files never block on size or
 complexity — a long test file is a smell, not a merge blocker — but a new
 `any` or a dead helper in one still does (`test_advisory`, `test_patterns`).
-The script's `summary.excluded` says exactly what it skipped and why.
+The script's `summary.excluded` says exactly what it skipped and why. An
+`exclude` entry starting with `!` un-excludes (e.g. `"!apps/foo/build/**"`),
+for a real source directory the defaults would otherwise swallow. Debt
+records match their `path` glob exactly against the repo-relative path — no
+suffix matching, so `main.rs` does not excuse every `main.rs` in the tree.
 
 ### Config
 
@@ -222,6 +230,17 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+if [ -z "$BASE" ]; then
+  for candidate in origin/main origin/master main master; do
+    git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
+  done
+fi
+if [ -n "$BASE" ]; then
+  MB=$(git -C "$WT" merge-base "$BASE" HEAD)
+else
+  MB=$(git -C "$WT" rev-parse HEAD~1)
+fi
 POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
 python3 "$POLICY" config --worktree "$WT"
 python3 "$POLICY" loc --worktree "$WT" --base "$MB" > "$ARTIFACT_DIR/simplify-loc.json"
@@ -334,7 +353,7 @@ Audit TYPE SAFETY for the changed files at `[WT_PATH]`, base revision [MERGE_BAS
 
 Tooling available in this project: [TOOLING]
 
-- `any`/`unknown` types (target: 0) — for TypeScript: Grep for `: any`, `<any>`, `as any`, `as unknown`, `: unknown` in the changed files, and run `tsc --strict`/`--noImplicitAny` if configured. For Python: Grep for `typing.Any`/`: Any` and run `mypy --strict` if configured. For Go: Grep for bare `interface{}`/`any` used as a type-erasure escape hatch rather than a genuine "could be anything" case (a generic container is not the same violation as giving up on a specific value's type). Compare against `git -C [WT_PATH] show [MERGE_BASE]:<file>` to decide `introduced`: an occurrence already present at base is `introduced: false`; one this diff deleted is `removed: true`. Skip this pass entirely for a language with no such escape hatch (plain Python without type hints, C, etc.) — return a single line `{"metric": "any_unknown", "file": "-", "line": 0, "introduced": false, "confidence": "unmeasured", "note": "not applicable: <language>"}` rather than forcing a finding where the concept doesn't apply.
+- `any`/`unknown` types (target: 0) — for TypeScript: Grep for `: any`, `<any>`, `as any`, `as unknown`, `: unknown` in the changed files, and run `tsc --strict`/`--noImplicitAny` if configured. For Python: Grep for `typing.Any`/`: Any` and run `mypy --strict` if configured. For Go: Grep for bare `interface{}`/`any` used as a type-erasure escape hatch rather than a genuine "could be anything" case (a generic container is not the same violation as giving up on a specific value's type). Compare against `git -C [WT_PATH] show [MERGE_BASE]:<file>` to decide `introduced`: an occurrence already present at base is `introduced: false`; one this diff deleted is `removed: true`. Skip this pass entirely for a language with no such escape hatch (plain Python without type hints, C, etc.) — return a single line `{"metric": "any_unknown", "file": "-", "applicable": false, "note": "not applicable: <language>"}` rather than forcing a finding where the concept doesn't apply. The policy script renders an `applicable: false` line as compliant with your note — it is not debt.
 
 Each line is exactly one instance. Put in `note` what the value should be typed as instead.
 
@@ -399,6 +418,11 @@ didn't block — advisory, test file, estimated, below tier, documented debt),
 and a `summary.verdict` of `compliant`, `passes-with-debt`, or `blocked`:
 
 ```bash
+WT="${WT:-.}"
+BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
+GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
+ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
 # all.jsonl = every agent line + one line per object in simplify-loc.json's "findings"
 python3 "$POLICY" judge --worktree "$WT" < "$ARTIFACT_DIR/all.jsonl" > "$ARTIFACT_DIR/simplify-findings.json"
 ```

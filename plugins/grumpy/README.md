@@ -114,6 +114,10 @@ is clean, otherwise the exact suppression(s) that applied (`advisory metric`,
 growth needs a stated reason`, `documented debt: <reason>`). The report
 quotes it instead of re-deriving the rule.
 
+A diff that only *improves* legacy debt still verdicts as `Passes with
+legacy debt` — the file or function remains over target. `Threshold
+compliant` means nothing is over target at head.
+
 ### Config: `.sharpen/simplify.json`
 
 An optional file committed at the repo root. `.sharpen/data/` is gitignored
@@ -131,6 +135,10 @@ absent file means the defaults above apply unchanged.
 - `dead_code`, `redundant_code`, and `any_unknown` are judged per occurrence
   and take no `thresholds`/`tolerance` entry — the config is rejected if you
   add one.
+- An `exclude` entry starting with `!` un-excludes a path the defaults (or
+  an earlier pattern) would drop, e.g. `"!apps/foo/build/**"`.
+- `debt[].path` is matched exactly (fnmatch against the repo-relative path);
+  it does not suffix-match, so write the full path or a deliberate glob.
 - Each `debt` record needs `path` (a glob) and `reason` (non-empty), and
   may optionally set `metric` and `issue`.
 
@@ -230,7 +238,10 @@ against the old free-form text needs updating. The measurement sub-agents
 now return JSON lines (`metric`, `file`, `symbol`, `base`, `head`,
 `confidence`) judged by `simplify_policy.py`, instead of the old
 pipe-delimited lines. `.sharpen/simplify.json` is optional; if it's absent,
-the previous thresholds are used as the healthy targets, unchanged.
+the previous thresholds are used as the healthy targets, unchanged. An
+already-recorded `simplify` gate on an in-flight branch stays recorded — the
+gate key and the auto-record mechanism are unchanged; only what the skill
+does when it runs changed.
 
 **Upgrading to 2.0.0 (Gemini Mode removed):** `--gemini`, `GRUMPY_MODEL`, and
 `scripts/gemini.ts` are gone. If you had `GRUMPY_MODEL` set in your shell profile,
