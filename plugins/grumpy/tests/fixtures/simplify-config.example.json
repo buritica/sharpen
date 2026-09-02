@@ -1,0 +1,28 @@
+{
+  "thresholds": {
+    "loc_per_file": [500, 1000, 1500],
+    "cyclomatic": 22,
+    "cognitive": 22,
+    "coverage": 100
+  },
+  "tolerance": {
+    "loc_per_file": 10,
+    "cyclomatic": 2,
+    "cognitive": 2,
+    "crap": 5
+  },
+  "languages": {
+    "rs": { "thresholds": { "cyclomatic": 30 } },
+    "go": { "thresholds": { "cyclomatic": 30 } }
+  },
+  "exclude": ["**/*_pb2.py", "assets/**"],
+  "advisory": ["halstead", "mutants"],
+  "debt": [
+    {
+      "path": "src/main.rs",
+      "metric": "loc_per_file",
+      "reason": "legacy monolith; routing seam extracted in #34, rest tracked in #12",
+      "issue": "#12"
+    }
+  ]
+}

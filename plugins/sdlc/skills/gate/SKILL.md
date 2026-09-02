@@ -197,7 +197,7 @@ The **Key** column is the exact gate name `record-gate.py` accepts and stores. `
 | # | Gate | Key | How | Pass when |
 |---|------|-----|-----|-----------|
 | 1 | **Test** | `tests` | Auto-detect runner (see below) | Exit 0 |
-| 2 | **Simplify** | `simplify` | If `grumpy` plugin installed: `/grumpy:simplify`. Otherwise: review for unnecessary complexity, dead code, over-abstraction — but see the note below, the gate cannot be recorded | No actionable findings, or findings fixed |
+| 2 | **Simplify** | `simplify` | If `grumpy` plugin installed: `/grumpy:simplify`. Otherwise: review for unnecessary complexity, dead code, over-abstraction — but see the note below, the gate cannot be recorded | No blocking findings (`new`/`regressed` against the merge base) after the fix pass; legacy debt is reported, not failed |
 | 3 | **Review** | `grumpy-review` | If `grumpy` plugin installed: `/grumpy:review`. Otherwise: self-review for correctness bugs, edge cases, security | No critical findings |
 | 4 | **Fix** | `grumpy-fix-post-review` | If grumpy: `/grumpy:fix`. Otherwise: fix findings from step 3 | All critical findings resolved |
 | 5 | **Imagine** | `grumpy-imagine` | If `grumpy` plugin installed: `/grumpy:imagine`. Otherwise: mental production walkthrough | No critical findings |
