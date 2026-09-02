@@ -8,11 +8,10 @@ claude plugin marketplace add buritica/sharpen
 claude plugin install grumpy@sharpen
 ```
 
-## It argues with your diff, not just about it
+## A finding, not a lint rule
 
-A finding isn't a linter rule ID — it names the file, the consequence, and
-whether it's a fact or a judgment call (illustrative excerpt, the shape
-every `/grumpy:review` actually renders):
+Every line names the file, the consequence, and whether it's fact or
+judgment (illustrative — the shape a real `/grumpy:review` renders):
 
 ```markdown
 ## Critical Issues 🚨
@@ -32,11 +31,13 @@ And it says so in a voice, not a checkbox:
 
 `--level grumpy|grumpier|linus` turns that up or down — `linus` drops all
 hedging and backs every harsh line with the specific technical argument for
-it. `/grumpy:fix` is what actually resolves what a review finds: it
-dispatches tier-routed sub-agents (cheap model for a trivial fix, strongest
-for anything unverifiable), and can defer a non-critical finding into a
-`ponytail:` marker instead of forcing a fix at review time — see "Deferring
-findings" below.
+it.
+
+`/grumpy:fix` resolves what a review finds: tier-routed sub-agents (cheap
+model for a trivial fix, strongest for anything unverifiable), one retry at
+a higher tier if a fix's own check fails, and — for anything non-critical —
+the option to defer into a `ponytail:` marker instead of forcing a fix at
+review time. See "Deferring findings" below.
 
 ## Commands
 

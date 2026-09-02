@@ -1,17 +1,15 @@
 # sdlc-guardrails
 
-Main-branch protection for the [sdlc](../sdlc) workflow, agent-side (it acts on Claude Code tool calls, not on your shell):
-
-- **block-main-commits** — denies `git commit`/`git push` targeting `main`/`master`. **Opt-in per repo** (see below). Target-aware: respects `git -C <path>` and `cd <path> &&` prefixes.
-
-> **Gate-chain enforcement** (blocking `gh pr create` until gates pass) lives in the **[sdlc](../sdlc) plugin**, not here. It is pure-python and JSON-backed (`enforce-sdlc-gates.py`, reads the `.claude/data/gates.json` that `/sdlc:gate` writes). An earlier `enforce-gates` hook lived here but read a JSON format nothing wrote — it was a no-op and has been removed.
-
-This hook is agent-side only. It reads JSON from stdin (Claude Code hook protocol) and acts on Claude's tool calls; it does not install git hooks or affect commits you make by hand outside Claude Code.
+Main-branch protection for the [sdlc](../sdlc) workflow, agent-side: it denies `git commit`/`git push` targeting `main`/`master`, opt-in per repo, aware of `git -C <path>` and `cd <path> &&` prefixes.
 
 ```sh
 claude plugin marketplace add buritica/sharpen
 claude plugin install sdlc-guardrails@sharpen
 ```
+
+> **Gate-chain enforcement** (blocking `gh pr create` until gates pass) lives in the **[sdlc](../sdlc) plugin**, not here. It is pure-python and JSON-backed (`enforce-sdlc-gates.py`, reads the `.claude/data/gates.json` that `/sdlc:gate` writes). An earlier `enforce-gates` hook lived here but read a JSON format nothing wrote — it was a no-op and has been removed.
+
+This hook is agent-side only. It reads JSON from stdin (Claude Code hook protocol) and acts on Claude's tool calls; it does not install git hooks or affect commits you make by hand outside Claude Code.
 
 ## Main-branch protection is opt-in
 
