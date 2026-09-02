@@ -1,6 +1,6 @@
 {
   "name": "grumpy",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents",
   "author": {
     "name": "buritica"

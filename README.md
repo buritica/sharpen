@@ -15,6 +15,8 @@ claude plugin install sdlc@sharpen
 
 `sdlc` works alone. Add `grumpy` and the gate chain runs real reviews instead of self-review. Add `sdlc-guardrails` and `main` gets protected. They find each other by command availability, so nothing breaks when one is missing.
 
+Pairs with [ponytail](https://github.com/DietrichGebert/ponytail), which shapes code *before* the gate chain sees it, as an external peer plugin — nothing from it is vendored here. `grumpy` honors its `ponytail:` comment convention as documented debt, and `/grumpy:fix` can defer non-critical findings into a marker instead of fixing everything at review time.
+
 ## Why one gate
 
 Most repos enforce quality in three places: git hooks, CI, and whatever the developer remembers. None is designated the source of truth, so enforcement settles wherever it lands by accident. Usually a git hook. Everyone believes it's CI.

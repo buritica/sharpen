@@ -614,6 +614,15 @@ the author wants a debt record instead, tell them where it goes
 (`.sharpen/simplify.json`, `debt[]`, with a reason) — and that it renders as
 `excepted`, not as clean.
 
+A `ponytail:` comment at the site of a dead-code, redundant-code, or
+unnecessary-abstraction finding is an author-documented tradeoff and counts
+the same as a debt record for **that finding only** — render it under
+**Excepted** with the marker text as the reason, instead of raising it as
+🚨/⚠️/🤔. This applies only to findings that came from your own
+estimate/reading, never to a `measured:<tool>` metric — complexity,
+coverage, CRAP score, and LOC still come only from the policy script and
+`.sharpen/simplify.json`; a marker cannot except a number the tool reported.
+
 After fixing, re-measure before you re-judge — `judge` only knows what you
 feed it, and the agent lines in `simplify-agents.jsonl` still carry the
 pre-fix numbers. For every finding you fixed: re-run the tool on the touched

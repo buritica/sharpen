@@ -75,9 +75,9 @@ Default order for Small-medium+ changes:
 1. **Test** — auto-detects runner (bun/npm/pytest/cargo/go)
 2. **Simplify** — review for dead code, over-abstraction, complexity — thresholds are judged against the merge base, so pre-existing debt is reported rather than failed
 3. **Review** — correctness bugs, edge cases, security (uses grumpy if installed)
-4. **Fix** — resolve review findings
+4. **Fix** — resolve review findings (a non-critical finding may instead be deferred with a `ponytail:` comment, per `/grumpy:fix`'s eligibility table; critical findings are never deferred)
 5. **Imagine** — mental production walkthrough (uses grumpy if installed)
-6. **Fix** — resolve imagination findings
+6. **Fix** — resolve imagination findings (same deferral option as step 4)
 7. **Lint** — auto-detects linter (biome/eslint/ruff/clippy)
 8. **Typecheck** — auto-detects checker (tsc/pyright/mypy)
 
