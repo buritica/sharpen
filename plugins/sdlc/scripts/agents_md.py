@@ -8,12 +8,20 @@ Write the SDLC contract into a repo's AGENTS.md, and make CLAUDE.md include it.
 Code reads it through a one-line `CLAUDE.md` containing `@AGENTS.md`. This
 module renders `templates/agents-sdlc.md` with the derived facts and upserts it
 between `<!-- sdlc:begin -->` / `<!-- sdlc:end -->` markers, so re-running init
-replaces exactly its own block and nothing a human wrote.
+replaces exactly its own block and nothing a human wrote. The tier names and
+the gate → skill chain come from `gate_store.py` (the enforcer), so the block
+cannot describe a tier the store rejects.
 
 It also migrates the pre-4.11 `## Run gates before every PR` reminder that
 init used to append to CLAUDE.md: the section is removed (AGENTS.md now
 carries it) only when its heading matches exactly and its body mentions
-`/sdlc:gate`; anything else is left alone and reported.
+`/sdlc:gate`. Any other `/sdlc:gate` mention left in CLAUDE.md is reported by
+line number, never removed.
+
+Both files are refused when either is a symlink: with `CLAUDE.md -> AGENTS.md`
+the second write would follow the link and erase the block the first one
+wrote. Line endings are preserved per file; writes go through a temp file and
+rename, and a failure names what was already written.
 
 Usage:
   agents_md.py --root DIR [--test-cmd C] [--lint-cmd C] [--format-cmd C]
@@ -21,20 +29,22 @@ Usage:
                [--deploy TEXT] [--check]
 
 Prints one `path | action` line per file. Exit 0; with `--check`, exit 1 when
-anything would change (nothing is written); exit 2 on bad arguments.
-Pure stdlib.
+anything would change (nothing is written); exit 2 on bad arguments, an
+unreadable file, or a refused layout. Pure stdlib.
 """
 
 import argparse
 import os
+import re
 import sys
 
 # Same-directory sibling (the plugin cache is version-nested, so this is the
-# only kind of cross-file import a plugin script may make). The tier names
-# and the gate → skill chain come from the enforcer, so the block cannot
-# describe a tier the store rejects or a chain gate.md doesn't run.
+# only kind of cross-file import a plugin script may make).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import gate_store as gs  # noqa: E402
+try:
+    import gate_store as gs
+except ImportError:  # vendored without its sibling
+    gs = None
 
 BEGIN = "<!-- sdlc:begin -->"
 END = "<!-- sdlc:end -->"
@@ -46,6 +56,7 @@ TEMPLATE = os.path.join(
     "agents-sdlc.md",
 )
 NOT_CONFIGURED = "not configured — wire one and re-run `/sdlc:init`"
+PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 
 # One-line judgment per tier; the names themselves come from gate_store.TIERS.
 TIER_NOTES = {
@@ -54,35 +65,6 @@ TIER_NOTES = {
     "significant": "new behavior, new integration, >3 files or >200 lines",
 }
 
-
-def tiers_line():
-    return ", ".join(
-        "**%s** (%s)" % (tier, TIER_NOTES.get(tier, "see `/sdlc:gate`"))
-        for tier in gs.TIERS
-    )
-
-
-def skill_chain():
-    """The skill-gated gates of a full cycle, in order, as skill names."""
-    return [
-        gs.SKILL_FOR_GATE[g]
-        for g in gs.GATES_BY_TIER["small-medium"]
-        if g in gs.SKILL_FOR_GATE
-    ]
-
-
-def grumpy_on_line():
-    chain = ["`%s`" % s for s in skill_chain()]
-    return (
-        "Gates 2–%d are %s, then %s. Run the skills; reviewing the diff in your head records nothing."
-        % (
-            1 + len(chain),
-            chain[0],
-            " → ".join(chain[1:]),
-        )
-    )
-
-
 GRUMPY_OFF = (
     "`grumpy` is not installed: small-medium and significant cycles cannot complete "
     "until it is. Install it, or use `tiny` only when the change genuinely qualifies."
@@ -90,7 +72,50 @@ GRUMPY_OFF = (
 
 
 class WireError(Exception):
-    """Malformed markers or an unusable root — the CLI exits 2."""
+    """Malformed markers, a refused layout, or an unusable root — exit 2."""
+
+
+def _store():
+    if gs is None:
+        raise WireError(
+            "gate_store.py is missing beside this script; it supplies the tier names "
+            "and gate chain, so the block cannot be rendered without it"
+        )
+    return gs
+
+
+def tiers_line():
+    return ", ".join(
+        "**%s** (%s)" % (tier, TIER_NOTES.get(tier, "see `/sdlc:gate`"))
+        for tier in _store().TIERS
+    )
+
+
+def skill_gates():
+    """[(gate number, skill)] for the skill-gated gates of a full cycle, in order."""
+    store = _store()
+    gates = store.GATES_BY_TIER["small-medium"]
+    return [
+        (i, store.SKILL_FOR_GATE[g])
+        for i, g in enumerate(gates, 1)
+        if g in store.SKILL_FOR_GATE
+    ]
+
+
+def skill_chain():
+    return [skill for _, skill in skill_gates()]
+
+
+def grumpy_on_line():
+    pairs = skill_gates()
+    if not pairs:
+        return "Every gate is bash-verifiable; nothing is skill-gated."
+    chain = ["`%s`" % s for _, s in pairs]
+    numbers = [n for n, _ in pairs]
+    return (
+        "Gates %d–%d are %s, then %s. Run the skills; reviewing the diff in your head "
+        "records nothing." % (numbers[0], numbers[-1], chain[0], " → ".join(chain[1:]))
+    )
 
 
 def _cmd(value):
@@ -98,12 +123,27 @@ def _cmd(value):
     return "`%s`" % value if value else NOT_CONFIGURED
 
 
+def fill(template, values):
+    """Replace `{name}` placeholders only. Literal braces elsewhere (a JSON
+    example, `{}`) pass through; an unknown `{name}` is an error, since it is
+    almost certainly a typo in the template."""
+
+    def sub(match):
+        key = match.group(1)
+        if key not in values:
+            raise WireError("template placeholder {%s} has no value" % key)
+        return values[key]
+
+    return PLACEHOLDER.sub(sub, template)
+
+
 def render(facts, template_path=TEMPLATE):
     """The managed block, markers included."""
     with open(template_path, encoding="utf-8") as fh:
         template = fh.read()
     deploy = (facts.get("deploy") or "").strip()
-    body = template.format_map(
+    body = fill(
+        template,
         {
             "default_branch": facts.get("default_branch") or "main",
             "test_cmd": _cmd(facts.get("test_cmd")),
@@ -113,7 +153,7 @@ def render(facts, template_path=TEMPLATE):
             "tiers_line": tiers_line(),
             "grumpy_line": grumpy_on_line() if facts.get("grumpy") else GRUMPY_OFF,
             "deploy_line": ("- deploy: %s\n" % deploy) if deploy else "",
-        }
+        },
     )
     return "%s\n%s\n%s" % (BEGIN, body.strip("\n"), END)
 
@@ -139,13 +179,20 @@ def upsert_block(text, block):
 
 
 def remove_old_section(text):
-    """Drop init's pre-4.11 CLAUDE.md reminder. Returns (text, removed)."""
+    """Drop init's pre-4.11 CLAUDE.md reminder. Returns (text, removed). The
+    section runs to the next heading, fence-aware: a `# comment` inside the
+    reminder's own code fence is not a heading."""
     lines = text.splitlines(keepends=True)
     for i, line in enumerate(lines):
         if line.strip() != OLD_HEADING:
             continue
         j = i + 1
-        while j < len(lines) and not lines[j].startswith("#"):
+        in_fence = False
+        while j < len(lines):
+            if lines[j].lstrip().startswith("```"):
+                in_fence = not in_fence
+            elif not in_fence and lines[j].startswith("#"):
+                break
             j += 1
         body = "".join(lines[i:j])
         if "/sdlc:gate" not in body:
@@ -158,42 +205,71 @@ def remove_old_section(text):
     return text, False
 
 
+def leftover_gate_mentions(text):
+    """1-based line numbers of `/sdlc:gate` mentions that survive migration,
+    outside any managed block pasted into the file — an older init may have
+    written the reminder under a different heading, and a hand-varied copy
+    left beside the include is two contracts loaded at once. Reported, never
+    auto-removed."""
+    found, in_block = [], False
+    for i, line in enumerate(text.splitlines(), 1):
+        if BEGIN in line:
+            in_block = True
+        if not in_block and "/sdlc:gate" in line:
+            found.append(i)
+        if END in line:
+            in_block = False
+    return found
+
+
 def _read(path):
+    """(text normalized to LF, crlf flag) or (None, False) when absent. A
+    symlink is refused: writing through one can erase the other file."""
+    if os.path.islink(path):
+        raise WireError(
+            "%s is a symlink; refusing to write through it (with CLAUDE.md -> AGENTS.md "
+            "the second write would erase the block the first one wrote). Replace the "
+            "link with a real file and re-run." % os.path.basename(path)
+        )
     if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
+        return None, False
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            raw = fh.read()
+    except UnicodeDecodeError as exc:
+        raise WireError(
+            "%s is not UTF-8 (%s); fix its encoding and re-run" % (path, exc)
+        )
+    crlf = "\r\n" in raw
+    return raw.replace("\r\n", "\n"), crlf
 
 
-def _write(path, text):
-    with open(path, "w", encoding="utf-8") as fh:
+def _write(path, text, crlf):
+    """Temp-then-rename, so a crash mid-write cannot leave a truncated file."""
+    if crlf:
+        text = text.replace("\n", "\r\n")
+    tmp = path + ".sdlc-tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
+    os.replace(tmp, path)
 
 
 def plan_agents(root, block):
     path = os.path.join(root, "AGENTS.md")
-    current = _read(path)
+    current, crlf = _read(path)
     if current is None:
         heading = "# %s\n\n" % os.path.basename(os.path.abspath(root))
-        return path, None, heading + block + "\n", []
-    return path, current, upsert_block(current, block), []
-
-
-def leftover_gate_mentions(text):
-    """1-based line numbers of `/sdlc:gate` mentions that survive migration —
-    an older init may have written the reminder under a different heading,
-    and a hand-varied copy left beside the include is two contracts loaded
-    at once. Reported, never auto-removed."""
-    return [i for i, line in enumerate(text.splitlines(), 1) if "/sdlc:gate" in line]
+        return path, None, heading + block + "\n", [], crlf
+    return path, current, upsert_block(current, block), [], crlf
 
 
 def plan_claude(root):
-    """Returns (path, current, new, notes)."""
+    """Returns (path, current, new, notes, crlf)."""
     path = os.path.join(root, "CLAUDE.md")
-    current = _read(path)
+    current, crlf = _read(path)
     notes = []
     if current is None:
-        return path, None, INCLUDE + "\n", notes
+        return path, None, INCLUDE + "\n", notes, crlf
     new, removed = remove_old_section(current)
     if removed:
         notes.append(
@@ -208,27 +284,37 @@ def plan_claude(root):
             "CLAUDE.md still mentions /sdlc:gate at line %s — AGENTS.md carries that now; "
             "move or drop it" % ", ".join(str(n) for n in leftover)
         )
-    return path, current, new, notes
+    return path, current, new, notes, crlf
 
 
 def wire(root, facts, check=False):
     """Apply (or, with check=True, only compute) the AGENTS.md/CLAUDE.md
     changes. Returns [(relative path, action, note)] where action is one of
-    created / updated / unchanged."""
+    created / updated / unchanged. Both plans are computed before either
+    file is written; if the second write fails, the error names the first."""
     if not os.path.isdir(root):
         raise WireError("not a directory: %s" % root)
     block = render(facts)
-    results = []
-    for path, cur, new, notes in (plan_agents(root, block), plan_claude(root)):
+    plans = [plan_agents(root, block), plan_claude(root)]
+    results, written = [], []
+    for path, cur, new, notes, crlf in plans:
         if cur is None:
             action = "created"
         elif cur == new:
             action = "unchanged"
         else:
             action = "updated"
+        rel = os.path.relpath(path, root)
         if action != "unchanged" and not check:
-            _write(path, new)
-        results.append((os.path.relpath(path, root), action, "; ".join(notes)))
+            try:
+                _write(path, new, crlf)
+            except OSError as exc:
+                already = (
+                    (" (already written: %s)" % ", ".join(written)) if written else ""
+                )
+                raise WireError("could not write %s: %s%s" % (rel, exc, already))
+            written.append(rel)
+        results.append((rel, action, "; ".join(notes)))
     return results
 
 

@@ -116,7 +116,22 @@ class EnforcerConsistencyTests(unittest.TestCase):
                 "/grumpy:fix",
             ],
         )
-        self.assertTrue(line.startswith("Gates 2–6 are `/grumpy:simplify`, then"))
+        first = gs.GATES_BY_TIER["small-medium"].index("simplify") + 1
+        last = gs.GATES_BY_TIER["small-medium"].index("grumpy-fix-post-imagine") + 1
+        self.assertIn("Gates %d–%d" % (first, last), line)
+
+    def test_literal_braces_in_template_pass_through(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "t.md")
+        write(path, 'cmd: {test_cmd}\njson: {"a": 1} and {} and {Not_A_Key}\n')
+        try:
+            block = am.render(FACTS, template_path=path)
+            self.assertIn('json: {"a": 1} and {} and {Not_A_Key}', block)
+            write(path, "{nope}\n")
+            with self.assertRaises(am.WireError):
+                am.render(FACTS, template_path=path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class UpsertTests(unittest.TestCase):
@@ -157,6 +172,16 @@ class RemoveOldSectionTests(unittest.TestCase):
     def test_leaves_same_heading_with_different_body(self):
         text = "## Run gates before every PR\n\nwe do it differently\n"
         self.assertEqual(am.remove_old_section(text), (text, False))
+
+    def test_fenced_hash_lines_do_not_end_the_section(self):
+        old = (
+            "## Run gates before every PR\n\n```sh\n# run this before every PR\n"
+            "/sdlc:gate\n```\n\nMandatory.\n"
+        )
+        text = "# repo\n\n" + old + "\n## Tests\n\nrun them\n"
+        out, removed = am.remove_old_section(text)
+        self.assertTrue(removed)
+        self.assertEqual(out, "# repo\n\n## Tests\n\nrun them\n")
 
     def test_leaves_unrelated_text(self):
         text = "# repo\n\n## Gates\n\n/sdlc:gate\n"
@@ -237,6 +262,71 @@ class WireTests(unittest.TestCase):
             "@AGENTS.md\n\n# repo\n\n## Gates\n\nrun /sdlc:gate first\n",
         )
 
+    def test_leftover_mentions_multiple_lines_and_skip_pasted_block(self):
+        text = (
+            "# repo\n\n/sdlc:gate here\n%s\n/sdlc:gate inside block\n%s\n"
+            "and /sdlc:gate again\n" % (am.BEGIN, am.END)
+        )
+        self.assertEqual(am.leftover_gate_mentions(text), [3, 7])
+        write(self.p("CLAUDE.md"), text)
+        results = am.wire(self.root, FACTS)
+        self.assertIn("at line 5, 9", results[1][2])
+
+    def test_symlinked_claude_is_refused_and_nothing_written(self):
+        write(self.p("AGENTS.md"), "# ca\n\nhand\n")
+        os.symlink("AGENTS.md", self.p("CLAUDE.md"))
+        with self.assertRaises(am.WireError) as ctx:
+            am.wire(self.root, FACTS)
+        self.assertIn("symlink", str(ctx.exception))
+        self.assertEqual(read(self.p("AGENTS.md")), "# ca\n\nhand\n")
+
+    def test_symlinked_agents_is_refused(self):
+        write(self.p("CLAUDE.md"), "# repo\n")
+        os.symlink("CLAUDE.md", self.p("AGENTS.md"))
+        with self.assertRaises(am.WireError):
+            am.wire(self.root, FACTS)
+        self.assertEqual(read(self.p("CLAUDE.md")), "# repo\n")
+
+    def test_dangling_symlink_is_refused(self):
+        os.symlink("nowhere.md", self.p("CLAUDE.md"))
+        with self.assertRaises(am.WireError):
+            am.wire(self.root, FACTS)
+        self.assertFalse(os.path.exists(self.p("AGENTS.md")))
+
+    def test_non_utf8_is_wire_error(self):
+        with open(self.p("CLAUDE.md"), "wb") as fh:
+            fh.write(b"# caf\xe9\n")
+        with self.assertRaises(am.WireError) as ctx:
+            am.wire(self.root, FACTS)
+        self.assertIn("not UTF-8", str(ctx.exception))
+
+    def test_crlf_is_preserved_per_file(self):
+        with open(self.p("CLAUDE.md"), "wb") as fh:
+            fh.write(b"# repo\r\n\r\nrules\r\n")
+        am.wire(self.root, FACTS)
+        with open(self.p("CLAUDE.md"), "rb") as fh:
+            raw = fh.read()
+        self.assertEqual(raw, b"@AGENTS.md\r\n\r\n# repo\r\n\r\nrules\r\n")
+        with open(self.p("AGENTS.md"), "rb") as fh:
+            self.assertNotIn(b"\r\n", fh.read())
+        self.assertEqual(
+            [r[1] for r in am.wire(self.root, FACTS)], ["unchanged", "unchanged"]
+        )
+
+    def test_no_temp_file_left_behind(self):
+        am.wire(self.root, FACTS)
+        self.assertEqual(sorted(os.listdir(self.root)), ["AGENTS.md", "CLAUDE.md"])
+
+    def test_failed_second_write_names_the_first(self):
+        write(self.p("CLAUDE.md"), "# repo\n")
+        os.chmod(self.root, 0o555)
+        try:
+            with self.assertRaises(am.WireError) as ctx:
+                am.wire(self.root, FACTS)
+            self.assertIn("could not write AGENTS.md", str(ctx.exception))
+        finally:
+            os.chmod(self.root, 0o755)
+
     def test_claude_already_including_is_unchanged(self):
         write(self.p("CLAUDE.md"), "@AGENTS.md\n")
         self.assertEqual(am.wire(self.root, FACTS)[1][1], "unchanged")
@@ -295,6 +385,20 @@ class CliTests(unittest.TestCase):
         )
         p = self.run_cli("--check", "--test-cmd", "pytest")
         self.assertEqual(p.returncode, 1)
+
+    def test_deploy_and_default_branch_flags(self):
+        p = self.run_cli("--deploy", "CI → prod via bm2", "--default-branch", "master")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        agents = read(os.path.join(self.root, "AGENTS.md"))
+        self.assertIn("- deploy: CI → prod via bm2", agents)
+        self.assertIn("origin/master", agents)
+
+    def test_non_utf8_exits_2_not_1(self):
+        with open(os.path.join(self.root, "CLAUDE.md"), "wb") as fh:
+            fh.write(b"\xff\xfe")
+        p = self.run_cli("--check")
+        self.assertEqual(p.returncode, 2)
+        self.assertNotIn("Traceback", p.stderr)
 
     def test_bad_root_exits_2(self):
         p = subprocess.run(

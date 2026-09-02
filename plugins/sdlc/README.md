@@ -128,7 +128,7 @@ The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook
 - Piping a payload to `auto-record-skill-gate.py` from Bash is now blocked; call it from python if you are testing the hook.
 - **If you don't have `/simplify` and grumpy installed, this is the release where that stops being survivable.** `auto-init-gate-cycle.py` starts a `small-medium` cycle on the first commit to any non-default branch, and gates 2-6 can now only be recorded by their skills — the manual `--record` that used to slip through is gone. Install the skills, or start the branch with `/sdlc:gate --init tiny` where the change genuinely qualifies. Editing `gates.json` by hand is the last resort and the store does not stop you; it is a deliberate hole, not an oversight.
 
-**Upgrading to 4.11.0 (`AGENTS.md` carries the contract):** `/sdlc:init` step 10 now writes a managed block to `AGENTS.md` and reduces its `CLAUDE.md` footprint to `@AGENTS.md`. Re-run `/sdlc:init` on an existing repo to get the block; the old three-line reminder in `CLAUDE.md` is removed in the same run. Nothing about gates, hooks, or the store changed.
+**Upgrading to 4.11.0 (`AGENTS.md` carries the contract):** `/sdlc:init` step 10 now writes a managed block to `AGENTS.md` and reduces its `CLAUDE.md` footprint to `@AGENTS.md`. Re-run `/sdlc:init` on an existing repo to get the block; the old `## Run gates before every PR` reminder in `CLAUDE.md` is removed in the same run. Nothing about gates, hooks, or the store changed.
 
 **Upgrading to 4.10.4 (`/simplify` replaced by `/grumpy:simplify`):** the gate-2 recorder was a Claude-Code-only bundled skill, invisible to every other host — unlike gates 3-6, which have always come from the portable `grumpy` plugin. The `simplify` gate *key* is unchanged (stored JSON, `--record`/`--attest` arguments, all identical); only the skill that records it changed. Re-running the chain after this upgrade means running `/grumpy:simplify` where the docs above still say `/simplify`.
 
@@ -148,8 +148,9 @@ not resolve `@` includes, so an include there would be inert text for exactly
 the readers `AGENTS.md` exists to serve. `scripts/agents_md.py --check`
 reports drift without writing (exit 1), and the template lives at
 `templates/agents-sdlc.md`. Repos that already carried the older
-`## Run gates before every PR` reminder in `CLAUDE.md` have it migrated on the
-next init run.
+`## Run gates before every PR` reminder in `CLAUDE.md` (a heading, a fenced
+`/sdlc:gate`, and two sentences) have it migrated on the next init run; a
+symlinked `CLAUDE.md` or `AGENTS.md` is refused rather than written through.
 
 ## Codex CLI support
 
