@@ -16,7 +16,9 @@ added (or replaced, if a previous 4.11 run wrote one), hand-written content in
 either file is preserved, and the old `## Run gates before every PR` section in
 `CLAUDE.md` is removed because the block carries it. If `CLAUDE.md` holds other
 repo rules, move them to `AGENTS.md` so non-Claude hosts read them too.
-`scripts/agents_md.py --root . --check` shows drift without writing.
+`scripts/agents_md.py --root . --check` shows drift without writing; with no
+other flags it only compares the version stamped inside the block against the
+installed sdlc, and `/sdlc:gate` runs that check once per cycle.
 
 ## What a repo gets
 

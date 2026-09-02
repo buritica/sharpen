@@ -134,6 +134,23 @@ class EnforcerConsistencyTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class StampAndCommandTests(unittest.TestCase):
+    def test_block_is_stamped_with_plugin_version(self):
+        block = am.render(FACTS)
+        self.assertRegex(
+            block.splitlines()[1], r"^<!-- rendered by sdlc \d+\.\d+\.\d+ "
+        )
+        self.assertEqual(am.block_version(block), am.plugin_version())
+        self.assertEqual(am.block_version("no block here\n"), None)
+        self.assertEqual(am.block_version("%s\nold\n%s\n" % (am.BEGIN, am.END)), "")
+
+    def test_repeated_commands_render_nested_bullets(self):
+        block = am.render(dict(FACTS, test_cmd=["web: bun test", "api: pytest"]))
+        self.assertIn("- test:\n  - `web: bun test`\n  - `api: pytest`\n", block)
+        self.assertEqual(am._cmd(["", "  "]), am.NOT_CONFIGURED)
+        self.assertEqual(am._cmd(["x"]), "`x`")
+
+
 class UpsertTests(unittest.TestCase):
     def test_append_when_absent(self):
         out = am.upsert_block("# repo\n\nhand-written\n", "B")
@@ -148,6 +165,17 @@ class UpsertTests(unittest.TestCase):
             am.upsert_block(text, block),
             "before\n%s\nnew\n%s\nafter\n" % (am.BEGIN, am.END),
         )
+
+    def test_markers_in_prose_are_not_markers(self):
+        prose = "Managed between `%s` and `%s`.\n" % (am.BEGIN, am.END)
+        block = "%s\nnew\n%s" % (am.BEGIN, am.END)
+        once = am.upsert_block("# repo\n\n" + prose, block)
+        self.assertEqual(once, "# repo\n\n" + prose + "\n" + block + "\n")
+        twice = am.upsert_block(once, "%s\nnewer\n%s" % (am.BEGIN, am.END))
+        self.assertEqual(twice.count(am.BEGIN + "\n"), 1)
+        self.assertIn(prose, twice)
+        self.assertIn("newer", twice)
+        self.assertNotIn("\nnew\n", twice)
 
     def test_half_marked_is_error(self):
         with self.assertRaises(am.WireError):
@@ -327,6 +355,72 @@ class WireTests(unittest.TestCase):
         finally:
             os.chmod(self.root, 0o755)
 
+    def test_agents_old_reminder_is_removed_too(self):
+        write(self.p("AGENTS.md"), "# repo\n\n" + OLD_SECTION + "\n## Rules\n\nkeep\n")
+        results = am.wire(self.root, FACTS)
+        self.assertIn("removed the old", results[0][2])
+        agents = read(self.p("AGENTS.md"))
+        self.assertNotIn(am.OLD_HEADING, agents)
+        self.assertIn("## Rules\n\nkeep\n", agents)
+        self.assertEqual(agents.count(am.BEGIN + "\n"), 1)
+
+    def test_no_claude_manages_agents_only(self):
+        results = am.wire(self.root, FACTS, claude=False)
+        self.assertEqual([r[0] for r in results], ["AGENTS.md"])
+        self.assertFalse(os.path.exists(self.p("CLAUDE.md")))
+
+    def test_read_only_target_is_refused(self):
+        write(self.p("AGENTS.md"), "# repo\n")
+        os.chmod(self.p("AGENTS.md"), 0o444)
+        try:
+            with self.assertRaises(am.WireError) as ctx:
+                am.wire(self.root, FACTS)
+            self.assertIn("read-only", str(ctx.exception))
+        finally:
+            os.chmod(self.p("AGENTS.md"), 0o644)
+
+    def test_failed_rename_leaves_no_temp_file(self):
+        real = am.os.replace
+
+        def boom(src, dst):
+            raise OSError("cross-device")
+
+        am.os.replace = boom
+        try:
+            with self.assertRaises(am.WireError):
+                am.wire(self.root, FACTS)
+        finally:
+            am.os.replace = real
+        self.assertEqual([f for f in os.listdir(self.root) if "sdlc-tmp" in f], [])
+
+    def test_repo_name_uses_main_checkout_from_a_worktree(self):
+        self.assertEqual(am.repo_name(self.root), os.path.basename(self.root))
+
+        def git(*a):
+            return subprocess.run(
+                ["git", "-C", self.root] + list(a),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        write(self.p("f"), "x\n")
+        git("add", "f")
+        git("commit", "-q", "-m", "base")
+        wt = os.path.join(self.root, ".claude", "worktrees", "feature-x")
+        git("worktree", "add", "-q", "-b", "feature-x", wt)
+        self.assertEqual(am.repo_name(wt), os.path.basename(self.root))
+        am.wire(wt, FACTS)
+        self.assertTrue(
+            read(os.path.join(wt, "AGENTS.md")).startswith(
+                "# %s\n" % os.path.basename(self.root)
+            )
+        )
+
     def test_claude_already_including_is_unchanged(self):
         write(self.p("CLAUDE.md"), "@AGENTS.md\n")
         self.assertEqual(am.wire(self.root, FACTS)[1][1], "unchanged")
@@ -374,16 +468,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("`pytest`", read(os.path.join(self.root, "AGENTS.md")))
 
     def test_check_exit_codes(self):
-        p = self.run_cli("--check")
+        p = self.run_cli("--check", "--test-cmd", "pytest")
         self.assertEqual(p.returncode, 1)
         self.assertIn("(would change)", p.stdout)
-        self.run_cli()
-        p = self.run_cli("--check")
+        self.run_cli("--test-cmd", "pytest")
+        p = self.run_cli("--check", "--test-cmd", "pytest")
         self.assertEqual(
             (p.returncode, p.stdout),
             (0, "AGENTS.md | unchanged\nCLAUDE.md | unchanged\n"),
         )
-        p = self.run_cli("--check", "--test-cmd", "pytest")
+        p = self.run_cli("--check", "--test-cmd", "bun test")
         self.assertEqual(p.returncode, 1)
 
     def test_deploy_and_default_branch_flags(self):
@@ -399,6 +493,42 @@ class CliTests(unittest.TestCase):
         p = self.run_cli("--check")
         self.assertEqual(p.returncode, 2)
         self.assertNotIn("Traceback", p.stderr)
+
+    def test_check_without_facts_compares_the_stamp(self):
+        p = self.run_cli("--check")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("AGENTS.md | missing", p.stdout)
+        self.run_cli("--test-cmd", "pytest")
+        p = self.run_cli("--check")
+        self.assertEqual(
+            (p.returncode, p.stdout.splitlines()[0]),
+            (0, "AGENTS.md | current | rendered by sdlc %s" % am.plugin_version()),
+        )
+        agents = os.path.join(self.root, "AGENTS.md")
+        write(
+            agents,
+            read(agents).replace(
+                "rendered by sdlc %s " % am.plugin_version(), "rendered by sdlc 0.0.1 "
+            ),
+        )
+        p = self.run_cli("--check")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("AGENTS.md | stale | rendered by sdlc 0.0.1, installed", p.stdout)
+        os.remove(os.path.join(self.root, "CLAUDE.md"))
+        p = self.run_cli("--check", "--no-claude")
+        self.assertNotIn("CLAUDE.md", p.stdout)
+
+    def test_no_flags_warns_on_stderr(self):
+        p = self.run_cli()
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("no --*-cmd given", p.stderr)
+        p = self.run_cli("--test-cmd", "pytest")
+        self.assertEqual(p.stderr, "")
+
+    def test_repeated_flags_via_cli(self):
+        p = self.run_cli("--test-cmd", "web: bun test", "--test-cmd", "api: pytest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("  - `api: pytest`", read(os.path.join(self.root, "AGENTS.md")))
 
     def test_bad_root_exits_2(self):
         p = subprocess.run(

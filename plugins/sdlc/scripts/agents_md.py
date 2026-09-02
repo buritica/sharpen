@@ -34,8 +34,10 @@ unreadable file, or a refused layout. Pure stdlib.
 """
 
 import argparse
+import json
 import os
 import re
+import subprocess
 import sys
 
 # Same-directory sibling (the plugin cache is version-nested, so this is the
@@ -57,6 +59,12 @@ TEMPLATE = os.path.join(
 )
 NOT_CONFIGURED = "not configured — wire one and re-run `/sdlc:init`"
 PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+STAMP_RE = re.compile(r"<!-- rendered by sdlc (\S+) ")
+PLUGIN_MANIFEST = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".claude-plugin",
+    "plugin.json",
+)
 
 # One-line judgment per tier; the names themselves come from gate_store.TIERS.
 TIER_NOTES = {
@@ -118,9 +126,35 @@ def grumpy_on_line():
     )
 
 
+def plugin_version():
+    """This plugin's version from its manifest, or "unknown"."""
+    try:
+        with open(PLUGIN_MANIFEST, encoding="utf-8") as fh:
+            return str(json.load(fh).get("version", "unknown"))
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def stamp(version=None):
+    """First line inside the block: which sdlc rendered it. `--check` with no
+    facts compares this against the installed version, so a block that
+    predates an upgrade is detectable without re-deriving the toolchain."""
+    return (
+        "<!-- rendered by sdlc %s from templates/agents-sdlc.md; "
+        "`agents_md.py --check` reports drift -->" % (version or plugin_version())
+    )
+
+
 def _cmd(value):
-    value = (value or "").strip()
-    return "`%s`" % value if value else NOT_CONFIGURED
+    """One command → `cmd`; several (a monorepo, one per area, the area named
+    inside the value) → nested bullets; none → the honest line."""
+    values = value if isinstance(value, (list, tuple)) else [value]
+    values = [str(v).strip() for v in values if v and str(v).strip()]
+    if not values:
+        return NOT_CONFIGURED
+    if len(values) == 1:
+        return "`%s`" % values[0]
+    return "\n" + "\n".join("  - `%s`" % v for v in values)
 
 
 def fill(template, values):
@@ -155,27 +189,62 @@ def render(facts, template_path=TEMPLATE):
             "deploy_line": ("- deploy: %s\n" % deploy) if deploy else "",
         },
     )
-    return "%s\n%s\n%s" % (BEGIN, body.strip("\n"), END)
+    body = re.sub(
+        r"[ \t]+\n", "\n", body
+    )  # "- test:" + nested bullets, no trailing space
+    return "%s\n%s\n%s\n%s" % (BEGIN, stamp(), body.strip("\n"), END)
+
+
+def marker_span(lines):
+    """(begin index, end index) of the managed block in `lines`, or None. A
+    marker counts only as a whole line — a sentence that *mentions*
+    `<!-- sdlc:begin -->` (this plugin's own README does) is prose, not a
+    marker, and splicing the block into it would never converge."""
+    begin = end = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == BEGIN and begin is None:
+            begin = i
+        elif stripped == END and begin is not None and end is None:
+            end = i
+        elif stripped == END and begin is None:
+            raise WireError("%s appears before %s" % (END, BEGIN))
+    if begin is None and end is None:
+        return None
+    if end is None:
+        raise WireError("found %s but no %s after it" % (BEGIN, END))
+    return begin, end
 
 
 def upsert_block(text, block):
     """Replace the marked block in `text`, or append it. Bytes outside the
-    markers are untouched. One marker without the other is an error — a
+    marker lines are untouched. One marker without the other is an error — a
     half-marked file would otherwise get a second block."""
-    has_begin, has_end = BEGIN in text, END in text
-    if has_begin != has_end:
-        raise WireError("found one of %s / %s but not the other" % (BEGIN, END))
-    if has_begin:
-        start = text.index(BEGIN)
-        end_at = text.find(END, start)
-        if end_at < 0:
-            raise WireError("%s appears before %s" % (END, BEGIN))
-        return text[:start] + block + text[end_at + len(END) :]
+    lines = text.splitlines(keepends=True)
+    span = marker_span(lines)
+    if span:
+        begin, end = span
+        return "".join(lines[:begin]) + block + "\n" + "".join(lines[end + 1 :])
     if not text:
         return block + "\n"
     if not text.endswith("\n"):
         text += "\n"
     return text + "\n" + block + "\n"
+
+
+def block_version(text):
+    """Version stamped inside the managed block, "" for an unstamped block,
+    None when there is no block."""
+    lines = text.splitlines()
+    span = marker_span(lines)
+    if not span:
+        return None
+    begin, end = span
+    for line in lines[begin + 1 : end]:
+        match = STAMP_RE.search(line)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def remove_old_section(text):
@@ -213,11 +282,11 @@ def leftover_gate_mentions(text):
     auto-removed."""
     found, in_block = [], False
     for i, line in enumerate(text.splitlines(), 1):
-        if BEGIN in line:
+        if line.strip() == BEGIN:
             in_block = True
         if not in_block and "/sdlc:gate" in line:
             found.append(i)
-        if END in line:
+        if line.strip() == END:
             in_block = False
     return found
 
@@ -245,22 +314,58 @@ def _read(path):
 
 
 def _write(path, text, crlf):
-    """Temp-then-rename, so a crash mid-write cannot leave a truncated file."""
+    """Temp-then-rename, so a crash mid-write cannot leave a truncated file.
+    The temp name carries the pid (two sessions running init at once must
+    not share an inode) and is removed if the rename fails. A read-only
+    target is refused rather than replaced around — rename only needs
+    directory permission, and someone set that mode on purpose."""
+    if os.path.exists(path) and not os.access(path, os.W_OK):
+        raise WireError("%s is read-only; make it writable and re-run" % path)
     if crlf:
         text = text.replace("\n", "\r\n")
-    tmp = path + ".sdlc-tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    tmp = "%s.%d.sdlc-tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def repo_name(root):
+    """Heading for a fresh AGENTS.md: the main checkout's directory name,
+    not a linked worktree's (`/sdlc:plan` leaves the agent inside one)."""
+    try:
+        common = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        common = None
+    if common is not None and common.returncode == 0 and common.stdout.strip():
+        git_dir = os.path.abspath(os.path.join(root, common.stdout.strip()))
+        return os.path.basename(os.path.dirname(git_dir))
+    return os.path.basename(os.path.abspath(root))
 
 
 def plan_agents(root, block):
+    """Returns (path, current, new, notes, crlf). An old reminder that a
+    previous init (or a human) moved into AGENTS.md is removed here too —
+    the block carries it — with a note."""
     path = os.path.join(root, "AGENTS.md")
     current, crlf = _read(path)
+    notes = []
     if current is None:
-        heading = "# %s\n\n" % os.path.basename(os.path.abspath(root))
-        return path, None, heading + block + "\n", [], crlf
-    return path, current, upsert_block(current, block), [], crlf
+        heading = "# %s\n\n" % repo_name(root)
+        return path, None, heading + block + "\n", notes, crlf
+    new, removed = remove_old_section(current)
+    if removed:
+        notes.append(
+            "removed the old '%s' section (the block carries it)" % OLD_HEADING[3:]
+        )
+    return path, current, upsert_block(new, block), notes, crlf
 
 
 def plan_claude(root):
@@ -287,15 +392,65 @@ def plan_claude(root):
     return path, current, new, notes, crlf
 
 
-def wire(root, facts, check=False):
+def stamp_check(root, claude=True):
+    """`--check` with no facts: is the block current for the installed sdlc?
+    Returns (results, drift) without re-deriving the toolchain."""
+    if not os.path.isdir(root):
+        raise WireError("not a directory: %s" % root)
+    results, drift = [], False
+    text, _ = _read(os.path.join(root, "AGENTS.md"))
+    installed = plugin_version()
+    if text is None:
+        results.append(("AGENTS.md", "missing", "no managed block (would change)"))
+        drift = True
+    else:
+        found = block_version(text)
+        if found is None:
+            results.append(("AGENTS.md", "no managed block", "(would change)"))
+            drift = True
+        elif found != installed:
+            results.append(
+                (
+                    "AGENTS.md",
+                    "stale",
+                    "rendered by sdlc %s, installed %s — re-run /sdlc:init (would change)"
+                    % (found or "an unstamped version", installed),
+                )
+            )
+            drift = True
+        else:
+            results.append(("AGENTS.md", "current", "rendered by sdlc %s" % installed))
+    if claude:
+        ctext, _ = _read(os.path.join(root, "CLAUDE.md"))
+        if ctext is not None and any(
+            line.strip() == INCLUDE for line in ctext.splitlines()
+        ):
+            results.append(("CLAUDE.md", "unchanged", ""))
+        else:
+            results.append(
+                (
+                    "CLAUDE.md",
+                    "missing" if ctext is None else "no include",
+                    "(would change)",
+                )
+            )
+            drift = True
+    return results, drift
+
+
+def wire(root, facts, check=False, claude=True):
     """Apply (or, with check=True, only compute) the AGENTS.md/CLAUDE.md
     changes. Returns [(relative path, action, note)] where action is one of
     created / updated / unchanged. Both plans are computed before either
-    file is written; if the second write fails, the error names the first."""
+    file is written; if the second write fails, the error names the first.
+    `claude=False` manages AGENTS.md only (a repo with no Claude Code users
+    has no CLAUDE.md to include from)."""
     if not os.path.isdir(root):
         raise WireError("not a directory: %s" % root)
     block = render(facts)
-    plans = [plan_agents(root, block), plan_claude(root)]
+    plans = [plan_agents(root, block)]
+    if claude:
+        plans.append(plan_claude(root))
     results, written = [], []
     for path, cur, new, notes, crlf in plans:
         if cur is None:
@@ -324,21 +479,56 @@ def main(argv=None):
         description="Upsert the SDLC contract into AGENTS.md and include it from CLAUDE.md.",
     )
     parser.add_argument("--root", default=".", help="repo root (default: cwd)")
-    parser.add_argument("--test-cmd")
-    parser.add_argument("--lint-cmd")
-    parser.add_argument("--format-cmd")
-    parser.add_argument("--typecheck-cmd")
+    for flag in ("--test-cmd", "--lint-cmd", "--format-cmd", "--typecheck-cmd"):
+        parser.add_argument(
+            flag,
+            action="append",
+            help="repeat once per area in a monorepo, naming the area inside the value",
+        )
     parser.add_argument("--default-branch", default="main")
     parser.add_argument(
         "--grumpy", action="store_true", help="grumpy plugin is installed"
     )
     parser.add_argument("--deploy", help="one line on how the repo deploys, if it does")
     parser.add_argument(
+        "--no-claude",
+        dest="claude",
+        action="store_false",
+        help="manage AGENTS.md only; do not create or edit CLAUDE.md",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
-        help="report what would change without writing; exit 1 if anything would",
+        help="report what would change without writing; exit 1 if anything would. "
+        "With no other flags, only checks that the block was rendered by the "
+        "installed sdlc version (no toolchain needed).",
     )
     args = parser.parse_args(argv)
+    no_facts = not any(
+        (
+            args.test_cmd,
+            args.lint_cmd,
+            args.format_cmd,
+            args.typecheck_cmd,
+            args.deploy,
+            args.grumpy,
+        )
+    )
+    if args.check and no_facts:
+        try:
+            results, drift = stamp_check(args.root, claude=args.claude)
+        except (WireError, OSError) as exc:
+            print("agents_md: %s" % exc, file=sys.stderr)
+            return 2
+        for path, action, note in results:
+            print("%s | %s%s" % (path, action, (" | " + note) if note else ""))
+        return 1 if drift else 0
+    if no_facts:
+        print(
+            "agents_md: no --*-cmd given; the block will say 'not configured' for every "
+            "command — pass the commands CI runs",
+            file=sys.stderr,
+        )
     facts = {
         "test_cmd": args.test_cmd,
         "lint_cmd": args.lint_cmd,
@@ -349,7 +539,7 @@ def main(argv=None):
         "deploy": args.deploy,
     }
     try:
-        results = wire(args.root, facts, check=args.check)
+        results = wire(args.root, facts, check=args.check, claude=args.claude)
     except (WireError, OSError) as exc:
         print("agents_md: %s" % exc, file=sys.stderr)
         return 2

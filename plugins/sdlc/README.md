@@ -145,9 +145,13 @@ read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same
 contract Claude Code gets through the include. The block is inline in
 `AGENTS.md` rather than a separate included file on purpose: those hosts do
 not resolve `@` includes, so an include there would be inert text for exactly
-the readers `AGENTS.md` exists to serve. `scripts/agents_md.py --check`
-reports drift without writing (exit 1), and the template lives at
-`templates/agents-sdlc.md`. Repos that already carried the older
+the readers `AGENTS.md` exists to serve. The first line inside the block stamps
+the sdlc version that rendered it; `scripts/agents_md.py --check` with no
+other flags compares that stamp against the installed plugin (exit 1 when
+stale — `/sdlc:gate` runs this once per cycle and mentions it), and with the
+command flags it reports full drift without writing. Command flags repeat
+once per area in a monorepo; `--no-claude` manages AGENTS.md only. The
+template lives at `templates/agents-sdlc.md`. Repos that already carried the older
 `## Run gates before every PR` reminder in `CLAUDE.md` (a heading, a fenced
 `/sdlc:gate`, and two sentences) have it migrated on the next init run; a
 symlinked `CLAUDE.md` or `AGENTS.md` is refused rather than written through.

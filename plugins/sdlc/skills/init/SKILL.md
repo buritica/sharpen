@@ -346,7 +346,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/agents_md.py" --root . \
 
 Pass every command exactly as CI runs it (step 4), and omit a flag rather
 than inventing a command — the block renders "not configured" for it, which
-is honest. The script prints one `path | action` line per file:
+is honest (the script warns on stderr when no command flag was given at
+all). In a monorepo, repeat a command flag once per area and name the area
+inside the value (`--test-cmd "web: bun test" --test-cmd "api: pytest"`);
+the block renders them as nested bullets. Pass `--no-claude` for a repo
+with no Claude Code users — AGENTS.md is managed, CLAUDE.md is not created.
+Nested `CLAUDE.md` files (a `runtime/CLAUDE.md`) are never touched; if the
+repo has any, say so and suggest their rules move to AGENTS.md too.
+
+The script prints one `path | action` line per file:
 
 - `AGENTS.md` — created (with a `# <repo>` heading) or updated in place;
   content outside the markers is preserved byte for byte.
@@ -358,9 +366,19 @@ is honest. The script prints one `path | action` line per file:
   belong in AGENTS.md so every host sees them.
 
 `--check` reports what would change without writing and exits 1 on drift —
-run it by hand, or from CI, when the toolchain changes. If the script is missing (`${CLAUDE_PLUGIN_ROOT}`
-unset on this host), say so and stop here rather than writing the block by
-hand — a hand-written block drifts from the template on the next run.
+run it by hand, or from CI, when the toolchain changes. `--check` with no
+other flags only compares the version stamped inside the block against the
+installed sdlc, which is how `/sdlc:gate` notices a block that predates an
+upgrade without re-deriving the toolchain.
+
+If `${CLAUDE_PLUGIN_ROOT}` is unset on this host (Codex, Gemini, Cursor
+reading this as a SKILL.md), the script still exists on disk — it is at
+`<sdlc plugin root>/scripts/agents_md.py`, two directories above this
+SKILL.md. When the plugin was installed through Claude Code's marketplace,
+`ls -d ~/.claude/plugins/cache/*/sdlc/*/scripts/agents_md.py | sort -V | tail -1`
+finds the newest copy. If you genuinely cannot locate it, say so and stop
+here rather than writing the block by hand — a hand-written block drifts
+from the template on the next run.
 
 ## 11. Verify and report
 

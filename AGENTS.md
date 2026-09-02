@@ -105,6 +105,7 @@ Stdlib python only, so there is no runtime to install and enforcement works on a
 `python3`.
 
 <!-- sdlc:begin -->
+<!-- rendered by sdlc 4.11.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
