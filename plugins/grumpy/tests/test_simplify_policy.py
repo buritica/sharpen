@@ -593,8 +593,42 @@ class JudgeAllTests(unittest.TestCase):
         self.assertEqual(r["summary"]["blocking"], 1)
         self.assertEqual(len(r["summary"]["debt"]), 1)
 
-    def test_empty_is_compliant(self):
-        self.assertEqual(sp.judge_all([], cfg())["summary"]["verdict"], "compliant")
+    def test_empty_is_unmeasured_not_compliant(self):
+        r = sp.judge_all([], cfg())
+        self.assertEqual(r["summary"]["verdict"], "unmeasured")
+        self.assertEqual(r["summary"]["confidence"], {"measured": 0, "estimated": 0, "unmeasured": 0})
+
+    def test_summary_carries_provenance(self):
+        c = cfg()
+        c["_source"] = "/repo/.sharpen/simplify.json"
+        r = sp.judge_all([{"metric": "cyclomatic", "file": "a.py", "head": 3,
+                           "confidence": "measured:x"}], c, base="abc123")
+        self.assertEqual(r["summary"]["config_source"], "/repo/.sharpen/simplify.json")
+        self.assertEqual(r["summary"]["base"], "abc123")
+        self.assertEqual(r["summary"]["excluded"], [])
+        self.assertRegex(r["summary"]["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(r["summary"]["confidence"]["measured"], 1)
+        self.assertEqual(sp.judge_all([], cfg())["summary"]["config_source"], "defaults")
+
+    def test_agent_finding_on_excluded_path_is_not_judged(self):
+        r = sp.judge_all([
+            {"metric": "cyclomatic", "file": "vendor/lib.go", "symbol": "f", "base": None,
+             "head": 90, "confidence": "measured:gocyclo"},
+            {"metric": "any_unknown", "file": ".claude/scratch/x.ts", "line": 1},
+            {"metric": "cyclomatic", "file": "src/a.py", "symbol": "f", "base": None,
+             "head": 30, "confidence": "measured:radon"},
+        ], cfg())
+        self.assertEqual([f["file"] for f in r["findings"]], ["src/a.py"])
+        self.assertEqual(
+            [(e["file"], e["reason"], e["metric"]) for e in r["summary"]["excluded"]],
+            [("vendor/lib.go", "glob:vendor/**", "cyclomatic"),
+             (".claude/scratch/x.ts", "glob:.claude/**", "any_unknown")],
+        )
+        self.assertEqual(r["summary"]["verdict"], "blocked")
+
+    def test_count_metric_note_carries_line(self):
+        f = judge(metric="dead_code", file="src/a.ts", line=44)
+        self.assertTrue(f["note"].startswith("src/a.ts:44:"), f["note"])
 
     def test_error_names_finding_index(self):
         with self.assertRaises(sp.FindingError) as ctx:
@@ -659,7 +693,13 @@ class LocMeasurementTests(unittest.TestCase):
             sorted((e["file"], e["reason"]) for e in r["summary"]["excluded"]),
             [("src/gen.rs", "generated-header"), ("vendor/big.js", "glob:vendor/**")],
         )
-        self.assertEqual(r["summary"]["verdict"], "compliant")
+        self.assertEqual(r["summary"]["verdict"], "unmeasured")  # nothing in scope
+
+    def test_agent_scratch_under_dot_claude_is_not_source(self):
+        self.repo.write(".claude/grumpy/main/scratch.rs", lines(3000))
+        r = self.report()
+        self.assertEqual(r["findings"], [])
+        self.assertEqual(r["summary"]["excluded"][0]["reason"], "glob:.claude/**")
 
     def test_big_test_file_does_not_block(self):
         self.repo.write("tests/test_big.py", lines(1600))
@@ -796,9 +836,33 @@ class CliTests(unittest.TestCase):
         p = self.run_cli("judge", "--worktree", self.repo.dir, stdin=stdin)
         self.assertEqual(json.loads(p.stdout)["summary"]["verdict"], "compliant")
 
-    def test_judge_empty_stdin_is_compliant(self):
+    def test_judge_empty_stdin_is_unmeasured(self):
         p = self.run_cli("judge", "--worktree", self.repo.dir, stdin="")
-        self.assertEqual(json.loads(p.stdout)["summary"]["verdict"], "compliant")
+        self.assertEqual(json.loads(p.stdout)["summary"]["verdict"], "unmeasured")
+
+    def test_judge_loc_folds_in_loc_report(self):
+        self.repo.write("src/main.rs", lines(8243))
+        self.repo.write("vendor/big.js", lines(2000))
+        # Outside the repo: an untracked loc.json inside it would itself be
+        # measured as a new file.
+        loc_path = os.path.join(tempfile.mkdtemp(), "loc.json")
+        with open(loc_path, "w") as fh:
+            fh.write(self.run_cli("loc", "--worktree", self.repo.dir, "--base", self.base).stdout)
+        stdin = json.dumps({"metric": "cyclomatic", "file": "src/main.rs", "symbol": "f",
+                            "base": 40, "head": 41, "confidence": "measured:x"})
+        p = self.run_cli("judge", "--worktree", self.repo.dir, "--loc", loc_path, stdin=stdin)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        d = json.loads(p.stdout)
+        self.assertEqual(sorted((f["metric"], f["status"]) for f in d["findings"]),
+                         [("cyclomatic", "held"), ("loc_per_file", "improved")])
+        self.assertEqual(d["summary"]["base"], self.base)
+        self.assertEqual(d["summary"]["excluded"], [{"file": "vendor/big.js", "reason": "glob:vendor/**"}])
+        self.assertEqual(d["summary"]["verdict"], "passes-with-debt")
+
+    def test_judge_loc_bad_file_exits_2(self):
+        p = self.run_cli("judge", "--worktree", self.repo.dir, "--loc", "/nonexistent.json", stdin="")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("--loc", p.stderr)
 
     def test_judge_bad_metric_exits_2_with_line(self):
         stdin = json.dumps({"metric": "cyclomatic", "file": "a", "head": 1}) + "\n" + \

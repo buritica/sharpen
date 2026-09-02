@@ -28,12 +28,16 @@ metrics, debt records). Absent file means the defaults below.
 
 Usage:
   simplify_policy.py loc    --worktree W --base <merge-base-sha> [--config P]
-  simplify_policy.py judge  --worktree W [--config P]   < findings.jsonl
+  simplify_policy.py judge  --worktree W [--config P] [--loc simplify-loc.json] < agent-findings.jsonl
   simplify_policy.py config --worktree W [--config P]
 
 `loc` and `judge` print `{"findings": [...], "summary": {...}}` and exit 0
 even when the verdict is "blocked" — exit 2 is reserved for malformed input
-or config. Pure stdlib.
+or config. `judge --loc` folds a `loc` report's findings and provenance
+(merge base, excluded paths) into the judged output, so the final artifact
+is self-describing. The summary always records the config source, the
+script's plugin version, and per-confidence counts; zero findings is
+verdict "unmeasured", never "compliant". Pure stdlib.
 """
 
 import argparse
@@ -119,6 +123,11 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_EXCLUDE = [
+    # Agent artifacts and scratch. `.claude/**` is where this command and its
+    # siblings write reports and where sub-agents tend to drop scratch files;
+    # a scratch file is not a new source file.
+    ".claude/**",
+    ".sharpen/data/**",
     "vendor/**",
     "node_modules/**",
     "third_party/**",
@@ -538,7 +547,11 @@ def judge_finding(finding, config):
     confidence = finding.get("confidence") or ("estimated" if mkind == "count" else "unmeasured")
     out["confidence"] = confidence
     conf_kind = _confidence_kind(confidence)
-    where = path + (":%s" % finding["symbol"] if finding.get("symbol") else "")
+    where = path
+    if finding.get("symbol"):
+        where += ":%s" % finding["symbol"]
+    elif finding.get("line") is not None:
+        where += ":%s" % finding["line"]
     head = None
     threshold = None
 
@@ -623,19 +636,48 @@ def _debt_line(f):
     return "%s %s %s %s" % (where, f["metric"], change, f["status"])
 
 
-def judge_all(findings, config):
+def plugin_version():
+    """Version from the plugin manifest two levels up, or "unknown"."""
+    manifest = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".claude-plugin", "plugin.json",
+    )
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            return str(json.load(fh).get("version", "unknown"))
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def judge_all(findings, config, excluded=None, base=None):
+    """Judge every finding and summarize. Findings on excluded paths (agent
+    lines about vendored or generated code) are dropped into
+    `summary.excluded` instead of judged — the README's promise that those
+    paths never block has to hold for agent findings too, not just LOC.
+    Zero judged findings is verdict "unmeasured": a gate that certifies
+    "compliant" on no input is a gate that lies when every agent fails."""
     judged = []
+    excluded = list(excluded or [])
     for i, finding in enumerate(findings, 1):
         try:
+            path = finding.get("file") if isinstance(finding, dict) else None
+            reason = excluded_reason(path, config) if isinstance(path, str) and path else None
+            if reason:
+                excluded.append({"file": path, "reason": reason, "metric": finding.get("metric")})
+                continue
             judged.append(judge_finding(finding, config))
         except FindingError as exc:
             raise FindingError("finding %d: %s" % (i, exc))
     counts = {s: 0 for s in STATUSES}
+    confidence = {c: 0 for c in CONFIDENCES}
     for f in judged:
         counts[f["status"]] += 1
+        confidence[_confidence_kind(f["confidence"])] += 1
     blocking = sum(1 for f in judged if f["blocking"])
     debt = [_debt_line(f) for f in judged if f["status"] in ("held", "improved", "excepted")]
-    if blocking:
+    if not judged:
+        verdict = "unmeasured"
+    elif blocking:
         verdict = "blocked"
     elif debt:
         verdict = "passes-with-debt"
@@ -645,9 +687,14 @@ def judge_all(findings, config):
         "findings": judged,
         "summary": {
             "counts": counts,
+            "confidence": confidence,
             "blocking": blocking,
             "debt": debt,
             "verdict": verdict,
+            "excluded": excluded,
+            "base": base,
+            "config_source": config.get("_source") or "defaults",
+            "version": plugin_version(),
         },
     }
 
@@ -785,10 +832,20 @@ def measure_loc(worktree, base_sha, config):
 
 def loc_report(worktree, base_sha, config):
     findings, excluded = measure_loc(worktree, base_sha, config)
-    report = judge_all(findings, config)
-    report["summary"]["excluded"] = excluded
-    report["summary"]["base"] = base_sha
-    return report
+    return judge_all(findings, config, excluded=excluded, base=base_sha)
+
+
+def read_loc_report(path):
+    """A prior `loc` output, for `judge --loc`: (findings, excluded, base)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise FindingError("cannot read --loc report %s: %s" % (path, exc))
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        raise FindingError("--loc report %s is not a loc output" % path)
+    summary = data.get("summary") or {}
+    return data["findings"], summary.get("excluded") or [], summary.get("base")
 
 
 # --------------------------------------------------------------------------
@@ -840,6 +897,11 @@ def main(argv=None):
         p.add_argument("--config", dest="config_path", default=None)
         if name == "loc":
             p.add_argument("--base", required=True, help="merge-base commit to compare against")
+        if name == "judge":
+            p.add_argument(
+                "--loc", dest="loc_path", default=None,
+                help="a `loc` output to fold in (its findings, excluded paths and base)",
+            )
     args = parser.parse_args(argv)
 
     try:
@@ -850,7 +912,12 @@ def main(argv=None):
         elif args.cmd == "loc":
             out = loc_report(args.worktree, args.base, config)
         else:
-            out = judge_all(_read_findings(sys.stdin), config)
+            findings = _read_findings(sys.stdin)
+            excluded, base = [], None
+            if args.loc_path:
+                loc_findings, excluded, base = read_loc_report(args.loc_path)
+                findings = loc_findings + findings
+            out = judge_all(findings, config, excluded=excluded, base=base)
     except (ConfigError, FindingError, RuntimeError, OSError) as exc:
         # OSError covers a missing `git` binary (FileNotFoundError) and
         # unreadable paths — an exit-2 message, never a traceback.

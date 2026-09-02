@@ -242,14 +242,25 @@ else
   MB=$(git -C "$WT" rev-parse HEAD~1)
 fi
 POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
+# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
+# <grumpy plugin root>/scripts/simplify_policy.py — if you know where this
+# skill was loaded from, point POLICY there; if you can't, say so below.
+[ -f "$POLICY" ] || { echo "simplify_policy.py not found at '$POLICY'"; }
 python3 "$POLICY" config --worktree "$WT"
-python3 "$POLICY" loc --worktree "$WT" --base "$MB" > "$ARTIFACT_DIR/simplify-loc.json"
+# Write through a temp file: a failed run must not erase the last good one.
+python3 "$POLICY" loc --worktree "$WT" --base "$MB" > "$ARTIFACT_DIR/simplify-loc.json.tmp" \
+  && mv "$ARTIFACT_DIR/simplify-loc.json.tmp" "$ARTIFACT_DIR/simplify-loc.json"
 ```
 
 State in one line which config applied (`source: defaults` or the file path)
-and any non-default keys. If the script is missing, or exits 2, say exactly
-that in the report and mark Lines of Code / File **unmeasured** — do **not**
-count lines by hand and label it measured. The script is the measurement.
+and any non-default keys. If the script is missing, or exits 2 (the reason is
+on stderr: a malformed `.sharpen/simplify.json`, a bad merge base, no `git`),
+say exactly that in the report and mark Lines of Code / File **unmeasured** —
+do **not** count lines by hand and label it measured. The script is the
+measurement. Without the script there is also no `judge` in Phase 3: you may
+still apply the status rules above by hand, but every such status is
+`estimated`, nothing blocks on it, and the verdict must say the policy
+script did not run.
 
 ## Phase 2: Launch parallel measurement agents
 
@@ -284,7 +295,7 @@ For a per-function/per-file metric:
 For a per-instance metric:
   {"metric": "<dead_code|redundant_code|any_unknown>", "file": "<path>", "line": <number>, "introduced": true|false, "removed": true|false, "confidence": "measured:<tool>" | "estimated", "note": "<one short sentence: what it is, and where the twin lives if redundant>"}
 
-- `base` is the value at the merge base [MERGE_BASE]; `null` means the function/file did not exist there. Measure the base THE SAME WAY you measured head: run the tool on `git -C [WT_PATH] show [MERGE_BASE]:<file>` written to a scratch file when the tool needs a path. If the tool cannot run on the base revision, estimate both sides the same way and report confidence as the WEAKER of the two.
+- `base` is the value at the merge base [MERGE_BASE]; `null` means the function/file did not exist there. Measure the base THE SAME WAY you measured head: run the tool on `git -C [WT_PATH] show [MERGE_BASE]:<file>` written to a scratch file when the tool needs a path. Scratch goes in your OWN temp dir OUTSIDE the worktree (`SCRATCH=$(mktemp -d)`, one per agent) — never inside [WT_PATH], where an untracked file would be measured as new source, and never a shared filename another agent could overwrite mid-read. If the tool cannot run on the base revision, estimate both sides the same way and report confidence as the WEAKER of the two.
 - Report every over-target function you touched, with base and head, EVEN IF IT DID NOT CHANGE — the policy decides held vs regressed vs improved, not you. A function comfortably under target on both sides needs no line.
 - Do not decide severity. Do not decide whether something blocks. Do not editorialize in the JSON. Those are the policy script's job and it will overrule you.
 - `introduced` is true ONLY for an occurrence this diff added. A pre-existing occurrence in a touched file is `introduced: false`. An occurrence this diff deleted is `removed: true`.
@@ -410,9 +421,21 @@ unverified claim as fact.
 
 ## Phase 3: Judge, then aggregate into a scorecard and findings
 
-Concatenate every agent's JSON lines with the `findings` array from
-`simplify-loc.json` and hand the lot to the policy script. It assigns
-`status`, `blocking`, `severity`, and a plain-English `note` to each finding
+Assemble the agents' output, then hand it to the policy script together
+with the LOC report:
+
+1. Collect every JSON line the four agents returned (drop nothing yet — a
+   malformed line is the script's to reject, by number).
+2. Write them, and only them, to `$ARTIFACT_DIR/simplify-agents.jsonl` with
+   your Write tool — a **fresh** file every run, never appended, so a
+   previous run's lines can't leak into this verdict. Zero lines is a valid
+   file; write it anyway.
+3. Run `judge --loc` below. `--loc` folds `simplify-loc.json`'s findings,
+   excluded paths and merge base into the output — you do not splice them
+   by hand.
+
+The script assigns `status`, `blocking`, `severity`, and a plain-English
+`note` to each finding
 a `blocking_reason` on every suppressed `new`/`regressed` finding (why it
 didn't block — advisory, test file, estimated, below tier, documented debt),
 and a `summary.verdict` of `compliant`, `passes-with-debt`, or `blocked`:
@@ -423,14 +446,24 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
-# all.jsonl = every agent line + one line per object in simplify-loc.json's "findings"
-python3 "$POLICY" judge --worktree "$WT" < "$ARTIFACT_DIR/all.jsonl" > "$ARTIFACT_DIR/simplify-findings.json"
+python3 "$POLICY" judge --worktree "$WT" --loc "$ARTIFACT_DIR/simplify-loc.json" \
+  < "$ARTIFACT_DIR/simplify-agents.jsonl" > "$ARTIFACT_DIR/simplify-findings.json.tmp" \
+  && mv "$ARTIFACT_DIR/simplify-findings.json.tmp" "$ARTIFACT_DIR/simplify-findings.json"
 ```
 
-Exit 2 means a malformed finding; the message names the offending finding
-number — fix the line (or drop it and say which agent produced it) and
-re-run. Render everything below from `simplify-findings.json`. You add the
-voice; you do not change a status.
+Exit 2 prints the reason on stderr. For a malformed agent line it names the
+finding number (counting `--loc` findings first, then your file's lines) —
+fix or drop that line, say which agent produced it, and re-run. For anything
+else (bad config, unreadable `--loc` file, missing script) there is no
+finding number; report the stderr text and mark the affected metrics ⚪.
+
+Render everything below from `simplify-findings.json`. Its `summary` carries
+`verdict`, `base`, `config_source`, `version`, `excluded` (with the reason
+per path, including agent findings the script refused to judge because the
+path is excluded), and `confidence` counts. A `summary.verdict` of
+`unmeasured` means the script judged **nothing** — no LOC findings and no
+agent lines. That is not a pass: say which clusters produced nothing and
+why, and mark every row ⚪. You add the voice; you do not change a status.
 
 Scorecard: one row per metric. **Target** is the finding's own `threshold`
 (and `tolerance`, and for LOC its tier ladder) as the script resolved it —
@@ -452,7 +485,7 @@ verdict.
 
 _[One grumpy sentence on the overall state of the numbers]_
 
-Policy: [source: defaults | .sharpen/simplify.json] · merge base [short sha]
+Policy: [summary.config_source] · merge base [summary.base, short] · simplify_policy [summary.version] · [measured/estimated/unmeasured counts from summary.confidence]
 
 ## Scorecard
 
@@ -581,11 +614,15 @@ the author wants a debt record instead, tell them where it goes
 (`.sharpen/simplify.json`, `debt[]`, with a reason) — and that it renders as
 `excepted`, not as clean.
 
-After fixing, re-run `loc` and `judge` (cheap) and re-render the affected
-rows; for metrics a tool measures, re-run the tool on the touched file; where
-no tool exists, verify by reading the changed section back and confirming
-the finding no longer applies. The gate passes when `summary.verdict` is no
-longer `blocked`.
+After fixing, re-measure before you re-judge — `judge` only knows what you
+feed it, and the agent lines in `simplify-agents.jsonl` still carry the
+pre-fix numbers. For every finding you fixed: re-run the tool on the touched
+file where one exists, otherwise re-estimate it the same way the agent did,
+and replace that line in `simplify-agents.jsonl` with the new `head` (same
+confidence rules). Then re-run `loc` and `judge --loc` exactly as in Phase 1b
+and Phase 3 (temp-then-mv), and re-render the affected rows. The gate passes
+when `summary.verdict` is no longer `blocked`. Say in the report which lines
+you re-measured and how.
 
 🤔 Worth Discussing findings are not auto-fixed — list them in the summary as
 optional, the same way `/grumpy:fix`'s Optional bucket works.
@@ -660,3 +697,9 @@ optional, the same way `/grumpy:fix`'s Optional bucket works.
 - Statuses come from the script. If a status looks wrong, the fix is a
   config change or a bug report against the script — not a hand-edited
   scorecard.
+- Artifacts are keyed by branch, not by run. Write `simplify-agents.jsonl`
+  fresh every time and write the JSON outputs through a temp file; a stale
+  or half-written artifact under `.claude/grumpy/<branch>/` is how a verdict
+  about last week's diff gets read as today's.
+- A `summary.verdict` of `unmeasured` is the script refusing to certify
+  nothing. Treat it like a dropped dispatch, not like a clean run.

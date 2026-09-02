@@ -105,7 +105,10 @@ label, since different grumpy commands use different labels:
 - **Optional** — any finding marked 🤔 (Questionable Decisions / Probably Fine
   Until It Isn't)
 - **Skip** — any section with no emoji-marked findings (narrative sections,
-  verdicts, uncomfortable questions, etc.)
+  verdicts, uncomfortable questions, etc.), and `simplify.md`'s 🧾 **Legacy
+  debt** section: those are pre-existing violations the diff did not cause,
+  reported on purpose and fixed on purpose in their own PR — never
+  auto-refactored here
 
 If no prior review is found (neither on disk nor in context), respond grumpily:
 "There's no review to fix. Run a grumpy review first — any `/grumpy:*` command.

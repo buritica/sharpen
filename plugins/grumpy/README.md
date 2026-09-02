@@ -93,7 +93,7 @@ reduction is `improved`, growth within tolerance is `held`, and growth
 beyond tolerance is `regressed` — but `regressed` blocks only when the file
 is at or above the warn tier (1,000). Below that it's reported, not failed.
 
-Generated and vendor files are excluded by default: `vendor/**`,
+Generated and vendor files are excluded by default: `.claude/**`, `.sharpen/data/**`, `vendor/**`,
 `node_modules/**`, `third_party/**`, `dist/**`, `build/**`, `**/*.min.js`,
 `**/*.min.css`, `**/*.lock`, `**/*.pb.go`, `**/*_pb2.py`,
 `**/*_pb2_grpc.py`, `**/*.generated.*`, `**/__generated__/**`,
@@ -178,8 +178,17 @@ absent file means the defaults above apply unchanged.
 ```
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" config
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" loc --base <merge-base>
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" judge   # reads JSON lines on stdin
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" judge --loc simplify-loc.json   # agent JSON lines on stdin
 ```
+
+`judge --loc` folds the `loc` report (its findings, excluded paths, merge
+base) into the judged output. Every output's `summary` records `verdict`,
+`base`, `config_source`, `version` (the plugin version that judged),
+`confidence` counts (measured / estimated / unmeasured), and `excluded` —
+including agent findings on excluded paths, which are never judged. A
+`judge` with nothing to judge returns verdict `unmeasured`, not `compliant`.
+`.claude/**` and `.sharpen/data/**` are excluded by default so agent scratch
+and artifacts are never measured as source.
 
 Artifacts land next to `simplify.md`'s other output: `.claude/grumpy/<branch>/simplify-loc.json`
 and `.claude/grumpy/<branch>/simplify-findings.json`.
