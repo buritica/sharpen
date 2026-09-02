@@ -1,8 +1,22 @@
-# sdlc UPDATE — v4.10.4
+# sdlc UPDATE — v4.11.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest.
+
+## New in 4.11.0 — the contract lives in AGENTS.md
+
+Step 10 of `/sdlc:init` used to append a three-line gate reminder to `CLAUDE.md`
+and nothing else. It now renders `templates/agents-sdlc.md` with the toolchain it
+derived and upserts the result into `AGENTS.md` between `<!-- sdlc:begin -->` /
+`<!-- sdlc:end -->` markers, and makes `CLAUDE.md` include it via `@AGENTS.md`.
+
+On a repo that already has sdlc scaffolding, re-run `/sdlc:init`: the block is
+added (or replaced, if a previous 4.11 run wrote one), hand-written content in
+either file is preserved, and the old `## Run gates before every PR` section in
+`CLAUDE.md` is removed because the block carries it. If `CLAUDE.md` holds other
+repo rules, move them to `AGENTS.md` so non-Claude hosts read them too.
+`scripts/agents_md.py --root . --check` shows drift without writing.
 
 ## What a repo gets
 
