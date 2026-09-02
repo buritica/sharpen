@@ -73,7 +73,7 @@ failure becomes the one required context.
 Default order for Small-medium+ changes:
 
 1. **Test** — auto-detects runner (bun/npm/pytest/cargo/go)
-2. **Simplify** — review for dead code, over-abstraction, complexity
+2. **Simplify** — review for dead code, over-abstraction, complexity — thresholds are judged against the merge base, so pre-existing debt is reported rather than failed
 3. **Review** — correctness bugs, edge cases, security (uses grumpy if installed)
 4. **Fix** — resolve review findings
 5. **Imagine** — mental production walkthrough (uses grumpy if installed)

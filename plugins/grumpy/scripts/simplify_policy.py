@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""
+Policy engine for /grumpy:simplify — judges findings against the merge base.
+
+The command's measurement agents (and tools like radon/gocyclo/coverage) produce
+numbers. This module decides what those numbers *mean* for the diff under
+review, so two runs on the same diff reach the same verdict:
+
+  compliant  under the healthy target at head
+  improved   over at base, measurably better at head            (debt improved)
+  held       over at base, unchanged or within tolerance        (debt held)
+  regressed  over at base and worse than tolerance allows       (blocks)
+  new        over at head and not over (or absent) at base      (blocks)
+  excepted   would block, but a documented debt record covers it
+
+Only `regressed`/`new` block gate 2, and only at sufficient confidence:
+`measured:<tool>` always can; `estimated` only for metrics whose estimation is
+mechanical (by default LOC, dead code, any/unknown — `block_on_estimate` in
+config); `unmeasured` never.
+
+The one metric this module measures itself is lines-of-code-per-file, because
+it is cheap and always measurable from git. Everything else is judged from
+`base`/`head` values supplied on stdin.
+
+Configuration is an optional, committed `.sharpen/simplify.json` at the repo
+root (thresholds, tolerances, per-language overrides, exclusions, advisory
+metrics, debt records). Absent file means the defaults below.
+
+Usage:
+  simplify_policy.py loc    --worktree W --base <merge-base-sha> [--config P]
+  simplify_policy.py judge  --worktree W [--config P] [--loc simplify-loc.json] < agent-findings.jsonl
+  simplify_policy.py config --worktree W [--config P]
+
+`loc` and `judge` print `{"findings": [...], "summary": {...}}` and exit 0
+even when the verdict is "blocked" — exit 2 is reserved for malformed input
+or config. `judge --loc` folds a `loc` report's findings and provenance
+(merge base, excluded paths) into the judged output, so the final artifact
+is self-describing. The summary always records the config source, the
+script's plugin version, and per-confidence counts; zero findings is
+verdict "unmeasured", never "compliant". Pure stdlib.
+"""
+
+import argparse
+import copy
+import fnmatch
+import json
+import os
+import subprocess
+import sys
+
+METRICS = (
+    "cyclomatic",
+    "cognitive",
+    "halstead",
+    "loc_per_file",
+    "coverage",
+    "crap",
+    "mutants",
+    "dead_code",
+    "redundant_code",
+    "any_unknown",
+)
+# How each metric is judged:
+#   value  — one number per function/file, compared to a threshold (base vs head)
+#   tiered — like value, but the threshold is a [healthy, warn, strong] ladder
+#            and blocking depends on which tier head lands in
+#   count  — one finding per occurrence; the agent says whether this diff
+#            introduced or removed it, there is no number to threshold
+METRIC_KIND = {
+    "cyclomatic": "value",
+    "cognitive": "value",
+    "halstead": "value",
+    "loc_per_file": "tiered",
+    "coverage": "value",
+    "crap": "value",
+    "mutants": "value",
+    "dead_code": "count",
+    "redundant_code": "count",
+    "any_unknown": "count",
+}
+HIGHER_IS_BETTER = {"coverage"}
+# Metrics whose target is "at most T" rather than "strictly under T": a
+# perfect mutation run is 0 survivors, and 0 must read as compliant.
+INCLUSIVE_TARGET = {"mutants"}
+COUNT_METRICS = {m for m, k in METRIC_KIND.items() if k == "count"}
+STATUSES = ("compliant", "improved", "held", "regressed", "new", "excepted")
+CONFIDENCES = ("measured", "estimated", "unmeasured")
+LOC_CONFIDENCE = "measured:simplify_policy"
+
+DEFAULT_CONFIG = {
+    "thresholds": {
+        "cyclomatic": 22,
+        "cognitive": 22,
+        "halstead": 80,
+        "loc_per_file": [500, 1000, 1500],
+        "coverage": 100,
+        "crap": 25,
+        "mutants": 0,
+    },
+    "tolerance": {
+        "cyclomatic": 2,
+        "cognitive": 2,
+        "halstead": 0,
+        "loc_per_file": 10,
+        "coverage": 0,
+        "crap": 5,
+        "mutants": 0,
+    },
+    "languages": {},
+    "exclude": [],
+    # Metrics that never block, whatever the number says.
+    "advisory": ["halstead", "mutants"],
+    # Metrics whose *estimate* is mechanical enough to block on. Everything
+    # else needs a real tool before it can fail the gate.
+    "block_on_estimate": ["loc_per_file", "dead_code", "any_unknown"],
+    # Metrics that never block inside a test file (size and complexity —
+    # a long test file is a smell, not a merge blocker). A new `any` or a
+    # dead helper in a test file still blocks.
+    "test_advisory": ["loc_per_file", "cyclomatic", "cognitive", "halstead", "crap"],
+    # Extra basename globs that mark a file as a test file.
+    "test_patterns": [],
+    "debt": [],
+}
+
+DEFAULT_EXCLUDE = [
+    # Agent artifacts and scratch. `.claude/**` is where this command and its
+    # siblings write reports and where sub-agents tend to drop scratch files;
+    # a scratch file is not a new source file.
+    ".claude/**",
+    ".sharpen/data/**",
+    "vendor/**",
+    "node_modules/**",
+    "third_party/**",
+    "dist/**",
+    "build/**",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.lock",
+    "**/*.pb.go",
+    "**/*_pb2.py",
+    "**/*_pb2_grpc.py",
+    "**/*.generated.*",
+    "**/__generated__/**",
+    "**/*.g.dart",
+    "**/*.snap",
+    "**/*.map",
+]
+
+GENERATED_MARKERS = (
+    "@generated",
+    "do not edit",
+    "auto-generated",
+    "autogenerated",
+    "automatically generated",
+    "code generated by",
+)
+
+TEST_DIR_SEGMENTS = {
+    "test",
+    "tests",
+    "__tests__",
+    "spec",
+    "specs",
+    "testdata",
+    "fixtures",
+}
+TEST_NAME_PATTERNS = [
+    "test_*.py",
+    "*_test.py",
+    "*_test.go",
+    "*.test.*",
+    "*.spec.*",
+    "conftest.py",
+]
+
+# Keys whose file value replaces the default outright (vs. merging/extending).
+_REPLACE_KEYS = ("advisory", "block_on_estimate", "test_advisory", "debt")
+# List-of-metric-name keys, validated the same way.
+_METRIC_LIST_KEYS = ("advisory", "block_on_estimate", "test_advisory")
+
+
+class ConfigError(Exception):
+    """Malformed `.sharpen/simplify.json` — the CLI exits 2 with the message."""
+
+
+class FindingError(Exception):
+    """A finding on `judge` stdin is missing a key or names an unknown metric."""
+
+
+# --------------------------------------------------------------------------
+# git helpers
+# --------------------------------------------------------------------------
+
+
+def _git(worktree, *args, check=True):
+    proc = subprocess.run(
+        ["git", "-C", worktree] + list(args),
+        capture_output=True,
+        text=True,
+    )
+    if check and proc.returncode != 0:
+        raise RuntimeError("git %s failed: %s" % (" ".join(args), proc.stderr.strip()))
+    return proc
+
+
+def git_root(worktree):
+    return _git(worktree, "rev-parse", "--show-toplevel").stdout.strip()
+
+
+# --------------------------------------------------------------------------
+# config
+# --------------------------------------------------------------------------
+
+
+def config_path(worktree):
+    return os.path.join(git_root(worktree), ".sharpen", "simplify.json")
+
+
+def _check_type(name, value, expected):
+    if not isinstance(value, expected):
+        raise ConfigError(
+            "config key %r must be %s, got %s"
+            % (name, getattr(expected, "__name__", str(expected)), type(value).__name__)
+        )
+
+
+def _validate_metric_map(name, mapping, allow_list_for=()):
+    _check_type(name, mapping, dict)
+    for metric, value in mapping.items():
+        if metric not in METRICS:
+            raise ConfigError("config %s names unknown metric %r" % (name, metric))
+        if METRIC_KIND[metric] == "count":
+            raise ConfigError(
+                "config %s.%s: %s is judged per occurrence (introduced/removed) and takes "
+                "no threshold or tolerance" % (name, metric, metric)
+            )
+        if metric in allow_list_for:
+            if not (
+                isinstance(value, list)
+                and len(value) == 3
+                and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in value
+                )
+                and value[0] <= value[1] <= value[2]
+            ):
+                raise ConfigError(
+                    "config %s.%s must be a non-decreasing 3-list [healthy, warn, strong]"
+                    % (name, metric)
+                )
+        elif isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError("config %s.%s must be a number" % (name, metric))
+
+
+def _validate(raw):
+    _check_type("<root>", raw, dict)
+    known = set(DEFAULT_CONFIG)
+    for key in raw:
+        if key not in known:
+            print(
+                "simplify_policy: ignoring unknown config key %r" % key, file=sys.stderr
+            )
+    if "thresholds" in raw:
+        _validate_metric_map(
+            "thresholds", raw["thresholds"], allow_list_for=("loc_per_file",)
+        )
+    if "tolerance" in raw:
+        _validate_metric_map("tolerance", raw["tolerance"])
+    if "languages" in raw:
+        _check_type("languages", raw["languages"], dict)
+        for ext, override in raw["languages"].items():
+            _check_type("languages.%s" % ext, override, dict)
+            for sub in override:
+                if sub not in ("thresholds", "tolerance"):
+                    raise ConfigError(
+                        "config languages.%s has unknown key %r (thresholds/tolerance only)"
+                        % (ext, sub)
+                    )
+            if "thresholds" in override:
+                _validate_metric_map(
+                    "languages.%s.thresholds" % ext,
+                    override["thresholds"],
+                    allow_list_for=("loc_per_file",),
+                )
+            if "tolerance" in override:
+                _validate_metric_map(
+                    "languages.%s.tolerance" % ext, override["tolerance"]
+                )
+    for key in ("exclude", "test_patterns"):
+        if key in raw:
+            _check_type(key, raw[key], list)
+            for pat in raw[key]:
+                _check_type("%s[]" % key, pat, str)
+    for key in _METRIC_LIST_KEYS:
+        if key in raw:
+            _check_type(key, raw[key], list)
+            for metric in raw[key]:
+                if metric not in METRICS:
+                    raise ConfigError(
+                        "config %s names unknown metric %r" % (key, metric)
+                    )
+    if "debt" in raw:
+        _check_type("debt", raw["debt"], list)
+        for i, rec in enumerate(raw["debt"]):
+            _check_type("debt[%d]" % i, rec, dict)
+            if not isinstance(rec.get("path"), str):
+                raise ConfigError("config debt[%d] needs a string 'path'" % i)
+            if not isinstance(rec.get("reason"), str) or not rec["reason"].strip():
+                raise ConfigError("config debt[%d] needs a non-empty 'reason'" % i)
+            if "metric" in rec and rec["metric"] not in METRICS:
+                raise ConfigError(
+                    "config debt[%d] names unknown metric %r" % (i, rec["metric"])
+                )
+
+
+def default_config():
+    """The effective config when no file exists — what an absent
+    `.sharpen/simplify.json` means."""
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    cfg["exclude"] = list(DEFAULT_EXCLUDE)
+    cfg["_source"] = None
+    return cfg
+
+
+def load_config(worktree=".", explicit_path=None):
+    """Effective config: file merged over DEFAULT_CONFIG.
+
+    `exclude` extends the built-in default list; `advisory` and `debt`
+    replace their defaults; `thresholds`/`tolerance`/`languages` merge per key.
+    """
+    path = explicit_path or config_path(worktree)
+    cfg = default_config()
+    if not os.path.exists(path):
+        if explicit_path:
+            raise ConfigError("config file not found: %s" % path)
+        return cfg
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ConfigError("cannot read config %s: %s" % (path, exc))
+    _validate(raw)
+    for key in ("thresholds", "tolerance"):
+        if key in raw:
+            cfg[key].update(raw[key])
+    if "languages" in raw:
+        cfg["languages"].update(copy.deepcopy(raw["languages"]))
+    if "exclude" in raw:
+        cfg["exclude"] = list(DEFAULT_EXCLUDE) + [
+            p for p in raw["exclude"] if p not in DEFAULT_EXCLUDE
+        ]
+    if "test_patterns" in raw:
+        cfg["test_patterns"] = [
+            p for p in raw["test_patterns"] if p not in TEST_NAME_PATTERNS
+        ]
+    for key in _REPLACE_KEYS:
+        if key in raw:
+            cfg[key] = copy.deepcopy(raw[key])
+    cfg["_source"] = path
+    return cfg
+
+
+def _ext(path):
+    base = os.path.basename(path)
+    _, ext = os.path.splitext(base)
+    return ext[1:].lower() if ext else ""
+
+
+def effective(config, metric, path):
+    """(threshold, tolerance) for `metric` on `path`, honoring language overrides."""
+    threshold = config["thresholds"].get(metric)
+    tolerance = config["tolerance"].get(metric, 0)
+    override = config.get("languages", {}).get(_ext(path), {})
+    if metric in override.get("thresholds", {}):
+        threshold = override["thresholds"][metric]
+    if metric in override.get("tolerance", {}):
+        tolerance = override["tolerance"][metric]
+    return threshold, tolerance
+
+
+# --------------------------------------------------------------------------
+# file classification
+# --------------------------------------------------------------------------
+
+
+def _glob_hit(path, pattern):
+    """fnmatch that also lets a rooted pattern like `vendor/**` match
+    `a/b/vendor/x`, and `**/x` match a bare `x`."""
+    norm = path.replace(os.sep, "/")
+    candidates = [norm]
+    parts = norm.split("/")
+    for i in range(1, len(parts)):
+        candidates.append("/".join(parts[i:]))
+    pats = [pattern]
+    if pattern.startswith("**/"):
+        pats.append(pattern[3:])
+    for cand in candidates:
+        for pat in pats:
+            if fnmatch.fnmatchcase(cand, pat):
+                return True
+    return False
+
+
+def excluded_reason(path, config, head_text=None):
+    """Why `path` is out of scope: `glob:<pattern>`, `generated-header`, or
+    None. A `!pattern` entry un-excludes: it wins over every positive
+    pattern, so a real `apps/foo/build/` can be pulled back into scope."""
+    patterns = config["exclude"]
+    if any(_glob_hit(path, p[1:]) for p in patterns if p.startswith("!")):
+        return None
+    for pattern in patterns:
+        if not pattern.startswith("!") and _glob_hit(path, pattern):
+            return "glob:%s" % pattern
+    if head_text:
+        head = "\n".join(head_text.splitlines()[:5]).lower()
+        for marker in GENERATED_MARKERS:
+            if marker in head:
+                return "generated-header"
+    return None
+
+
+def is_excluded(path, config, head_text=None):
+    return excluded_reason(path, config, head_text) is not None
+
+
+def file_kind(path, config=None):
+    norm = path.replace(os.sep, "/")
+    parts = norm.split("/")
+    if any(seg in TEST_DIR_SEGMENTS for seg in parts[:-1]):
+        return "test"
+    name = parts[-1]
+    patterns = TEST_NAME_PATTERNS + list((config or {}).get("test_patterns", []))
+    if any(fnmatch.fnmatchcase(name, pat) for pat in patterns):
+        return "test"
+    return "production"
+
+
+def debt_record(config, path, metric):
+    """First debt record whose `path` glob matches the repo-relative path
+    exactly (no suffix matching — an exception covers what was written, not
+    every same-named file in the tree) and whose `metric` is absent or equal."""
+    norm = path.replace(os.sep, "/")
+    for rec in config.get("debt", []):
+        if fnmatch.fnmatchcase(norm, rec["path"]) and rec.get("metric") in (
+            None,
+            metric,
+        ):
+            return rec
+    return None
+
+
+# --------------------------------------------------------------------------
+# judgment
+# --------------------------------------------------------------------------
+
+
+def _confidence_kind(confidence):
+    kind = (confidence or "unmeasured").split(":", 1)[0]
+    if kind not in CONFIDENCES:
+        raise FindingError("unknown confidence %r" % confidence)
+    return kind
+
+
+def _num(finding, key, required):
+    value = finding.get(key)
+    if value is None:
+        if required:
+            raise FindingError("finding is missing %r" % key)
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FindingError("finding key %r must be a number, got %r" % (key, value))
+    return value
+
+
+def _judge_value(metric, base, head, threshold, tolerance):
+    """Status ladder for a numeric metric. Everything is normalized to
+    "bigger is worse" via `sign`, so coverage (higher is better) runs
+    through the same five rungs as complexity without a mirrored branch."""
+    sign = -1 if metric in HIGHER_IS_BETTER else 1
+    # For lower-is-better, `>= threshold` is over; for coverage, `< target`
+    # is over. Both are "worse-or-equal than the bar", except coverage's bar
+    # is inclusive of the target itself.
+    if metric in INCLUSIVE_TARGET:
+        over = lambda v: v > threshold  # noqa: E731
+    elif sign == 1:
+        over = lambda v: v >= threshold  # noqa: E731
+    else:
+        over = lambda v: v < threshold  # noqa: E731
+    if not over(head):
+        return "compliant"
+    if base is None or not over(base):
+        return "new"
+    worse_by = sign * (head - base)
+    if worse_by < 0:
+        return "improved"
+    if worse_by <= tolerance:
+        return "held"
+    return "regressed"
+
+
+def _loc_tier(head, tiers):
+    healthy, warn, strong = tiers
+    if head >= strong:
+        return "hard"
+    if head >= warn:
+        return "strong-warn"
+    if head >= healthy:
+        return "warn"
+    return "healthy"
+
+
+def _suppressions(metric, status, head, threshold, kind, conf_kind, config):
+    """Every reason a `new`/`regressed` finding does not block, in one place.
+    Returns a list of short reason strings; empty means it blocks."""
+    reasons = []
+    if metric in config.get("advisory", []):
+        reasons.append("advisory metric")
+    if kind == "test" and metric in config.get("test_advisory", []):
+        reasons.append("test file")
+    if conf_kind == "unmeasured":
+        reasons.append("unmeasured")
+    elif conf_kind == "estimated" and metric not in config.get("block_on_estimate", []):
+        reasons.append("estimated, not measured")
+    if METRIC_KIND[metric] == "tiered":
+        _healthy, warn, strong = threshold
+        if status == "new" and head < strong:
+            reasons.append("below the hard-block tier for a new file")
+        elif status == "regressed" and head < warn:
+            reasons.append("below the warn tier; growth needs a stated reason")
+    return reasons
+
+
+def _fmt(v):
+    if v is None:
+        return "new"
+    if isinstance(v, float) and not v.is_integer():
+        return "%.1f" % v
+    return "%d" % v
+
+
+def judge_finding(finding, config):
+    """Return a copy of `finding` with `kind`, `confidence`, `status`,
+    `blocking`, `blocking_reason`, `severity`, `note`, `debt` filled in, plus
+    `threshold`/`tolerance` (and `tier` for LOC) for numeric metrics. A
+    finding with `applicable: false` (a metric that has no meaning in this
+    language) is `compliant`, not debt. Raises FindingError on bad input."""
+    if not isinstance(finding, dict):
+        raise FindingError("finding must be an object")
+    metric = finding.get("metric")
+    if metric not in METRICS:
+        raise FindingError(
+            "unknown metric %r (expected one of %s)" % (metric, ", ".join(METRICS))
+        )
+    path = finding.get("file")
+    if not isinstance(path, str) or not path:
+        raise FindingError("finding is missing 'file'")
+    out = dict(finding)
+    mkind = METRIC_KIND[metric]
+    kind = finding.get("kind") or file_kind(path, config)
+    out["kind"] = kind
+    confidence = finding.get("confidence") or (
+        "estimated" if mkind == "count" else "unmeasured"
+    )
+    out["confidence"] = confidence
+    conf_kind = _confidence_kind(confidence)
+    where = path
+    if finding.get("symbol"):
+        where += ":%s" % finding["symbol"]
+    elif finding.get("line") is not None:
+        where += ":%s" % finding["line"]
+    head = None
+    threshold = None
+
+    if finding.get("applicable", True) is False:
+        status = "compliant"
+        note = "%s: %s not applicable%s" % (
+            where,
+            metric.replace("_", " "),
+            " (%s)" % finding["note"] if finding.get("note") else "",
+        )
+    elif mkind == "count":
+        label = metric.replace("_", " ")
+        if finding.get("removed"):
+            status = "improved"
+            note = "%s: pre-existing %s removed by this diff" % (where, label)
+        elif finding.get("introduced", True):
+            status = "new"
+            note = "%s: %s introduced by this diff" % (where, label)
+        else:
+            status = "held"
+            note = "%s: pre-existing %s, not introduced here" % (where, label)
+    else:
+        threshold, tolerance = effective(config, metric, path)
+        out["threshold"] = threshold
+        out["tolerance"] = tolerance
+        base = _num(finding, "base", required=False)
+        head = _num(finding, "head", required=True)
+        bar = threshold[0] if mkind == "tiered" else threshold
+        status = _judge_value(metric, base, head, bar, tolerance)
+        if mkind == "tiered":
+            out["tier"] = _loc_tier(head, threshold)
+            delta = "" if base is None else " (%+d)" % (head - base)
+            note = "%s: %s lines at head, %s at base%s; tier %s" % (
+                where,
+                _fmt(head),
+                _fmt(base),
+                delta,
+                out["tier"],
+            )
+        else:
+            note = "%s: %s=%s at head, %s at base (target %s%s)" % (
+                where,
+                metric,
+                _fmt(head),
+                _fmt(base),
+                "%s%%" % threshold
+                if metric in HIGHER_IS_BETTER
+                else "< %s" % threshold,
+                ", tolerance %s" % tolerance if tolerance else "",
+            )
+
+    blocking = False
+    blocking_reason = None
+    debt = None
+    if status in ("new", "regressed"):
+        reasons = _suppressions(
+            metric, status, head, threshold, kind, conf_kind, config
+        )
+        if reasons:
+            blocking_reason = "; ".join(reasons)
+            note += "; does not block: " + blocking_reason
+        else:
+            debt = debt_record(config, path, metric)
+            if debt is None:
+                blocking = True
+            else:
+                status = "excepted"
+                blocking_reason = "documented debt: %s" % debt["reason"]
+                note += "; " + blocking_reason
+
+    out["status"] = status
+    out["blocking"] = blocking
+    out["blocking_reason"] = blocking_reason
+    out["severity"] = (
+        "CRIT"
+        if blocking
+        else "WARN"
+        if status in ("new", "regressed", "excepted")
+        else "NOTE"
+        if status in ("held", "improved")
+        else "INFO"
+    )
+    out["note"] = note
+    out["debt"] = debt
+    return out
+
+
+def _debt_line(f):
+    where = f["file"] + (":%s" % f["symbol"] if f.get("symbol") else "")
+    if f["metric"] in COUNT_METRICS:
+        change = "line %s" % f.get("line", "?")
+    else:
+        change = "%s→%s" % (_fmt(f.get("base")), _fmt(f.get("head")))
+    return "%s %s %s %s" % (where, f["metric"], change, f["status"])
+
+
+def plugin_version():
+    """Version from the plugin manifest two levels up, or "unknown"."""
+    manifest = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".claude-plugin",
+        "plugin.json",
+    )
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            return str(json.load(fh).get("version", "unknown"))
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def judge_all(findings, config, excluded=None, base=None):
+    """Judge every finding and summarize. Findings on excluded paths (agent
+    lines about vendored or generated code) are dropped into
+    `summary.excluded` instead of judged — the README's promise that those
+    paths never block has to hold for agent findings too, not just LOC.
+    Zero judged findings is verdict "unmeasured": a gate that certifies
+    "compliant" on no input is a gate that lies when every agent fails."""
+    judged = []
+    excluded = list(excluded or [])
+    for i, finding in enumerate(findings, 1):
+        try:
+            path = finding.get("file") if isinstance(finding, dict) else None
+            reason = (
+                excluded_reason(path, config)
+                if isinstance(path, str) and path
+                else None
+            )
+            if reason:
+                excluded.append(
+                    {"file": path, "reason": reason, "metric": finding.get("metric")}
+                )
+                continue
+            judged.append(judge_finding(finding, config))
+        except FindingError as exc:
+            raise FindingError("finding %d: %s" % (i, exc))
+    counts = {s: 0 for s in STATUSES}
+    confidence = {c: 0 for c in CONFIDENCES}
+    for f in judged:
+        counts[f["status"]] += 1
+        confidence[_confidence_kind(f["confidence"])] += 1
+    blocking = sum(1 for f in judged if f["blocking"])
+    debt = [
+        _debt_line(f) for f in judged if f["status"] in ("held", "improved", "excepted")
+    ]
+    if not judged:
+        verdict = "unmeasured"
+    elif blocking:
+        verdict = "blocked"
+    elif debt:
+        verdict = "passes-with-debt"
+    else:
+        verdict = "compliant"
+    return {
+        "findings": judged,
+        "summary": {
+            "counts": counts,
+            "confidence": confidence,
+            "blocking": blocking,
+            "debt": debt,
+            "verdict": verdict,
+            "excluded": excluded,
+            "base": base,
+            "config_source": config.get("_source") or "defaults",
+            "version": plugin_version(),
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# LOC measurement
+# --------------------------------------------------------------------------
+
+
+def changed_files(worktree, base_sha):
+    """[(status, old_path, new_path)] for working tree vs `base_sha`, renames
+    detected. Deleted files are skipped — there is nothing at head to size.
+    Untracked (not yet `git add`ed) files count as added: the gate often runs
+    before the commit, and a brand-new module is exactly what it must see."""
+    # -z: NUL-separated, no C-style quoting of non-ASCII or special paths.
+    # Paths are repo-root-relative (no --relative), matching `git show
+    # <sha>:<path>`, so a --worktree that is a subdirectory still resolves.
+    fields = _git(worktree, "diff", "--name-status", "-M", "-z", base_sha).stdout.split(
+        "\0"
+    )
+    rows = []
+    seen = set()
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if not status:
+            i += 1
+            continue
+        if status.startswith("R"):
+            old_path, new_path = fields[i + 1], fields[i + 2]
+            i += 3
+        else:
+            old_path = new_path = fields[i + 1]
+            i += 2
+        if status.startswith("D"):
+            continue
+        rows.append((status[0], old_path, new_path))
+        seen.add(new_path)
+    untracked = _git(
+        worktree, "ls-files", "--others", "--exclude-standard", "-z", "--full-name"
+    ).stdout.split("\0")
+    for path in untracked:
+        if path and path not in seen:
+            rows.append(("A", path, path))
+    return rows
+
+
+def count_lines(text):
+    """Physical line count (`wc -l` semantics, plus one for an unterminated
+    final line). None for binary content."""
+    if text is None:
+        return None
+    if "\0" in text:
+        return None
+    if not text:
+        return 0
+    n = text.count("\n")
+    if not text.endswith("\n"):
+        n += 1
+    return n
+
+
+# git's own wording for "that path is not in that tree". Anything else
+# (bad sha, corrupt object, permissions) is a real failure.
+_MISSING_AT_BASE = (
+    "does not exist in",
+    "exists on disk, but not in",
+)
+
+
+def base_text(root, base_sha, path):
+    """Content of `path` at `base_sha`, or None when the path genuinely did
+    not exist there. Any other git failure raises — a corrupt object or a
+    bad sha must not be mistaken for "new file" and then block the gate."""
+    proc = _git(root, "show", "%s:%s" % (base_sha, path), check=False)
+    if proc.returncode == 0:
+        return proc.stdout
+    err = proc.stderr.strip()
+    if any(marker in err for marker in _MISSING_AT_BASE):
+        return None
+    raise RuntimeError("git show %s:%s failed: %s" % (base_sha, path, err))
+
+
+def head_text(root, path):
+    """Working-tree content of the repo-root-relative `path`, or None when it
+    is not a readable regular file (submodule entry, dangling symlink)."""
+    full = os.path.join(root, path)
+    if not os.path.isfile(full):
+        return None
+    try:
+        with open(full, encoding="utf-8", errors="surrogateescape") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def measure_loc(worktree, base_sha, config):
+    """(findings, excluded) — one loc_per_file finding per in-scope changed file."""
+    findings, excluded = [], []
+    root = git_root(worktree)
+    # Verify the base once. `git show <sha>:<path>` reports a bad sha with
+    # the same wording as a missing path, so without this a typo'd base
+    # would make every file "new" instead of failing loudly.
+    _git(root, "rev-parse", "--verify", "-q", "%s^{commit}" % base_sha)
+    for _status, old_path, new_path in changed_files(worktree, base_sha):
+        # Path-only exclusion first: the default list is exactly the files
+        # most likely to be huge, so don't read them just to discard them.
+        reason = excluded_reason(new_path, config)
+        head = None if reason else head_text(root, new_path)
+        if not reason:
+            if head is None:
+                # Not a readable regular file. Say so — "skipped" must never
+                # look like "measured clean".
+                reason = "unreadable"
+            else:
+                reason = excluded_reason(new_path, config, head)
+        if reason:
+            excluded.append({"file": new_path, "reason": reason})
+            continue
+        head_n = count_lines(head)
+        if head_n is None:
+            excluded.append({"file": new_path, "reason": "binary"})
+            continue
+        base_n = count_lines(base_text(root, base_sha, old_path))
+        findings.append(
+            {
+                "metric": "loc_per_file",
+                "file": new_path,
+                "base": base_n,
+                "head": head_n,
+                "confidence": LOC_CONFIDENCE,
+                "kind": file_kind(new_path, config),
+            }
+        )
+    return findings, excluded
+
+
+def loc_report(worktree, base_sha, config):
+    findings, excluded = measure_loc(worktree, base_sha, config)
+    return judge_all(findings, config, excluded=excluded, base=base_sha)
+
+
+def read_loc_report(path):
+    """A prior `loc` output, for `judge --loc`: (findings, excluded, base)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise FindingError("cannot read --loc report %s: %s" % (path, exc))
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        raise FindingError("--loc report %s is not a loc output" % path)
+    summary = data.get("summary") or {}
+    return data["findings"], summary.get("excluded") or [], summary.get("base")
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+
+def _read_findings(stream):
+    text = stream.read()
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        try:
+            data = json.loads(stripped)
+        except ValueError as exc:
+            raise FindingError("stdin is not a JSON array: %s" % exc)
+        if not isinstance(data, list):
+            raise FindingError("stdin JSON must be an array of findings")
+        return data
+    findings = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            findings.append(json.loads(line))
+        except ValueError as exc:
+            raise FindingError("line %d is not JSON: %s" % (lineno, exc))
+    return findings
+
+
+def _public_config(config):
+    return {k: v for k, v in config.items() if not k.startswith("_")}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="simplify_policy.py",
+        description="Judge /grumpy:simplify findings against the merge base.",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    for name, help_text in (
+        ("loc", "measure lines-of-code per changed file, base vs head"),
+        ("judge", "judge JSON-line findings from stdin"),
+        ("config", "print the effective config"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--worktree", default=".")
+        p.add_argument("--config", dest="config_path", default=None)
+        if name == "loc":
+            p.add_argument(
+                "--base", required=True, help="merge-base commit to compare against"
+            )
+        if name == "judge":
+            p.add_argument(
+                "--loc",
+                dest="loc_path",
+                default=None,
+                help="a `loc` output to fold in (its findings, excluded paths and base)",
+            )
+    args = parser.parse_args(argv)
+
+    try:
+        config = load_config(args.worktree, args.config_path)
+        if args.cmd == "config":
+            out = _public_config(config)
+            out["source"] = config.get("_source") or "defaults"
+        elif args.cmd == "loc":
+            out = loc_report(args.worktree, args.base, config)
+        else:
+            findings = _read_findings(sys.stdin)
+            excluded, base = [], None
+            if args.loc_path:
+                loc_findings, excluded, base = read_loc_report(args.loc_path)
+                findings = loc_findings + findings
+            out = judge_all(findings, config, excluded=excluded, base=base)
+    except (ConfigError, FindingError, RuntimeError, OSError) as exc:
+        # OSError covers a missing `git` binary (FileNotFoundError) and
+        # unreadable paths — an exit-2 message, never a traceback.
+        print("simplify_policy: %s" % exc, file=sys.stderr)
+        return 2
+    json.dump(out, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
