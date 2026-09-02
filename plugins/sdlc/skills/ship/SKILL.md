@@ -42,11 +42,12 @@ only when the branch added at least one `ponytail:` marker — check
 `.claude/grumpy/<branch>/fix.md`'s own `## Deferred` section first; if that
 artifact doesn't exist (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
-`git diff origin/main...HEAD -- . ':!*.md' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
+`git diff origin/main...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
 — anchored to an actual comment prefix (not a bare substring match, which a
 PR merely *documenting* the convention in prose would trip) AND scoped away
-from `.md` files, since a real deferral lands in the source a `/grumpy:fix`
-run touched, never in documentation — a plugin repo whose own docs show the
+from documentation files (`.md`/`.mdx` — extend this list for any other
+prose format the repo uses), since a real deferral lands in the source a
+`/grumpy:fix` run touched, never in documentation — a plugin repo whose own docs show the
 marker syntax inside a fenced code example (exactly what this PR does) would
 otherwise self-trigger a false `## Deferred` section, which is how this
 exact edge case got caught. Even with both guards this is pattern-matching
@@ -67,7 +68,7 @@ Closes #XXX
 <how to verify this works — manual test steps, key scenarios to check>
 
 ## Deferred
-<one line per marker this branch added: file:line — ceiling/trigger — #issue or "not filed">
+<one line per marker this branch added: [Serious|Questionable] file:line — ceiling/trigger — #issue or "not filed" (carry the severity tag straight from fix.md's own report when it exists; the grep fallback can't recover severity, so mark those lines "severity unknown — fix report missing" instead of guessing)>
 <omit this whole section when the branch added no markers>
 
 ## Confirmation
