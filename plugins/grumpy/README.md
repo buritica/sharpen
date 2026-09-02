@@ -3,6 +3,42 @@
 Adversarial code reviews from a principal engineer who's seen too many
 production incidents and is tired of pretending your code is fine.
 
+```sh
+claude plugin marketplace add buritica/sharpen
+claude plugin install grumpy@sharpen
+```
+
+## A finding, not a lint rule
+
+Every line names the file, the consequence, and whether it's fact or
+judgment (illustrative — the shape a real `/grumpy:review` renders):
+
+```markdown
+## Critical Issues 🚨
+
+- errors: swallows the network error, retry never fires [client.ts:142]
+
+## Simplify This ✂️
+
+- simplify: this abstraction feels wrong for a single call site [client.ts:88]
+```
+
+And it says so in a voice, not a checkbox:
+
+> "You built a factory factory for something that happens once."
+> "I'm going to pretend I didn't see this catch block that swallows exceptions."
+> "This abstraction is solving a problem you don't have."
+
+`--level grumpy|grumpier|linus` turns that up or down — `linus` drops all
+hedging and backs every harsh line with the specific technical argument for
+it.
+
+`/grumpy:fix` resolves what a review finds: tier-routed sub-agents (cheap
+model for a trivial fix, strongest for anything unverifiable), one retry at
+a higher tier if a fix's own check fails, and — for anything non-critical —
+the option to defer into a `ponytail:` marker instead of forcing a fix at
+review time. See "Deferring findings" below.
+
 ## Commands
 
 | Command | Scope | Description |
@@ -284,26 +320,7 @@ work.
 
 ## Upgrading
 
-**Upgrading to 2.6.0 (diff-aware simplify):** gate 2 now passes with legacy
-debt — a PR that merely touches an already-oversized file or an
-already-complex function no longer fails for that alone; only findings the
-diff makes `new` or `regressed` against the merge base block. The verdict
-wording changed to the three fixed phrasings above (`Threshold compliant`,
-`Passes with legacy debt (...)`, `Blocked (...)`), so anything scripting
-against the old free-form text needs updating. The measurement sub-agents
-now return JSON lines (`metric`, `file`, `symbol`, `base`, `head`,
-`confidence`) judged by `simplify_policy.py`, instead of the old
-pipe-delimited lines. `.sharpen/simplify.json` is optional; if it's absent,
-the previous thresholds are used as the healthy targets, unchanged. An
-already-recorded `simplify` gate on an in-flight branch stays recorded — the
-gate key and the auto-record mechanism are unchanged; only what the skill
-does when it runs changed.
-
-**Upgrading to 2.0.0 (Gemini Mode removed):** `--gemini`, `GRUMPY_MODEL`, and
-`scripts/gemini.ts` are gone. If you had `GRUMPY_MODEL` set in your shell profile,
-it is now silently ignored — every command runs the normal multi-agent pipeline
-regardless. `models.yaml`'s role→model map is unaffected; it still drives the
-real tier-routed dispatch `/grumpy:fix` uses.
+Version-specific migration notes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 `grumpy` composes with `sdlc` through a shared path contract
 (`.claude/grumpy/<branch>/` and `.claude/sdlc/<branch>/`): review and imagine read a plan

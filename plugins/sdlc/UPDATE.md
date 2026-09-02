@@ -1,24 +1,20 @@
-# sdlc UPDATE — v4.11.0
+# sdlc UPDATE — v4.12.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
-nothing to migrate — read "What a repo gets" below and skip the rest.
+nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
+releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.11.0 — the contract lives in AGENTS.md
+## New in 4.12.0 — deferring findings with `ponytail:` markers
 
-Step 10 of `/sdlc:init` used to append a three-line gate reminder to `CLAUDE.md`
-and nothing else. It now renders `templates/agents-sdlc.md` with the toolchain it
-derived and upserts the result into `AGENTS.md` between `<!-- sdlc:begin -->` /
-`<!-- sdlc:end -->` markers, and makes `CLAUDE.md` include it via `@AGENTS.md`.
-
-On a repo that already has sdlc scaffolding, re-run `/sdlc:init`: the block is
-added (or replaced, if a previous 4.11 run wrote one), hand-written content in
-either file is preserved, and the old `## Run gates before every PR` section in
-`CLAUDE.md` is removed because the block carries it. If `CLAUDE.md` holds other
-repo rules, move them to `AGENTS.md` so non-Claude hosts read them too.
-`scripts/agents_md.py --root . --check` shows drift without writing; with no
-other flags it only compares the version stamped inside the block against the
-installed sdlc, and `/sdlc:gate` runs that check once per cycle.
+`/grumpy:fix` (a `grumpy` 2.7.0+ requirement, not something this plugin implements itself)
+can now defer a non-critical finding into a `ponytail:` comment instead of forcing a fix at
+review time, and `--file-issues` can open a GitHub issue for the ones that need one. Gates
+4 and 6's "all critical findings resolved" pass criterion is unchanged — a deferral is never
+accepted for a Critical finding, on this repo or any other consuming sdlc. Nothing about the
+gate keys, the store, or the enforcement hook changed; this is purely about what counts as
+"resolved" for a Serious or Questionable finding. See the grumpy plugin's own README,
+"Deferring findings", for the full eligibility table.
 
 ## What a repo gets
 
