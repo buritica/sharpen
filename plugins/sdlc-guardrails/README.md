@@ -9,7 +9,7 @@ claude plugin install sdlc-guardrails@sharpen
 
 > **Gate-chain enforcement** (blocking `gh pr create` until gates pass) lives in the **[sdlc](../sdlc) plugin**, not here. It is pure-python and JSON-backed (`enforce-sdlc-gates.py`, reads the `.claude/data/gates.json` that `/sdlc:gate` writes). An earlier `enforce-gates` hook lived here but read a JSON format nothing wrote — it was a no-op and has been removed.
 
-This hook is agent-side only. It reads JSON from stdin (Claude Code hook protocol) and acts on Claude's tool calls; it does not install git hooks or affect commits you make by hand outside Claude Code.
+This hook is agent-side only: a `PreToolUse` `Bash` matcher in `hooks/hooks.json` that reads the tool call's JSON off stdin and denies before the shell command runs. It does not install a git hook, so it has no effect on a commit you make by hand outside whatever agent has this plugin installed. Mechanically this is the same `hooks.json` shape as `sdlc`'s own `enforce-sdlc-gates.py` — Codex CLI reads that file directly and its `PreToolUse` denials work identically to Claude Code's (see [`sdlc`'s README, "Codex CLI support"](../sdlc/README.md#codex-cli-support)) — but that has only been live-verified for `enforce-sdlc-gates.py`, not for this hook specifically. Until someone runs it on a real Codex (or other) session and checks, treat "works the same way there" as a reasonable bet, not a confirmed fact.
 
 ## Main-branch protection is opt-in
 

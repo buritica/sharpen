@@ -54,6 +54,42 @@ Fix it forward, in order:
    Use it only when re-dispatching genuinely isn't practical, and say in the
    PR description that a gate was attested rather than hook-verified, and why.
 
+### Hosts with no `PostToolUse` support at all (sharpen#41)
+
+The section above is about a Claude Code-specific caching quirk on a host
+that otherwise has working hooks. A different, more basic gap: some hosts
+(fx is the reported case) can dispatch `/grumpy:simplify`, `/grumpy:review`,
+`/grumpy:imagine`, and `/grumpy:fix` — the skill genuinely runs, with real
+findings and real artifacts written to `.claude/grumpy/<branch>/` — but never
+fire a `PostToolUse` lifecycle event at all, so `auto-record-skill-gate.py`
+never runs and gates 2–6 can never auto-record. There is no host-specific
+adapter to write here: **the general recording path for exactly this case is
+the same `--attest` escape hatch**, one call per skill-gated gate actually
+run:
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --attest simplify \
+  --reason "ran via fx, which has no PostToolUse hook support (sharpen#41)"
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --attest grumpy-review \
+  --reason "ran via fx, which has no PostToolUse hook support (sharpen#41)"
+# ...grumpy-fix-post-review, grumpy-imagine, grumpy-fix-post-imagine likewise.
+```
+
+This is not a downgrade invented for fx: it is the same mechanism, the same
+`⚠` marker in `--status`, and the same treatment by `enforce-sdlc-gates.py`
+(a stamp is a stamp, however it was made) as the Claude-caching path above.
+Before arming a cycle at all, resolve which [portable capability
+profile](../../../docs/portable-core.md#capability-profiles) the host can
+actually complete — `baseline`/`review`/`adversarial`, declared via `--init
+--profile <name> --capabilities-file <manifest>` — and do not arm
+`small-medium`/`significant` if the host cannot eventually attest every
+skill-gated gate a full chain requires; `--init tiny` for anything that
+doesn't warrant the full chain. Note the declared `--profile` is metadata for
+readers and CI (`--status`, an attached review report) — it does not itself
+reduce which gates a *tier* requires; `simplify` and the four `grumpy-*`
+gates are still required at `small-medium`/`significant` regardless of
+profile, and still need their own `--attest` call each.
+
 ### Cross-repo routing (sharpen#10)
 
 `--worktree`/`--route-from` were originally built for "this session's cwd and

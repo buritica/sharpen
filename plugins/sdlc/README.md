@@ -174,7 +174,15 @@ natural-language skill invocation produces on Codex doesn't fire it the same
 way Claude Code's `Skill` tool call does. Practical effect: a
 `small-medium`/`significant` gate cycle cannot auto-record gates 2–6
 (`simplify`, the grumpy passes) on Codex today; use the `tiny` cycle, or
-record those gates by hand until this gap closes.
+record those gates by hand until this gap closes — concretely,
+`record-gate.py --attest <gate> --reason "<text>"` per skill-gated gate
+actually run, since there is no manual `--record` for these. The same gap,
+reported independently for fx (sharpen#41 — a host that can dispatch the
+grumpy skills but fires no `PostToolUse` event whatsoever, not even the
+caching-specific misfire Codex has), has the identical fix: see `gate.md`'s
+"Hosts with no `PostToolUse` support at all" section for the exact commands
+and how a declared capability profile relates to (and does not reduce) what
+a tier requires.
 
 Command prose was the other porting axis: `commands/*.md` files originally
 named Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill tool`),
