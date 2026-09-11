@@ -126,8 +126,11 @@ effect is currently Claude Code specific**: the auto-record hook watches for
 Claude Code's own `Skill` tool by name, and has not been ported to other
 hosts (see `sdlc`'s README, "Codex CLI support") — on a host without that
 hook, invoking via a dispatch mechanism vs. inlining makes no difference to
-gate recording either way, since nothing records the gate on that host at
-all yet.
+gate recording either way, since nothing *auto*-records the gate on that
+host. There is still a manual path: `sdlc`'s `gate.md`, "Hosts with no
+`PostToolUse` support at all", covers recording `grumpy-review`/`grumpy-imagine`
+by hand (`record-gate.py --attest <gate> --reason <text>`) after the mode
+genuinely ran.
 
 ```
 Invoke "grumpy:<mode>" with args "--worktree \"$WT\" --level <level>"
