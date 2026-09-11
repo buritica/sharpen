@@ -33,6 +33,25 @@ Every document declares `protocol_version: "1"`. Schema `$id` values are version
 
 The checked-in examples are normative minimal examples, not a claim that the repository has implemented a generic runtime yet.
 
+## Skill-completion adapter contract
+
+A host that has a trustworthy post-skill lifecycle callback may automatically record a skill-gated gate by calling `plugins/sdlc/scripts/skill_gate_completion.py`:
+
+```python
+record_skill_completion(
+    skill="grumpy:review",
+    cwd="/canonical/repo/worktree",
+    succeeded=True,
+    host="example-host",
+    host_version="1.2.3",  # optional
+    invocation_id="host-event-7",  # optional
+)
+```
+
+The event fields are a canonical skill ID, canonical invocation cwd, boolean success result, host name/version, and optional invocation ID. The shared recorder validates the event, resolves same- and cross-repo routes, preserves gate ordering and invalidation, and performs the authorized atomic store write. Adapter metadata is returned for diagnostics, not treated as stored authority.
+
+An adapter must invoke this interface only after its host reports a successful skill invocation. It must not expose it as a user command or translate arbitrary manual records into automatic evidence. Claude Code supplies this through its `PostToolUse` `Skill` hook. fx and Codex do not yet have a reliable post-skill callback in Sharpen's plugin boundary, so they must retain the visible, reason-required `record-gate.py --attest` fallback until such an event exists.
+
 ## Capability profiles
 
 Resolve a profile against the active capability manifest *before* creating a gate cycle:

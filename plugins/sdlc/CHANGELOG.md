@@ -5,6 +5,10 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.12.1 — host-neutral skill-gate completion adapters
+
+Automatic skill-gate recording now has a host-neutral `record_skill_completion()` interface. The Claude `PostToolUse` hook is a thin adapter over the shared route resolution, ordering, invalidation, and atomic store write behavior. A future host adapter must call it only from a trustworthy successful post-skill callback; it must not turn arbitrary manual recording into hook evidence. fx and Codex currently have no such Sharpen callback, so their documented reason-required `record-gate.py --attest` fallback remains unchanged.
+
 ## 4.11.0 — the contract lives in AGENTS.md
 
 Step 10 of `/sdlc:init` used to append a three-line gate reminder to `CLAUDE.md` and nothing
