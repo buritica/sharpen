@@ -37,7 +37,7 @@ Per stack, you need: **detect** (manifest), **install + cache**, **format**,
 ## Rust
 - **Detect:** `Cargo.toml`.
 - **Format:** `cargo fmt --check`.
-- **Lint:** `cargo clippy -- -D warnings`.
+- **Lint:** `cargo clippy --all-targets -- -D warnings` (lint test code too — the default skips it).
 - **Build:** `cargo build` (required — see "Compiled languages" below).
 - **Test:** `cargo test`.
 - **Setup/cache:** `dtolnay/rust-toolchain` + `Swatinem/rust-cache`.
