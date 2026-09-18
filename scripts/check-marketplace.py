@@ -198,9 +198,7 @@ def _glob_has_skill_dir(path):
     if not os.path.isdir(path):
         return False
     return any(
-        fn == "SKILL.md"
-        for dirpath, _dirs, files in os.walk(path)
-        for fn in files
+        fn == "SKILL.md" for dirpath, _dirs, files in os.walk(path) for fn in files
     )
 
 
@@ -223,7 +221,9 @@ def check_pi_manifests(plugin_dir, name, version):
     if not pj:
         return
     if "pi" not in pj:
-        err("{}: package.json has no `pi` manifest (pi install won't work)".format(name))
+        err(
+            "{}: package.json has no `pi` manifest (pi install won't work)".format(name)
+        )
         return
     if pj.get("version") != version:
         err(
@@ -242,18 +242,27 @@ def check_pi_manifests(plugin_dir, name, version):
             # A glob whose directory prefix must at least exist.
             prefix = os.path.dirname(target)
             if not os.path.isdir(prefix):
-                err("{}: pi.skills entry '{}' glob prefix missing: {}".format(name, entry, target))
+                err(
+                    "{}: pi.skills entry '{}' glob prefix missing: {}".format(
+                        name, entry, target
+                    )
+                )
             continue
         if not _glob_has_skill_dir(target):
             err(
-                "{}: pi.skills entry '{}' resolves to {} with no SKILL.md"
-                .format(name, entry, os.path.relpath(target, ROOT))
+                "{}: pi.skills entry '{}' resolves to {} with no SKILL.md".format(
+                    name, entry, os.path.relpath(target, ROOT)
+                )
             )
 
     for entry in pi.get("extensions", []):
         target = os.path.normpath(os.path.join(plugin_dir, entry.lstrip("./")))
         if not os.path.isfile(target):
-            err("{}: pi.extensions entry '{}' is not a file: {}".format(name, entry, target))
+            err(
+                "{}: pi.extensions entry '{}' is not a file: {}".format(
+                    name, entry, target
+                )
+            )
             continue
         # Every hook script the extension shells out to must still exist.
         try:
@@ -267,7 +276,11 @@ def check_pi_manifests(plugin_dir, name, version):
                 for sub in ("scripts", "hooks")
             ):
                 continue
-            err("{}: pi extension {} references missing hook script {}".format(name, entry, ref))
+            err(
+                "{}: pi extension {} references missing hook script {}".format(
+                    name, entry, ref
+                )
+            )
 
 
 def check_top_level_pi_bundle():
@@ -284,11 +297,19 @@ def check_top_level_pi_bundle():
             continue
         target = os.path.normpath(os.path.join(ROOT, entry.lstrip("./")))
         if not _glob_has_skill_dir(target):
-            err("top-level pi.skills entry '{}' resolves to {} with no SKILL.md".format(entry, os.path.relpath(target, ROOT)))
+            err(
+                "top-level pi.skills entry '{}' resolves to {} with no SKILL.md".format(
+                    entry, os.path.relpath(target, ROOT)
+                )
+            )
     for entry in pkg["pi"].get("extensions", []):
         target = os.path.normpath(os.path.join(ROOT, entry.lstrip("./")))
         if not os.path.isfile(target):
-            err("top-level pi.extensions entry '{}' is not a file: {}".format(entry, target))
+            err(
+                "top-level pi.extensions entry '{}' is not a file: {}".format(
+                    entry, target
+                )
+            )
 
 
 def check_local_imports(script, ref, name):
