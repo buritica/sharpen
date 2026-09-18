@@ -46,8 +46,33 @@ def make_marketplace(plugins):
         version = spec.get("version", "1.0.0")
         with open(os.path.join(pdir, ".claude-plugin", "plugin.json"), "w") as f:
             json.dump({"name": name, "version": version}, f)
+        # Every plugin is also a pi package now; the checker validates the
+        # `pi` manifest, so a fixture needs a valid (if empty) one by default.
+        # `spec["pi"]` lets a test add skills/extensions entries that must
+        # resolve to real files/dirs on disk.
+        pi_manifest = {
+            "name": name,
+            "version": version,
+            "keywords": ["pi-package"],
+            # `spec["pi"]` replaces the whole nested manifest (skills +
+            # extensions), so a test can supply entries that must resolve.
+            "pi": spec.get("pi", {"skills": [], "extensions": []}),
+        }
+        with open(os.path.join(pdir, "package.json"), "w") as f:
+            json.dump(pi_manifest, f)
         entries.append(
             {"name": name, "source": f"./plugins/{name}", "version": version}
+        )
+    # Top-level pi bundle (pi's analog of the marketplace listing).
+    with open(os.path.join(root, "package.json"), "w") as f:
+        json.dump(
+            {
+                "name": "test-marketplace",
+                "version": "1.0.0",
+                "keywords": ["pi-package"],
+                "pi": {"skills": [], "extensions": []},
+            },
+            f,
         )
         if spec.get("hooks") is not None:
             hdir = os.path.join(pdir, "hooks")
@@ -313,6 +338,104 @@ class HookScriptImportTest(unittest.TestCase):
         # something this checker should crash or falsely report on.
         root = self._with_hook_script("def broken(:\n")
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+
+class PiManifestTest(unittest.TestCase):
+    """The checker now validates each plugin's `pi` package.json manifest and
+    the top-level pi bundle (docs/pi.md)."""
+
+    def test_missing_package_json_is_an_error(self):
+        root = make_marketplace({"foo": {}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        os.remove(os.path.join(root, "plugins", "foo", "package.json"))
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("package.json", out)
+
+    def test_package_json_without_pi_key_is_an_error(self):
+        root = make_marketplace({"foo": {}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        with open(os.path.join(root, "plugins", "foo", "package.json"), "w") as f:
+            json.dump({"name": "foo", "version": "1.0.0"}, f)
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("no `pi` manifest", out)
+
+    def test_pi_version_drift_is_an_error(self):
+        root = make_marketplace({"foo": {}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        with open(os.path.join(root, "plugins", "foo", "package.json"), "w") as f:
+            json.dump(
+                {
+                    "name": "foo",
+                    "version": "9.9.9",
+                    "keywords": ["pi-package"],
+                    "pi": {"skills": [], "extensions": []},
+                },
+                f,
+            )
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("version drift", out)
+
+    def test_valid_pi_manifest_passes(self):
+        # A real skills dir + extension file (which references a real hook
+        # script) must pass cleanly.
+        spec = {
+            "pi": {
+                "skills": ["./skills"],
+                "extensions": ["./extensions/hooks.ts"],
+            }
+        }
+        root = make_marketplace({"foo": spec})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        pdir = os.path.join(root, "plugins", "foo")
+        os.makedirs(os.path.join(pdir, "skills", "bar"))
+        with open(os.path.join(pdir, "skills", "bar", "SKILL.md"), "w") as f:
+            f.write("---\nname: bar\ndescription: x\n---\n\nBody.\n")
+        os.makedirs(os.path.join(pdir, "extensions"))
+        with open(os.path.join(pdir, "extensions", "hooks.ts"), "w") as f:
+            f.write('runHook("scripts/hook.py")\n')
+        os.makedirs(os.path.join(pdir, "scripts"))
+        with open(os.path.join(pdir, "scripts", "hook.py"), "w") as f:
+            f.write("import json\n")
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_extension_referencing_missing_script_is_an_error(self):
+        # The real extensions pass bare filenames to runHook/runGuard (not
+        # `scripts/...` paths), so the checker must catch a bare reference to
+        # a script that doesn't exist anywhere.
+        spec = {"pi": {"extensions": ["./extensions/hooks.ts"]}}
+        root = make_marketplace({"foo": spec})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        pdir = os.path.join(root, "plugins", "foo")
+        os.makedirs(os.path.join(pdir, "extensions"))
+        with open(os.path.join(pdir, "extensions", "hooks.ts"), "w") as f:
+            f.write('runHook("ghost.py")\n')
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("ghost.py", out)
+
+    def test_extension_referencing_hooks_script_is_fine(self):
+        # guardrails' script lives under hooks/, not scripts/ — a bare ref to
+        # it must resolve there, not false-error.
+        spec = {"pi": {"extensions": ["./extensions/hooks.ts"]}}
+        root = make_marketplace({"foo": spec})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        pdir = os.path.join(root, "plugins", "foo")
+        os.makedirs(os.path.join(pdir, "extensions"))
+        os.makedirs(os.path.join(pdir, "hooks"))
+        with open(os.path.join(pdir, "extensions", "hooks.ts"), "w") as f:
+            f.write('runGuard("_block-main-commits.py")\n')
+        with open(os.path.join(pdir, "hooks", "_block-main-commits.py"), "w") as f:
+            f.write("import json\n")
         r = run(root)
         self.assertEqual(r.returncode, 0, r.stdout.decode())
 

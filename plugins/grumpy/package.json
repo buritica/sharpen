@@ -1,0 +1,15 @@
+{
+  "name": "sharpen-grumpy",
+  "version": "2.7.0",
+  "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents, as a pi package. Skills only (no hooks to port) — the gate chain reads grumpy's review/imagine reports that the sdlc plugin records.",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "skills": ["./skills"]
+  }
+}

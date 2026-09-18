@@ -318,6 +318,22 @@ Every command also has a generated `skills/<name>/SKILL.md` — see `sdlc`'s
 README, "Codex CLI support", for how generation and the CI staleness check
 work.
 
+### pi (coding agent)
+
+`grumpy` is skills-only — no hooks to port — so under pi it installs as a pi
+package whose `pi` manifest exposes `./skills` directly:
+
+```sh
+pi install git:...sharpen --dir plugins/grumpy
+```
+
+It has no extension. The gate chain still works: `/sdlc:gate` reads grumpy's
+`review`/`imagine` reports the same way it does under Claude, and skill-gated
+gates record via the `record-gate.py --attest` fallback (pi has no `Skill` tool
+— see `docs/pi.md`). In the top-level bundle, grumpy's `audit` skill is
+excluded because pi skill names are flat and sdlc's `audit` wins the collision;
+install grumpy alone for its `audit` skill.
+
 ## Upgrading
 
 Version-specific migration notes live in [`CHANGELOG.md`](CHANGELOG.md).

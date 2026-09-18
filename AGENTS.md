@@ -98,11 +98,26 @@ need one `--write-all-in` run the first time it rebases past this point.
 - Each plugin's `hooks/hooks.json` is auto-loaded; do **not** also declare a `hooks` key in
   `plugin.json` (double-load error).
 
+## pi (coding agent) support
+
+The plugins also install into pi via `package.json` `pi` manifests (per-plugin, plus a top-level
+bundle that is pi's analog of `marketplace.json`). pi has no Claude hook events, so the hooks are
+ported as pi TypeScript extensions (`extensions/*.ts`) that translate pi lifecycle events into the
+Claude hook payloads the existing `scripts/*.py` read on stdin. **The gate logic stays in the
+python scripts — the TS adapter is a thin spawn-and-map layer, never a reimplementation** (Node
+stdlib only, mirroring the repo's pure-stdlib rule). See `docs/pi.md` for the event mapping, the
+interactive gate-confirmation replication, and the pi-only gaps (no `Skill` tool → `--attest`
+fallback; flat skill names → the sdlc/grumpy `audit` collision).
+
+When a hook script changes, the pi extension needs no change (it only names the script); when a
+plugin's version bumps, `package.json` must bump too. `scripts/check-marketplace.py` enforces the
+pi manifest version sync and that every referenced hook script still exists.
+
 ## Tests
 
 ```sh
 python3 scripts/run-tests.py          # every plugin's suite
-python3 scripts/check-marketplace.py  # registry consistency
+python3 scripts/check-marketplace.py  # registry consistency (incl. pi manifests)
 ```
 
 Stdlib python only, so there is no runtime to install and enforcement works on any box with

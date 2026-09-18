@@ -1,0 +1,16 @@
+{
+  "name": "sharpen-sdlc-guardrails",
+  "version": "1.4.4",
+  "description": "Opt-in main-branch commit protection for the sdlc workflow, as a pi package. Ports the PreToolUse main-commit guard to pi with an interactive override (the SDLC_ALLOW_MAIN=1 escape hatch as a human-only prompt).",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "skills": ["./skills"],
+    "extensions": ["./extensions/guardrails-hooks.ts"]
+  }
+}
