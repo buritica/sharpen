@@ -179,9 +179,12 @@ def check_skills(plugin_dir, name):
 
 
 # Extensions shell out to hook scripts by bare filename (runHook("name.py")
-# / runGuard(...)), so match any `.py` filename and resolve it against both
-# the `scripts/` and `hooks/` dirs below.
-PI_SCRIPT_REF = re.compile(r"([\w-]+\.py)")
+# / runGuard("name.py") / join(HOOKS_DIR, "name.py")). Match only `.py`
+# filenames that appear as quoted string literals — actual call sites — and
+# resolve them against both the `scripts/` and `hooks/` dirs below. A bare
+# `.py` in prose or a backtick-wrapped comment ref is not a hook script the
+# extension runs, so it must not trip the existence check.
+PI_SCRIPT_REF = re.compile(r"['\"]([\w-]+\.py)['\"]")
 
 
 def _glob_has_skill_dir(path):
