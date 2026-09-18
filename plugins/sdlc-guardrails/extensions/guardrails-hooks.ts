@@ -14,8 +14,14 @@
  * `SDLC_ALLOW_MAIN=1` on the command itself still allows, exactly as in
  * Claude Code — the script already handles it.
  *
- * Also exports `CLAUDE_PLUGIN_ROOT` into the process env so existing
- * SKILL.md instructions that reference it resolve under pi's bash tool.
+ * Exports `GUARDRAILS_PLUGIN_ROOT` into the process env so the guard
+ * SKILL.md's `_guardrails_config.py` calls resolve under pi's bash tool. This
+ * is a DEDICATED var, not `CLAUDE_PLUGIN_ROOT`: the sdlc plugin's extension
+ * sets that shared var to the sdlc root, and if this extension clobbered it
+ * every sdlc skill's `$CLAUDE_PLUGIN_ROOT/scripts/...` reference would break
+ * when both load together (the top-level bundle). The guard skill resolves
+ * `PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` so it still
+ * works under Claude Code/Codex, which set `CLAUDE_PLUGIN_ROOT` per-plugin.
  *
  * Node stdlib only.
  */
@@ -28,7 +34,7 @@ import type {
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { PLUGIN_ROOT, runGuard } from "./lib/run-hook";
 
-process.env.CLAUDE_PLUGIN_ROOT = PLUGIN_ROOT;
+process.env.GUARDRAILS_PLUGIN_ROOT = PLUGIN_ROOT;
 
 async function guardConfirmation(
   reason: string,

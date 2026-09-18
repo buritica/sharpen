@@ -59,6 +59,12 @@ stderr, a `{"permissionDecision":"deny",...}` envelope on stdout. The adapter
 maps `exitCode !== 0` → block, and surfaces an allow-time
 `{"systemMessage":...}` caveat via `ctx.ui.notify`.
 
+**Headless deny is intentionally quiet.** In print/rpc/json mode a blocked
+tool call returns `{block:true, reason, terminate:true}` and the turn ends
+with empty model output — the deny reason lives in the block result, so a
+headless consumer that doesn't render it sees a silent end-of-turn. That is
+the fail-closed posture working as designed, not a bug.
+
 ## `$CLAUDE_PLUGIN_ROOT` and the shared SKILL.md bodies
 
 The cross-host `SKILL.md` files reference `$CLAUDE_PLUGIN_ROOT/scripts/...`.
