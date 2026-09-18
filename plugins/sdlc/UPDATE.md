@@ -1,20 +1,29 @@
-# sdlc UPDATE — v4.12.0
+# sdlc UPDATE — v4.12.2
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.12.0 — deferring findings with `ponytail:` markers
+## New in 4.12.2 — the Rust lint reference lints test code
 
-`/grumpy:fix` (a `grumpy` 2.7.0+ requirement, not something this plugin implements itself)
-can now defer a non-critical finding into a `ponytail:` comment instead of forcing a fix at
-review time, and `--file-issues` can open a GitHub issue for the ones that need one. Gates
-4 and 6's "all critical findings resolved" pass criterion is unchanged — a deferral is never
-accepted for a Critical finding, on this repo or any other consuming sdlc. Nothing about the
-gate keys, the store, or the enforcement hook changed; this is purely about what counts as
-"resolved" for a Serious or Questionable finding. See the grumpy plugin's own README,
-"Deferring findings", for the full eligibility table.
+`templates/stacks.md` told `/sdlc:init` to render `cargo clippy -- -D warnings`, which does
+not lint test code. It now renders `cargo clippy --all-targets -- -D warnings`.
+
+A Rust repo initialised under 4.12.1 or earlier therefore has a documented lint command
+weaker than the one this version renders, and a defect living in a test module can pass both
+the local loop and `ci-pass`.
+
+To adopt it, re-run `/sdlc:init` — it updates the `Commands` block and leaves everything
+outside the `sdlc:begin`/`sdlc:end` markers alone — or edit the `lint:` line yourself. If you
+also spell the command out in CI or a task runner, update those too; nothing else consumes
+it.
+
+**Run the stricter form once before trusting it.** On a repo whose test code has never been
+linted, the first run may fail, and each failure is a real finding rather than a false
+positive. That is how this release came about: in `buritica/archivaldo`, an item placed
+after a test module sat undetected on `main` until someone ran `--all-targets` by hand.
+Nothing breaks either way — the stricter flag only adds coverage.
 
 ## What a repo gets
 

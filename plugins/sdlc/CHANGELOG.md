@@ -13,6 +13,12 @@ changes stay discoverable without bloating either the README or `UPDATE.md`.
 
 Automatic skill-gate recording now has a host-neutral `record_skill_completion()` interface. The Claude `PostToolUse` hook is a thin adapter over the shared route resolution, ordering, invalidation, and atomic store write behavior. A future host adapter must call it only from a trustworthy successful post-skill callback; it must not turn arbitrary manual recording into hook evidence. fx and Codex currently have no such Sharpen callback, so their documented reason-required `record-gate.py --attest` fallback remains unchanged.
 
+## 4.12.0 — deferring findings with `ponytail:` markers
+
+`/grumpy:fix` (a `grumpy` 2.7.0+ requirement, not something this plugin implements itself) can now defer a non-critical finding into a `ponytail:` comment instead of forcing a fix at review time, and `--file-issues` can open a GitHub issue for the ones that need one. Gates 4 and 6's "all critical findings resolved" pass criterion is unchanged — a deferral is never accepted for a Critical finding, on this repo or any other consuming sdlc. Nothing about the gate keys, the store, or the enforcement hook changed; this is purely about what counts as "resolved" for a Serious or Questionable finding. See the grumpy plugin's own README, "Deferring findings", for the full eligibility table.
+
+Moved here from `UPDATE.md` by 4.12.2, which superseded it. It had been left in place when 4.12.1 released, so for one release the file claimed to cover v4.12.0 while the plugin shipped 4.12.1 — this entry corrects that rather than quietly dropping the notes.
+
 ## 4.11.0 — the contract lives in AGENTS.md
 
 Step 10 of `/sdlc:init` used to append a three-line gate reminder to `CLAUDE.md` and nothing
