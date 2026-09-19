@@ -72,34 +72,10 @@ Closes #XXX
 <one line per marker this branch added: [Serious|Questionable] file:line — ceiling/trigger — #issue or "not filed" (carry the severity tag straight from fix.md's own report when it exists; the grep fallback can't recover severity, so mark those lines "severity unknown — fix report missing" instead of guessing)>
 <omit this whole section when the branch added no markers>
 
-## Confirmation
-Window: 24h
-Checks:
-- <metric or query that shows the change worked in prod>
-- <log query proving no regression class introduced>
-- <ratio / delta vs pre-merge baseline>
-
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
-
-### Confirmation window
-
-Every merge has a confirmation window — the time after deploy when you confirm the change actually solved what it claimed to solve. Deploy success and smoketests prove the change landed; the confirmation window proves it worked.
-
-| Tier | Window |
-|------|--------|
-| Docs-only | skip |
-| Tiny | skip (opt in by adding the block) |
-| Small-medium | 24h |
-| Significant | 4–7d |
-
-The `## Confirmation` block in the PR body is the portable contract. It names the window and the checks (metrics, log queries, ratio vs baseline) that will be evaluated at T+window.
-
-**Missing block on Small-medium+** is a warn at ship time — treat it the same as a missing `## Verification`. An empty block is not a passed check.
-
-At T+window, an agent or scheduled job runs the checks, compares to a pre-merge baseline, and posts pass/fail/inconclusive back to the PR thread. Repos wire their own scheduler and metrics reader; see [`docs/confirm-outcome.md`](../docs/confirm-outcome.md) for the portable pattern.
 
 ## Update the Plan
 
@@ -135,40 +111,9 @@ When `--merge` is passed or the user says "merge it":
    gh pr merge <number> --squash --delete-branch
    ```
 
-## Post-merge outcome loop
+4. Confirm the merge landed: `gh pr view <number> --json state,mergeCommit` shows `MERGED`.
 
-Merging is not "done" — the change has to actually work in prod. After merge, own the loop from merge to confirmed-working. No manual verify step; the agent runs it autonomously and reports outcomes.
-
-- **Ask before**: merging only.
-- **Decide after merge**: everything (don't ask between deploy and final report).
-- **Escalate**: any ⚠️/❌ with the actual failure detail (log line, endpoint response, metric delta) — not "check failed".
-
-### If the repo has a deploy workflow AND a `verify-deploy` script
-
-Wait on deploy CI, then run the project's verify script:
-
-```bash
-gh run watch $(gh run list --branch main --workflow <deploy-workflow>.yaml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status --interval 15
-bun runtime/scripts/verify-deploy.ts --pr <n> --comment [--slack slack:CHANNEL[:THREAD_TS]]
-```
-
-The verify script's contract:
-- Reads a post-deploy verification result populated by the running daemon (or equivalent) — does NOT re-run checks itself, just reports.
-- Posts a compact PR comment when `--comment` is set, and optionally a Slack summary when `--slack` is set.
-- Exits `0` on pass/partial, `1` on fail. Slack delivery is best-effort; a broken post logs a warn and the exit code stands.
-
-Repo-specific overlays (a `.claude/skills/sdlc/SKILL.md` in the consumer repo) name the exact deploy workflow file, verify-script path, and any additional smoketest steps.
-
-### If the repo has no verify-deploy script
-
-At minimum, confirm the merge landed and the deploy job succeeded:
-
-```bash
-gh pr view <n> --json state,mergeCommit
-gh run watch $(gh run list --branch main --workflow <deploy-workflow>.yaml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status --interval 15
-```
-
-Then propose and run at least one behavioral smoketest (curl an endpoint, log-grep, sandbox roundtrip) — an empty verification is never "passed". Report the outcome to the PR via `gh pr comment`.
+Post-merge verification is a consumer-repo concern, not generic sdlc's: repos that run a deploy + verify loop (e.g. a `verify-deploy` script, a confirmation window, Slack reporting) own that in their own `.claude/skills/sdlc/SKILL.md` overlay. Generic sdlc ships the merge and stops.
 
 ## Rules
 

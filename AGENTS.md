@@ -124,7 +124,7 @@ Stdlib python only, so there is no runtime to install and enforcement works on a
 `python3`.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.11.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.13.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
@@ -150,7 +150,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 
 ### Pull requests
 - Title: conventional-commit prefix (`feat`, `fix`, `chore`, `docs`, `refactor`) with a scope, under 70 characters.
-- Body: `## Summary`, `## Verification`, and for small-medium+ a `## Confirmation` window with the checks that prove it worked; `Closes #N` when an issue exists.
+- Body: `## Summary` and `## Verification`; `Closes #N` when an issue exists. (Consumer repos that run a post-merge confirmation window own that in their own `.claude/skills/sdlc/SKILL.md` overlay — generic sdlc does not mandate one.)
 - Squash merge only. Never force-push `main`. Never bypass hooks (`--no-verify` and friends are forbidden; fix the failure or ask).
 
 ### Artifacts (gitignored)
