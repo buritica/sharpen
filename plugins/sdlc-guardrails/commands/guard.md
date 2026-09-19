@@ -26,15 +26,26 @@ and run the helper, then report its output verbatim to the user:
 | `default-on`              | Protect every repo by default; `off` on a specific repo then records an exception for it |
 | `default-off`             | Default to no protection (the shipped default)               |
 
-Run exactly one of:
+Resolve this plugin's root first. Under Claude Code/Codex, the harness sets
+`CLAUDE_PLUGIN_ROOT` to this plugin's own directory. Under pi, this plugin's
+extension sets a dedicated `GUARDRAILS_PLUGIN_ROOT` (it must NOT clobber the
+shared `CLAUDE_PLUGIN_ROOT`, which the sdlc plugin's skills rely on when both
+load together) — so resolve `PLUGIN_ROOT` with the dedicated var first, falling
+back to `CLAUDE_PLUGIN_ROOT`:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" status
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" protect    # on
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" unprotect  # off
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" list
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" default-on
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/_guardrails_config.py" default-off
+PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+```
+
+Then run exactly one of:
+
+```bash
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" status
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" protect    # on
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" unprotect  # off
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" list
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" default-on
+python3 "$PLUGIN_ROOT/hooks/_guardrails_config.py" default-off
 ```
 
 `status`/`on`/`off` act on the current working directory's repo. If it is not

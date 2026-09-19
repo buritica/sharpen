@@ -76,6 +76,22 @@ That gate can't be faked from the inside, either. The chain records to a JSON st
 
 Codex CLI support is **live-verified**, not inferred from docs: a real `gh pr create` got blocked and a real gate cycle got armed on an actual Codex session, hooks firing the same way they do under Claude Code. One gap is confirmed, not hypothetical — see [`plugins/sdlc/README.md`, "Codex CLI support"](plugins/sdlc/README.md#codex-cli-support). The full cross-agent contract, current state and future shape both, is in [`docs/portable-core.md`](docs/portable-core.md).
 
+## pi (the coding agent) support
+
+The same three plugins also install into the [pi coding agent](https://github.com/earendil-works/pi-coding-agent). pi has no Claude-style `PreToolUse`/`PostToolUse`/`SessionStart` hook events and no `Skill` tool, so the hooks are ported as a small pi **extension** that translates pi lifecycle events into the Claude hook payloads the existing pure-stdlib `scripts/*.py` already read on stdin — the gate logic stays in Python, single source of truth, nothing reimplemented in TypeScript.
+
+```sh
+# one install, all three plugins (a top-level package.json bundles them)
+pi install git:https://github.com/your-org/sharpen
+
+# or per plugin, if you only want one (avoids the cross-plugin `audit` skill collision)
+pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc
+```
+
+Under pi the gate confirmations are **replicated**, not dropped: when a hook denies (e.g. an ungated `gh pr create`), pi shows an interactive confirmation with the reason, and only an interactive human in the TUI can override. Headless (print/rpc) mode has no human to ask, so it fails closed and blocks. `$CLAUDE_PLUGIN_ROOT` in the shared SKILL.md instructions is injected into the process env by the extension, so the existing cross-host skill bodies run unchanged.
+
+Two gaps are inherent to pi, documented in [`docs/pi.md`](docs/pi.md): pi has no `Skill` tool, so skill-gated gates record via the `record-gate.py --attest` fallback the skill bodies already carry; and pi skills are flat-named, so the top-level bundle keeps sdlc's `audit` and drops grumpy's (install grumpy alone for it).
+
 ## Pairs with ponytail
 
 [ponytail](https://github.com/DietrichGebert/ponytail) shapes code *before* the gate chain ever sees it — an external peer plugin, nothing from it vendored here. `grumpy` honors its `ponytail:` comment convention as documented debt, and `/grumpy:fix` can defer non-critical findings into a marker instead of fixing everything at review time. Neither plugin requires the other; skip ponytail entirely and deferral still works exactly the same way.
@@ -98,7 +114,7 @@ Removing `sdlc` doesn't touch a repo's own `AGENTS.md` contract or its `.sharpen
 
 This repo runs its own gates. `/sdlc:gate` before every PR, and the hook blocks `gh pr create` until the chain finishes.
 
-Plugin changes need the version bumped in both `plugins/<name>/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, in the same PR — a merged change without the bump is live in the repo and undelivered to users.
+Plugin changes need the version bumped in `plugins/<name>/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, **and** `plugins/<name>/package.json` (the pi manifest), in the same PR — a merged change without the bump is live in the repo and undelivered to users. `scripts/check-marketplace.py` enforces all three, and now also validates the pi `package.json` manifests and that every pi extension's referenced hook script still exists.
 
 ```sh
 python3 scripts/run-tests.py

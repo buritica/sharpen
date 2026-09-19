@@ -1,0 +1,24 @@
+{
+  "name": "sharpen",
+  "version": "4.12.1",
+  "description": "An SDLC where one required CI check is the gate, an adversarial code reviewer, and opt-in branch protection — shipped as a pi package. Bundles the sdlc, grumpy, and sdlc-guardrails plugins for `pi install`.",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "skills": [
+      "./plugins/sdlc/skills",
+      "./plugins/grumpy/skills",
+      "!./plugins/grumpy/skills/audit",
+      "./plugins/sdlc-guardrails/skills"
+    ],
+    "extensions": [
+      "./plugins/sdlc/extensions/sdlc-hooks.ts",
+      "./plugins/sdlc-guardrails/extensions/guardrails-hooks.ts"
+    ]
+  }
+}

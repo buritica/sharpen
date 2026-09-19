@@ -178,6 +178,140 @@ def check_skills(plugin_dir, name):
             err("{}: {}".format(name, message))
 
 
+# Extensions shell out to hook scripts by bare filename (runHook("name.py")
+# / runGuard("name.py") / join(HOOKS_DIR, "name.py")). Match only `.py`
+# filenames that appear as quoted string literals — actual call sites — and
+# resolve them against both the `scripts/` and `hooks/` dirs below. A bare
+# `.py` in prose or a backtick-wrapped comment ref is not a hook script the
+# extension runs, so it must not trip the existence check.
+PI_SCRIPT_REF = re.compile(r"['\"]([\w-]+\.py)['\"]")
+
+
+def _glob_has_skill_dir(path):
+    """True if `path` (a pi.skills entry, glob chars already handled by the
+    caller) is a directory containing at least one SKILL.md under it, or a
+    file ending in SKILL.md. pi loads skills by discovering SKILL.md; a
+    manifest entry that points at a dir with none would silently load
+    nothing, so the checker fails on it."""
+    if os.path.isfile(path):
+        return os.path.basename(path) == "SKILL.md"
+    if not os.path.isdir(path):
+        return False
+    return any(
+        fn == "SKILL.md" for dirpath, _dirs, files in os.walk(path) for fn in files
+    )
+
+
+def check_pi_manifests(plugin_dir, name, version):
+    """pi support (docs/pi.md) lives in each plugin's package.json under a
+    `pi` key, plus a top-level bundle package.json that is pi's analog of the
+    marketplace listing. Claude users get hooks via hooks.json; pi users get
+    them via a pi extension that shells out to the SAME pure-stdlib scripts,
+    so the pi contract must not be allowed to rot silently:
+      - every plugin has a package.json with a `pi` key
+      - its `pi` version matches the plugin's own version (the pi analog of
+        the two-place bump — now three)
+      - every pi.skills entry resolves to a dir/file that pi will actually
+        load as a skill, and every pi.extensions entry resolves to a file
+      - every extension's referenced hook script (scripts/*.py for sdlc,
+        hooks/_block-main-commits.py for guardrails) exists
+    Errors are hard failures, matching the Claude-side checks above."""
+    pj_path = os.path.join(plugin_dir, "package.json")
+    pj = load_json(pj_path)
+    if not pj:
+        return
+    if "pi" not in pj:
+        err(
+            "{}: package.json has no `pi` manifest (pi install won't work)".format(name)
+        )
+        return
+    if pj.get("version") != version:
+        err(
+            "{}: pi package.json version drift (plugin.json='{}', "
+            "package.json='{}')".format(name, version, pj.get("version"))
+        )
+    if "pi-package" not in pj.get("keywords", []):
+        warn("{}: pi package.json is missing the 'pi-package' keyword".format(name))
+
+    pi = pj["pi"]
+    for entry in pi.get("skills", []):
+        if entry.startswith("!"):
+            continue  # exclusion — nothing to load, nothing to check
+        target = os.path.normpath(os.path.join(plugin_dir, entry.lstrip("./")))
+        if any(c in entry for c in "*?["):
+            # A glob whose directory prefix must at least exist.
+            prefix = os.path.dirname(target)
+            if not os.path.isdir(prefix):
+                err(
+                    "{}: pi.skills entry '{}' glob prefix missing: {}".format(
+                        name, entry, target
+                    )
+                )
+            continue
+        if not _glob_has_skill_dir(target):
+            err(
+                "{}: pi.skills entry '{}' resolves to {} with no SKILL.md".format(
+                    name, entry, os.path.relpath(target, ROOT)
+                )
+            )
+
+    for entry in pi.get("extensions", []):
+        target = os.path.normpath(os.path.join(plugin_dir, entry.lstrip("./")))
+        if not os.path.isfile(target):
+            err(
+                "{}: pi.extensions entry '{}' is not a file: {}".format(
+                    name, entry, target
+                )
+            )
+            continue
+        # Every hook script the extension shells out to must still exist.
+        try:
+            src = open(target, encoding="utf-8").read()
+        except OSError as e:
+            warn("{}: could not read pi extension {} ({})".format(name, entry, e))
+            continue
+        for ref in PI_SCRIPT_REF.findall(src):
+            if any(
+                os.path.isfile(os.path.join(plugin_dir, sub, ref))
+                for sub in ("scripts", "hooks")
+            ):
+                continue
+            err(
+                "{}: pi extension {} references missing hook script {}".format(
+                    name, entry, ref
+                )
+            )
+
+
+def check_top_level_pi_bundle():
+    """The top-level package.json is pi's analog of marketplace.json: one
+    `pi install` pulls in all three plugins. Its skills/extensions entries
+    must resolve to real SKILL.md dirs / files (minus `!` exclusions), and
+    its version must track the marketplace's own listing."""
+    pkg = load_json(os.path.join(ROOT, "package.json"))
+    if not pkg or "pi" not in pkg:
+        err("top-level package.json has no `pi` manifest")
+        return
+    for entry in pkg["pi"].get("skills", []):
+        if entry.startswith("!"):
+            continue
+        target = os.path.normpath(os.path.join(ROOT, entry.lstrip("./")))
+        if not _glob_has_skill_dir(target):
+            err(
+                "top-level pi.skills entry '{}' resolves to {} with no SKILL.md".format(
+                    entry, os.path.relpath(target, ROOT)
+                )
+            )
+    for entry in pkg["pi"].get("extensions", []):
+        target = os.path.normpath(os.path.join(ROOT, entry.lstrip("./")))
+        if not os.path.isfile(target):
+            err(
+                "top-level pi.extensions entry '{}' is not a file: {}".format(
+                    entry, target
+                )
+            )
+
+
 def check_local_imports(script, ref, name):
     """A hook script that survives a sibling module's deletion only fails at
     hook-runtime, silently (each hook's own except-and-report pattern can't
@@ -267,6 +401,9 @@ def main():
         check_commands(plugin_dir, name)
         check_hooks(plugin_dir, name)
         check_skills(plugin_dir, name)
+        check_pi_manifests(plugin_dir, name, pv)
+
+    check_top_level_pi_bundle()
 
     # Plugin dirs on disk but not in the marketplace listing.
     plugins_root = os.path.join(ROOT, "plugins")

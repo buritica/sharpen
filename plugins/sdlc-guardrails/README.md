@@ -49,6 +49,26 @@ To bypass protection for a single command without touching config, set `SDLC_ALL
 SDLC_ALLOW_MAIN=1 git commit -m "..."
 ```
 
+## pi (coding agent) support
+
+pi has no Claude `PreToolUse` event, so this plugin ships a small pi extension
+(`extensions/guardrails-hooks.ts`) that replicates the guard. It shells out to
+the same `hooks/_block-main-commits.py` (single source of truth — no logic
+reimplemented), feeding it the Claude PreToolUse payload on stdin and mapping
+its exit code back to a pi decision:
+
+- **deny** (exit 2) → an interactive confirmation with the reason; only an
+  interactive human in the TUI can override. This is the pi analog of the
+  `SDLC_ALLOW_MAIN=1` escape hatch surfacing as a prompt. Headless
+  (print/rpc/json) mode has no human to ask, so it **fails closed** and blocks.
+- `SDLC_ALLOW_MAIN=1` on the command itself still bypasses, exactly as in
+  Claude.
+
+Install as a pi package (`pi install git:...sharpen --dir plugins/sdlc-guardrails`,
+or via the top-level bundle). `$CLAUDE_PLUGIN_ROOT` is injected into
+`process.env` so the shared SKILL.md body runs unchanged. See
+[`docs/pi.md`](../../docs/pi.md) for the full contract.
+
 ## Tests
 
 The hook has a stdlib test suite (no pip install):

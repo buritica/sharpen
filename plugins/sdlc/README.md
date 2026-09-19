@@ -255,6 +255,46 @@ any) matched, so you don't have to re-derive the flat/nested/override paths
 by hand the way finding this bug in the first place required. Off by
 default — this hook is quiet on success by design.
 
+## pi (coding agent) support
+
+pi has no Claude-style `PreToolUse`/`PostToolUse`/`SessionStart` hook events, so
+this plugin ships a small pi **extension** (`extensions/sdlc-hooks.ts`) that
+replicates the hook layer and its interactive gate confirmations. It does not
+reimplement any gate logic — it translates pi lifecycle events into the Claude
+hook payloads the pure-stdlib `scripts/*.py` already read on stdin, spawns the
+existing script, and maps its exit code / stderr back to a pi decision:
+
+| Claude hook | pi event | adapter action |
+|---|---|---|
+| `SessionStart` | `session_start` | run `claude-session-start.py` |
+| `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` + `block-direct-gate-record.py`; block on non-zero exit |
+| `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
+| `PostToolUse` Skill | — | no pi equivalent — see the attest fallback below |
+
+**Gate confirmations are replicated, not dropped.** When a hook denies (e.g. an
+ungated `gh pr create`), pi shows an interactive confirmation with the reason
+and only an interactive human in the TUI can override. Headless (print/rpc/json)
+mode has no human to ask, so it **fails closed** — the tool call is blocked with
+`terminate: true`, and the model can never self-bypass.
+
+`$CLAUDE_PLUGIN_ROOT` (and `CLAUDE_PLUGIN_SCRIPTS`) are injected into
+`process.env` at extension load; pi's bash tool spawns shells inheriting
+`process.env`, so the shared SKILL.md bodies run verbatim — no edits to the
+generated files.
+
+Install as a pi package (`pi install git:...sharpen`, or `--dir plugins/sdlc` for
+this plugin alone). The pi manifest is `package.json`'s `pi` key; the top-level
+`package.json` bundles all three plugins. `scripts/check-marketplace.py` keeps
+the pi manifest's version in sync with `plugin.json` and verifies every hook
+script the extension references still exists.
+
+**Same skill-gate gap as Codex**: pi has no `Skill` tool, so
+`auto-record-skill-gate.py` cannot fire and gates 2–6 record via the documented
+`record-gate.py --attest <gate> --reason "<text>"` fallback (marked unverified
+in `--status`, exactly as in Claude). See [`docs/pi.md`](../../docs/pi.md) for
+the full contract and the flat-name `audit` skill collision in the top-level
+bundle.
+
 ## Composability
 
 - **grumpy** installed? Gates 3-6 use `/grumpy:review`, `/grumpy:fix`, `/grumpy:imagine`. Without grumpy, the agent performs self-review and announces the fallback at the start of the gate — but note that self-review **cannot record** gates 3-6: only the auto-record hook can, when the skill actually runs. With the hooks registered and grumpy absent, a `small-medium`/`significant` cycle cannot complete, so install grumpy or use the `tiny` cycle where it genuinely applies.
