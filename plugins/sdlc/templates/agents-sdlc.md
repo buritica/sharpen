@@ -23,7 +23,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 
 ### Pull requests
 - Title: conventional-commit prefix (`feat`, `fix`, `chore`, `docs`, `refactor`) with a scope, under 70 characters.
-- Body: `## Summary`, `## Verification`, and for small-medium+ a `## Confirmation` window with the checks that prove it worked; `Closes #N` when an issue exists.
+- Body: `## Summary` and `## Verification`; `Closes #N` when an issue exists. (Consumer repos that run a post-merge confirmation window own that in their own `.claude/skills/sdlc/SKILL.md` overlay — generic sdlc does not mandate one.)
 - Squash merge only. Never force-push `{default_branch}`. Never bypass hooks (`--no-verify` and friends are forbidden; fix the failure or ask).
 
 ### Artifacts (gitignored)

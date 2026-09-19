@@ -1,6 +1,6 @@
 {
   "name": "sharpen-sdlc",
-  "version": "4.12.2",
+  "version": "4.13.0",
   "description": "The full single-repo SDLC as a pi package: spec, plan, gate, ship, repo bootstrap (new), CI + deploy scaffolding (init, audit, secrets), test-quality depth (test-gaps, test-critique, test-flake). Ports the Claude gate hooks to pi with interactive gate confirmations.",
   "private": true,
   "type": "module",
