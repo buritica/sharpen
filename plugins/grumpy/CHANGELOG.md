@@ -3,6 +3,19 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.8.0 — `/grumpy:imagine` gains documentation coverage
+
+`/grumpy:imagine` now dispatches a 5th simulation agent (Documentation Coverage) alongside
+happy path, state transitions, concurrency, and observability. It checks for new/changed
+user-facing behavior (API, CLI flag, config key, env var) with no documentation anywhere in
+the diff, stale docs describing behavior the diff just changed, and operational knowledge
+(failure modes, migrations, rollback paths) an on-call engineer couldn't find written down.
+Findings use three new DOMAIN values — `docs-gap`, `stale-docs`, `ops-gap` — and land under a
+new "## Documentation Coverage" report section with matching subsections. `/grumpy:review`
+already had an equivalent `docs` aspect; nothing there changed. No migration needed for an
+in-flight gate cycle — the gate key and auto-record mechanism are unchanged, only what the
+skill produces when it runs.
+
 ## 2.7.0 — `ponytail:` markers, defer, `--file-issues`
 
 `/grumpy:fix` gained a third disposition alongside fixed and disputed: **defer**. A
