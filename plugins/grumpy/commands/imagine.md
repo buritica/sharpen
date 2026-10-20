@@ -396,7 +396,8 @@ You are reporting to another agent, not a human — skip prose, headers, and
 persona voice. Return two required blocks (CONTEXT, FINDING) plus an
 optional third (HANDLED) if genuinely notable strengths exist, nothing else:
 
-CONTEXT lines (max 3 total) —
+CONTEXT lines (max 3 total) — note `docs` here is this CONTEXT line's own
+label, not a FINDING DOMAIN; no FINDING line ever uses `docs` as its DOMAIN —
 `docs|User-facing surface changed: [what/none]|Documented: [yes/no/partial]|Stale docs found: [yes/no, what]`
 
 FINDING lines, one per finding —
@@ -408,7 +409,9 @@ FINDING lines, one per finding —
   or NOTE (minor gap, nice-to-have doc).
 - FACT is `fact`/`judgment`.
 - DOMAIN is one of `docs-gap` (new/changed behavior with no documentation),
-  `stale-docs` (existing docs describe behavior that no longer exists).
+  `stale-docs` (existing docs describe behavior that no longer exists), or
+  `ops-gap` (a failure mode, migration, or rollback path with nothing written
+  down for whoever has to operate it).
 - Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
 
 Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
@@ -568,6 +571,10 @@ that age poorly, scope overlap with other commands]
 ### Stale Docs
 
 [findings — existing docs describing behavior that no longer exists]
+
+### Operational Gaps
+
+[findings — failure modes, migrations, or rollback paths with nothing written down]
 
 ## UX & Observability Notes (Not Bugs)
 
