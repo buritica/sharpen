@@ -2,7 +2,8 @@
 description:
   Grumpy production imagination — behavioral audit of your diff covering happy
   paths per transport, state transitions, concurrency, error/cleanup, UX,
-  logging, metrics, and edge cases including first deploy
+  logging, metrics, documentation coverage, and edge cases including first
+  deploy
 argument-hint: "[--level grumpy|grumpier|linus] [--worktree <path>]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Write", "TaskCreate", "TaskUpdate", "Agent"]
 ---
@@ -96,7 +97,7 @@ Automatically detect what to imagine. No questions:
 After determining the correct diff command, run it capped at 200000
 characters (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and
 capture the output as `DIFF_CONTENT`. This diff gets inlined into every one
-of the four parallel agent prompts below, uncapped it multiplies token cost
+of the five parallel agent prompts below, uncapped it multiplies token cost
 by the agent count on a large diff — the cap bounds that the same way
 dispatch already does for its own diff capture. Also capture the diff base
 as `DIFF_BASE` (e.g., 'origin/main' (the resolved $BASE — no '...HEAD'
@@ -109,18 +110,18 @@ worktree when `--worktree` is set. These will be passed directly to agents.
 If the diff is empty: "There's nothing here to imagine. Did you actually write
 any code or just think about it really hard?"
 
-## Step 2: Run Four Simulation Passes
+## Step 2: Run Five Simulation Passes
 
 Run one pass per simulation angle below: happy path, state transitions,
-concurrency, observability.
+concurrency, observability, documentation coverage.
 
 **If your harness supports spawning independent subagents** (a task/agent
 dispatch primitive that runs separately from this conversation), launch all
-four agents simultaneously, in parallel for speed, each with its own prompt
+five agents simultaneously, in parallel for speed, each with its own prompt
 from below.
 
 **If it doesn't**, there is no separate agent to launch — work through each of
-the four prompts yourself, sequentially, in this same session. The prompts
+the five prompts yourself, sequentially, in this same session. The prompts
 below still apply: treat each as its own isolated pass (don't let findings
 from one bleed into how you judge another), and produce the same
 CONTEXT/FINDING/HANDLED output per pass before moving to Step 3's aggregation.
@@ -359,6 +360,69 @@ Prefer ~15 high-confidence FINDING lines over 50 speculative ones. Silence
 on a healthy area needs no line. No preamble, no markdown headers, no summary.
 ```
 
+### Agent 5: Documentation Coverage
+
+Prompt:
+
+```
+You are a grumpy principal engineer who's been paged at 3am too many times.
+
+Imagine the DOCUMENTATION COVERAGE for the changed code — not whether the
+code works, but whether anyone besides the author could operate or extend it
+without reading the diff.
+Here is the diff to analyze (base: [DIFF_BASE]):
+
+<<<DIFF_START>>>
+[DIFF_CONTENT]
+<<<DIFF_END>>>
+
+Do not run git commands to re-fetch the diff — use what is provided above.
+
+Imagine the following scenarios:
+
+**New or Changed User-Facing Behavior:**
+- Does this diff add, remove, or change a public API, CLI flag, config key, env var, or endpoint? Is it documented anywhere in the diff (README, docstring, help text, changelog) or does it only live in the code?
+- If a new env var or config key has a default or a required value, is that spelled out anywhere a deployer would see it before it breaks on them?
+- Does a new capability ship with zero mention in any doc, meaning the only way to discover it is to read the source?
+
+**Stale Documentation:**
+- Does any comment, docstring, README section, or help text describe behavior that this diff just removed, renamed, or changed? Quote the stale claim and what the code does now.
+- Would someone following the existing docs hit a wall or get wrong results because of this diff?
+
+**Operational Knowledge:**
+- If this diff changes a failure mode, a migration step, or a rollback path, would an on-call engineer at 3am find that written down anywhere, or would they have to reconstruct it from the diff?
+
+You are reporting to another agent, not a human — skip prose, headers, and
+persona voice. Return two required blocks (CONTEXT, FINDING) plus an
+optional third (HANDLED) if genuinely notable strengths exist, nothing else:
+
+CONTEXT lines (max 3 total) —
+`docs|User-facing surface changed: [what/none]|Documented: [yes/no/partial]|Stale docs found: [yes/no, what]`
+
+FINDING lines, one per finding —
+`SEVERITY|file:line|what is wrong and the concrete consequence|FACT|DOMAIN`
+
+- SEVERITY is CRIT (a deployer or caller will be actively misled or blocked —
+  e.g. a required new env var with no mention anywhere), WARN (undocumented
+  but discoverable from the code, or docs stale but not actively misleading),
+  or NOTE (minor gap, nice-to-have doc).
+- FACT is `fact`/`judgment`.
+- DOMAIN is one of `docs-gap` (new/changed behavior with no documentation),
+  `stale-docs` (existing docs describe behavior that no longer exists).
+- Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
+
+Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
+not a bug), check the 2-3 lines above its site for a `ponytail:` comment. If
+one already documents this exact tradeoff and nothing in the diff crosses
+the trigger it names, skip the line — don't re-raise what's already
+recorded. Never skip a CRIT or WARN finding this way, and never skip a
+`fact`-tagged finding this way, even with a marker nearby.
+
+Prefer ~10 high-confidence FINDING lines over 50 speculative ones — a diff
+with no user-facing surface change and no stale docs should return an empty
+FINDING block, not manufactured nits. No preamble, no markdown headers, no summary.
+```
+
 ## Audit Discipline
 
 Each agent returns raw CONTEXT/FINDING/HANDLED lines, not prose — the persona
@@ -396,15 +460,15 @@ last field. Two overrides apply regardless of SEVERITY: Agent 4's
 `silent-failure` findings always go to 🚨 Bugs Found, and its
 `ux-observability` findings always go to the 'UX & Observability Notes (Not
 Bugs)' section instead of a severity block. Agent 1's last field is shaped
-`transport:[Name]` (not a bare DOMAIN like the other three agents) — strip
+`transport:[Name]` (not a bare DOMAIN like the other agents) — strip
 the `transport:` prefix to get the name and group under that transport's
 subsection; don't print the raw `transport:[Name]` string as a label.
 HANDLED lines become the Strengths section (one bullet each). CONTEXT lines
 populate the per-domain narrative subsections (Transport Simulations, State
-Transition Simulations, etc.) — render each CONTEXT line's fields as the
-bullets already shown there. `first-deploy` has no CONTEXT line format by
-design (it's a compatibility check, not a narrative flow) — its subsection is
-findings-only.
+Transition Simulations, Documentation Coverage, etc.) — render each CONTEXT
+line's fields as the bullets already shown there. `first-deploy` has no
+CONTEXT line format by design (it's a compatibility check, not a narrative
+flow) — its subsection is findings-only.
 
 Append `(judgment)` after `[agent-domain]` on a Serious Concerns bullet only
 when that FINDING line's FACT was `judgment` — leave `fact`-tagged and all
@@ -490,6 +554,20 @@ that age poorly, scope overlap with other commands]
 ### Silent Failure Risks
 
 [findings]
+
+## Documentation Coverage
+
+- **User-facing surface changed**: [what, or "none"]
+- **Documented**: [yes/no/partial]
+- **Stale docs found**: [yes/no, what]
+
+### Doc Gaps
+
+[findings — new/changed behavior with no documentation]
+
+### Stale Docs
+
+[findings — existing docs describing behavior that no longer exists]
 
 ## UX & Observability Notes (Not Bugs)
 
