@@ -406,7 +406,9 @@ FINDING lines, one per finding —
 - DOMAIN is one of `docs-gap` (new/changed behavior with no documentation),
   `stale-docs` (existing docs describe behavior that no longer exists), or
   `ops-gap` (a failure mode, migration, or rollback path with nothing written
-  down for whoever has to operate it).
+  down for whoever has to operate it). Never `docs` — that string is the
+  CONTEXT line's own label, not a valid DOMAIN; a FINDING line using it has
+  nowhere to route and will be dropped.
 - Prefix a HANDLED line for genuinely notable strengths: `HANDLED|area|one-line why it's fine`.
 
 Before reporting a NOTE-severity, `judgment`-tagged FINDING (a taste call,
