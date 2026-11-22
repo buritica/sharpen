@@ -142,21 +142,25 @@ def _predecessor_written(path, gate, branch_data):
 
 
 def _report_mismatch(path, receipt):
-    """None when the report the receipt names is still on disk with the same
-    sha256, else why not. The gate means "the pass ran and left evidence";
-    a receipt whose report is gone or was replaced points at nothing."""
+    """(refusal, warning) about the report the receipt names. Gone: refuse,
+    the gate means "the pass ran and left evidence" and there is none.
+    Changed since: warn and still record. Someone tidying a report after the
+    pass is not a reason to stop a coworker (no tamper protection)."""
     name, digest = receipt.get("report"), receipt.get("report_sha256")
     if not isinstance(name, str) or not isinstance(digest, str) or "/" in name:
-        return f"receipt at {path} names no report (grumpy 2.9.0+ records one)"
+        return f"receipt at {path} names no report (grumpy 2.9.0+ records one)", None
     report = os.path.join(os.path.dirname(os.path.dirname(path)), name)
     try:
         with open(report, "rb") as f:
             actual = hashlib.sha256(f.read()).hexdigest()
     except OSError:
-        return f"the report this receipt names is missing ({report}), re-run the pass"
+        return (
+            f"the report this receipt names is missing ({report}), re-run the pass",
+            None,
+        )
     if actual != digest:
-        return f"{report} changed after the receipt was written, re-run the pass"
-    return None
+        return None, f"{report} changed after the receipt was written"
+    return None, None
 
 
 def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=()):
@@ -187,7 +191,7 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     written = _parse_ts(receipt.get("written_at"))
     if written is None:
         return None, f"receipt at {path} has no valid written_at"
-    reason = _report_mismatch(path, receipt)
+    reason, warning = _report_mismatch(path, receipt)
     if reason:
         return None, reason
     started = _parse_ts((branch_data or {}).get("created_at"))
@@ -196,6 +200,8 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     before, prior = _predecessor_written(path, gate, branch_data)
     if prior and written <= prior:
         return None, f"receipt at {path} predates the {before} pass it must follow"
+    if warning:
+        receipt = dict(receipt, warning=warning)
     return receipt, None
 
 

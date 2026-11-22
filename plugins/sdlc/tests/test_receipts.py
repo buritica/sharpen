@@ -202,12 +202,15 @@ class VerifyTest(ReceiptTestBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("report this receipt names is missing", r.stderr)
 
-    def test_receipt_whose_report_changed_is_refused(self):
+    def test_receipt_whose_report_changed_records_with_a_warning(self):
+        # Coworkers tidy reports; that is worth a warning, not a stop.
         self.receipt("review")
-        self.report("review", text="# someone else's report\n")
+        self.report("review", text="# tidied after the pass\n")
         r = self.verify("review")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("⚠", r.stderr)
         self.assertIn("changed after the receipt", r.stderr)
+        self.assertIn("grumpy-review", self.gates())
 
     def test_already_recorded_verify_is_not_an_error(self):
         self.receipt("review")

@@ -116,12 +116,15 @@ def _record(data, target_branch, gate, receipt):
         invalidated = rc.stamp_receipt(
             data, target_branch, gate, receipt, invalidated, before
         )
-    return {
+    result = {
         "recorded": True,
         "gate": gate,
         "target": target_branch,
         "invalidated": invalidated,
     }
+    if receipt and receipt.get("warning"):
+        result["warning"] = receipt["warning"]
+    return result
 
 
 def handle_skill_completion(

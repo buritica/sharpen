@@ -29,8 +29,8 @@ grumpy pass ends by writing a small receipt into the gitignored
 against. A skill gate records only from a receipt that names a commit on the branch
 (HEAD, or an ancestor when a later pass has already committed), was written
 after this cycle started, and (for a fix gate) was written after the receipt of
-the pass it follows, and whose report (`review.md`, ...) is still on disk with the
-sha256 the receipt recorded. A pass commits its own edits and saves its report
+the pass it follows, and whose report (`review.md`, ...) is still on disk. A
+report edited after its receipt still records, with a warning naming it. A pass commits its own edits and saves its report
 before writing its receipt; the writer refuses a dirty tree or a missing report. That is what makes a gate mean "the
 pass ran on this code" rather than "the skill was loaded" (sharpen#52, #53).
 

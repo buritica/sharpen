@@ -45,6 +45,7 @@ def main():
             "recorded from receipts: "
             + ", ".join(f"{r['gate']} on {r['target']}" for r in swept["recorded"])
         )
+    notes += [r["warning"] for r in swept["recorded"] if r.get("warning")]
     if swept["error"]:
         notes.append(f"sweep stopped: {swept['error']}")
     if notes:

@@ -215,6 +215,8 @@ def _verify(target, branch_override):
         swept = completion.sweep_receipts(cwd=cwd, host="cli", quick=False)
         for r in swept["recorded"]:
             _log(f"[gate] ✓ {r['gate']} recorded on {r['target']} from its receipt")
+            if r.get("warning"):
+                _log(f"[gate] ⚠ {r['warning']}")
         for reason in dict.fromkeys(swept["refused"]):
             _log(f"[gate] {reason}")
         if swept["error"]:
@@ -236,6 +238,8 @@ def _verify(target, branch_override):
         _log(
             f"[gate] ✓ {result['gate']} recorded on {result['target']} from its receipt"
         )
+        if result.get("warning"):
+            _log(f"[gate] ⚠ {result['warning']}")
         for g in result.get("invalidated") or []:
             _log(f"[gate] {g} cleared: {result['gate']} can change code, re-run it")
         return 0

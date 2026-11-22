@@ -16,8 +16,8 @@ A new gate cycle is now **receipt-backed**:
 
 - Each grumpy pass (needs grumpy 2.9.0+) ends by writing
   `.claude/grumpy/<branch>/receipts/<pass>.json`, naming the branch, its current HEAD and
-  the sha256 of the report the pass saved. A receipt whose report is gone or changed
-  doesn't count.
+  the sha256 of the report the pass saved. A receipt whose report is gone doesn't count;
+  one whose report changed afterwards records with a warning.
 - `record-gate.py --verify <simplify|review|fix|imagine|all>` records the gate from a
   receipt that names a commit on the branch (HEAD, or an ancestor once a later fix has
   committed), is newer than the cycle, and (for a fix gate) is newer than the receipt
