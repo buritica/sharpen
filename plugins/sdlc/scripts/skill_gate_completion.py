@@ -15,6 +15,7 @@ import os
 
 import subprocess
 
+import gate_receipts as rc
 import gate_store as gs
 
 
@@ -69,7 +70,7 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
     `gate`, else (None, refusal dict). Legacy cycles: (None, None), unless
     the caller is a receipt-only path (a sweep, --verify), which must never
     stamp a legacy cycle on no evidence at all."""
-    if not gs.uses_receipts(bd):
+    if not rc.uses_receipts(bd):
         if require_receipt:
             return None, {
                 "recorded": False,
@@ -83,8 +84,8 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
             }
         return None, None
     root, head = (evidence or {}).get(target_branch, (None, None))
-    reason = gs.check_receipt(
-        gs.receipt_path(root, target_branch, skill),
+    reason = rc.check_receipt(
+        rc.receipt_path(root, target_branch, skill),
         skill=skill,
         gate=gate,
         branch=target_branch,
@@ -194,8 +195,9 @@ def handle_skill_completion(
         # Routed or not: a trusted completion event (legacy cycle) or a fresh
         # receipt (receipt-backed cycle) is the authorization.
         invalidated = gs.record_gate_and_diff(
-            data, target_branch, gate, authorized=True, head=head
+            data, target_branch, gate, authorized=True
         )
+        rc.stamp_head(data, target_branch, gate, head)
         return {
             "recorded": True,
             "gate": gate,
@@ -275,9 +277,8 @@ def handle_skill_completion(
         return refusal
     # A trusted completion event (legacy cycle) or a fresh receipt
     # (receipt-backed cycle) — the one authorized recorder.
-    invalidated = gs.record_gate_and_diff(
-        data, target_branch, gate, authorized=True, head=head
-    )
+    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
+    rc.stamp_head(data, target_branch, gate, head)
     return {
         "recorded": True,
         "gate": gate,
@@ -347,7 +348,7 @@ def record_skill_completion(
     else:
         path = gs.default_store_path(cwd)
         git_cwd = cwd
-    evidence = gs.worktree_heads(git_cwd)
+    evidence = rc.worktree_heads(git_cwd)
     active = set(evidence) if evidence is not None else None
     branch = gs.detect_branch(cwd)
     holder = {}

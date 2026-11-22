@@ -29,6 +29,7 @@ import json
 import os
 import sys
 
+import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
 import shell_parse as sp
@@ -227,10 +228,10 @@ def _check_one(inv):
 
     missing = gs.missing_gates(bd)
     if not missing:
-        stale = gs.stale_skill_gates(bd, _branch_head(branch, workdir))
+        stale = rc.stale_skill_gates(bd, _branch_head(branch, workdir))
         if not stale:
             return True, None, None, notes
-        heads = bd.get(gs.EVIDENCE_HEADS_KEY, {})
+        heads = bd.get(rc.EVIDENCE_HEADS_KEY, {})
         state = {
             "branch": branch,
             "tier": bd.get("tier"),

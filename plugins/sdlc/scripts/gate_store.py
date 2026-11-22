@@ -139,46 +139,6 @@ RENAMED_SKILLS = {
     "simplify": "grumpy:simplify",  # replaced in 4.10.4
 }
 
-# Receipt-backed evidence (sharpen#52, #53). A cycle initialized with
-# `evidence: receipts` stamps a skill gate only when the grumpy pass that
-# earns it left a receipt naming the branch's current HEAD. The receipt is
-# written by the pass itself, at its end, so "the skill was loaded" (all a
-# PostToolUse Skill event can prove) no longer counts as "the work ran".
-# This is a guard against skipping steps, not against forgery: we're coworkers.
-EVIDENCE_KEY = "evidence"
-EVIDENCE_RECEIPTS = "receipts"
-EVIDENCE_HEADS_KEY = "evidence_heads"
-RECEIPT_PROTOCOL = "1"
-# Skill (as seen on the Skill tool) -> receipt file name. grumpy:fix writes
-# one `fix` receipt per run; which fix gate it earns is decided by
-# determine_gate, and freshness against the preceding gate keeps the second
-# fix from reusing the first one's receipt.
-RECEIPT_NAME_FOR_SKILL = {
-    "grumpy:simplify": "simplify",
-    "grumpy:review": "review",
-    "grumpy:imagine": "imagine",
-    "grumpy:fix": "fix",
-}
-# The gate a fix receipt must be newer than.
-_FIX_PREDECESSOR = {
-    "grumpy-fix-post-review": "grumpy-review",
-    "grumpy-fix-post-imagine": "grumpy-imagine",
-}
-# `SDLC_GATE_EVIDENCE=events` makes new cycles legacy (event-only) cycles.
-# A migration and test escape hatch, not a recommended mode.
-EVIDENCE_ENV = "SDLC_GATE_EVIDENCE"
-
-
-def default_evidence():
-    """Evidence mode for a NEW cycle: receipts, unless opted out."""
-    if os.environ.get(EVIDENCE_ENV, "").strip().lower() == "events":
-        return None
-    return EVIDENCE_RECEIPTS
-
-
-# Chain order of the skill-gated gates, for staleness checks.
-SKILL_GATE_ORDER = [g for g in ALL_GATE_NAMES if g in SKILL_FOR_GATE]
-
 
 def gate_lists_hint():
     """The two-line "which gates are which" tail, shared by every refusal."""
@@ -625,15 +585,7 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_gates(
-    data,
-    branch,
-    tier,
-    tier_reason=None,
-    profile=None,
-    capabilities=None,
-    evidence=None,
-):
+def init_gates(data, branch, tier, tier_reason=None, profile=None, capabilities=None):
     """Initialize a branch cycle while preserving legacy state shape by default.
 
     `tier_reason` records WHY this tier was picked, e.g. by
@@ -642,11 +594,6 @@ def init_gates(
     chosen" from "auto-detected"; a manual --init passes no reason and the
     key is simply not written, so a plain init produces a byte-identical
     entry to before this field existed.
-
-    `evidence="receipts"` makes skill gates require a grumpy receipt naming
-    the branch's HEAD (see `check_receipt`). The CLI and auto-init pass it for
-    every new cycle; a cycle without the key is a legacy cycle and keeps the
-    old event-only recording.
 
     `profile` and `capabilities` are optional portable-core metadata. They are
     written only when a caller explicitly resolves a manifest, so legacy init
@@ -672,10 +619,6 @@ def init_gates(
         entry["capabilities"] = sorted(capabilities)
     if tier_reason:
         entry["tier_reason"] = tier_reason
-    if evidence is not None:
-        if evidence != EVIDENCE_RECEIPTS:
-            raise ValueError(f'Invalid evidence mode "{evidence}"')
-        entry[EVIDENCE_KEY] = evidence
     # `--init` doubles as the post-gate reset, so it clears every timestamp. The
     # route is not gate state — it says WHO is driving this branch's cycle — so
     # it survives a reset. Otherwise the mandatory "reset and re-run from gate 1"
@@ -806,7 +749,7 @@ def route_mismatch_note(data, source_root, branch):
     )
 
 
-def record_gate(data, branch, gate, authorized=False, head=None):
+def record_gate(data, branch, gate, authorized=False):
     """
     Stamp `gate` as complete on `branch`.
 
@@ -856,8 +799,6 @@ def record_gate(data, branch, gate, authorized=False, head=None):
         )
     stamp = _now()
     bd.setdefault("gates", {})[gate] = stamp
-    if head is not None:
-        bd.setdefault(EVIDENCE_HEADS_KEY, {})[gate] = head
     # This recording is itself proof `gate` is fresh again — drop any trace
     # saying a PRIOR clear is still outstanding for it, so a re-run gate
     # doesn't keep showing a stale "cleared by" note after it has, in fact,
@@ -883,7 +824,7 @@ def record_gate(data, branch, gate, authorized=False, head=None):
     return bd
 
 
-def record_gate_and_diff(data, branch, gate, authorized=False, head=None):
+def record_gate_and_diff(data, branch, gate, authorized=False):
     """`record_gate`, plus the list of already-recorded gates it just cleared
     as a side effect of `gate` being in `CODE_MUTATING_GATES`.
 
@@ -898,7 +839,7 @@ def record_gate_and_diff(data, branch, gate, authorized=False, head=None):
     its own call site."""
     bd = data.get(branch) or {}
     before = set(bd.get("gates", {}))
-    record_gate(data, branch, gate, authorized=authorized, head=head)
+    record_gate(data, branch, gate, authorized=authorized)
     return sorted(before - set(bd.get("gates", {})))
 
 
@@ -1043,119 +984,6 @@ def determine_gate(skill, branch_data):
     if gates.get("grumpy-review") and not gates.get("grumpy-fix-post-review"):
         return "grumpy-fix-post-review"
     return None
-
-
-def uses_receipts(branch_data):
-    """True when this cycle stamps skill gates only on a fresh receipt."""
-    return (
-        isinstance(branch_data, dict)
-        and branch_data.get(EVIDENCE_KEY) == EVIDENCE_RECEIPTS
-    )
-
-
-def receipt_path(worktree_root, branch, skill):
-    """Where the grumpy pass for `skill` leaves its receipt for `branch`.
-
-    Same directory the passes already write their reports to
-    (`<worktree>/.claude/grumpy/<branch>/`), which `/sdlc:init` and this
-    repo already gitignore, so receipts never reach git."""
-    name = RECEIPT_NAME_FOR_SKILL.get(skill)
-    if not name or not worktree_root:
-        return None
-    return os.path.join(
-        worktree_root, ".claude", "grumpy", branch, "receipts", f"{name}.json"
-    )
-
-
-def _parse_ts(value):
-    try:
-        ts = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts
-
-
-def check_receipt(path, *, skill, gate, branch, head, branch_data):
-    """Return None when the receipt at `path` earns `gate`, else the reason.
-
-    A receipt earns a gate when it exists, is for this skill and branch,
-    names the branch's current `head`, was written after the cycle started,
-    and (for a fix gate) after the gate it follows. Freshness is what keeps a
-    receipt left over from an earlier cycle, or the first fix's receipt, from
-    earning a later gate."""
-    if not path or not os.path.isfile(path):
-        return f"no receipt yet at {path}" if path else "no receipt location"
-    try:
-        with open(path) as f:
-            receipt = json.load(f)
-    except (OSError, ValueError) as e:
-        return f"receipt at {path} is unreadable ({e})"
-    if not isinstance(receipt, dict):
-        return f"receipt at {path} is not a JSON object"
-    if receipt.get("protocol_version") != RECEIPT_PROTOCOL:
-        return f"receipt at {path} has an unknown protocol_version"
-    if receipt.get("skill") != RECEIPT_NAME_FOR_SKILL.get(skill):
-        return f"receipt at {path} is for {receipt.get('skill')!r}, not {skill}"
-    if receipt.get("branch") != branch:
-        return f'receipt at {path} is for branch "{receipt.get("branch")}"'
-    if not head or receipt.get("head") != head:
-        return (
-            f"receipt at {path} reviewed {str(receipt.get('head'))[:12]}, but "
-            f"{branch} is now at {str(head)[:12]} — re-run the pass"
-        )
-    written = _parse_ts(receipt.get("written_at"))
-    if written is None:
-        return f"receipt at {path} has no valid written_at"
-    started = _parse_ts((branch_data or {}).get("created_at"))
-    if started and written < started:
-        return f"receipt at {path} predates this gate cycle"
-    before = _FIX_PREDECESSOR.get(gate)
-    if before:
-        prior = _parse_ts((branch_data or {}).get("gates", {}).get(before))
-        if prior and written <= prior:
-            return f"receipt at {path} predates the {before} gate it must follow"
-    return None
-
-
-def worktree_heads(cwd=None):
-    """{branch: (worktree_root, head_sha)} for every checked-out branch, or
-    None when `git worktree list` fails. One subprocess, run before taking the
-    store lock (no git inside a mutator)."""
-    try:
-        out = _git("worktree", "list", "--porcelain", cwd=cwd)
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    heads = {}
-    root = sha = None
-    for line in out.splitlines() + [""]:
-        if line.startswith("worktree "):
-            root, sha = os.path.realpath(line[len("worktree ") :]), None
-        elif line.startswith("HEAD "):
-            sha = line[len("HEAD ") :]
-        elif line.startswith("branch refs/heads/") and root:
-            heads[line[len("branch refs/heads/") :]] = (root, sha)
-        elif not line:
-            root = sha = None
-    return heads
-
-
-def stale_skill_gates(branch_data, head):
-    """Skill gates whose evidence no longer matches `head`, in chain order.
-
-    Only receipt-backed cycles carry evidence heads; anything else returns
-    []. The rule is strict: once the last recorded skill gate's head differs
-    from the branch's head, a commit landed after the review chain, and every
-    skill gate stamped against an older head is stale."""
-    if not uses_receipts(branch_data) or not head:
-        return []
-    heads = branch_data.get(EVIDENCE_HEADS_KEY, {})
-    gates = branch_data.get("gates", {})
-    stamped = [g for g in SKILL_GATE_ORDER if gates.get(g) and heads.get(g)]
-    if not stamped or heads[stamped[-1]] == head:
-        return []
-    return [g for g in stamped if heads[g] != head]
 
 
 def format_status(branch_data, branch=None):

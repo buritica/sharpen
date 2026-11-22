@@ -38,6 +38,7 @@ import subprocess
 import sys
 
 import capabilities
+import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
 import shell_parse as sp
@@ -404,14 +405,14 @@ def main():
             lambda d: (
                 None
                 if d.get(branch)
-                else gs.init_gates(
+                else rc.init_gates(
                     d,
                     branch,
                     tier,
                     tier_reason=tier_reason,
                     profile=profile,
                     capabilities=capability_snapshot,
-                    evidence=gs.default_evidence(),
+                    evidence=rc.default_evidence(),
                 )
             ),
         )

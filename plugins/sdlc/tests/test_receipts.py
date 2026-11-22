@@ -29,6 +29,7 @@ os.environ["SDLC_CROSS_REPO_ROUTES_PATH"] = os.path.join(
 )
 os.environ.pop("SDLC_GATE_EVIDENCE", None)
 
+import gate_receipts as rc  # noqa: E402
 import gate_store as gs  # noqa: E402
 
 RECORD = os.path.join(SCRIPTS, "record-gate.py")
@@ -295,7 +296,7 @@ class EnforceStalenessTest(ReceiptTestBase):
     def test_legacy_cycle_is_not_judged_on_staleness(self):
         gs.update_store(self.store, lambda d: gs.init_gates(d, BRANCH, "small-medium"))
         # Skill gates first: the code-mutating ones clear bash gates.
-        order = gs.SKILL_GATE_ORDER + gs.BASH_GATES
+        order = rc.SKILL_GATE_ORDER + gs.BASH_GATES
         for gate in order:
             gs.update_store(
                 self.store,
@@ -308,7 +309,7 @@ class EnforceStalenessTest(ReceiptTestBase):
 class ReceiptWriterTest(ReceiptTestBase):
     def test_receipt_shape(self):
         self.receipt("review")
-        path = gs.receipt_path(self.repo, BRANCH, "grumpy:review")
+        path = rc.receipt_path(self.repo, BRANCH, "grumpy:review")
         with open(path) as f:
             receipt = json.load(f)
         self.assertEqual(

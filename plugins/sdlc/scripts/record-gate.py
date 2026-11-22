@@ -45,6 +45,7 @@ Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
 import sys
 
 import capabilities
+import gate_receipts as rc
 import gate_store as gs
 import review_report
 import skill_gate_completion as completion
@@ -88,13 +89,13 @@ def _init_with_route(
     where this worktree's skill gates land, and an unannounced move is the exact
     failure this whole channel was built to stop.
     """
-    bd = gs.init_gates(
+    bd = rc.init_gates(
         data,
         branch,
         tier,
         profile=profile,
         capabilities=capabilities,
-        evidence=gs.default_evidence(),
+        evidence=rc.default_evidence(),
     )
     dropped = gs.clear_route(data, route_to_clear) if route_to_clear else []
     if route_to_set:
@@ -221,7 +222,7 @@ def _verify(target, branch_override):
     if skill not in gs.SKILL_TO_GATE:
         _log(
             f'[gate] error: "{target}" is not a gated skill '
-            f"(one of: {', '.join(gs.RECEIPT_NAME_FOR_SKILL.values())}, all)"
+            f"(one of: {', '.join(rc.RECEIPT_NAME_FOR_SKILL.values())}, all)"
         )
         return 1
     result = completion.record_skill_completion(
