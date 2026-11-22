@@ -11,6 +11,7 @@ and `receipt.py` does the same), so reports and receipts stay out of git in a re
 own `.gitignore` never listed them, on every host. An existing `.gitignore` there is left
 alone. Pairs with sdlc 4.18.0, which does the same for `.sharpen/data/`, `.claude/sdlc/`
 and `.claude/worktrees/`.
+
 ## 2.11.0 — stacked branches review their own layer, fix sorts out new capability
 
 `/grumpy:fix` sorts each finding as a fix or as new capability before acting on it, and

@@ -40,6 +40,7 @@ Two side effects of the folders now being *ignored* rather than merely untracked
 - A team that commits plans under `.claude/sdlc/` keeps the ones already tracked, but new
   ones are skipped by `git add -A`. Deleting `.claude/sdlc/.gitignore` doesn't last (the
   next command puts it back); replace its contents with `!*` instead, or `git add -f`.
+
 Update grumpy alongside (2.12.0+) so its report folder ignores itself too.
 
 ## New in 4.17.0 — a finished chain stops re-running (sharpen#37)

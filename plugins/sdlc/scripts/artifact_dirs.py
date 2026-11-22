@@ -6,7 +6,8 @@ keeps everything in it out of git, in a repo whose own `.gitignore` never
 learned about it, on every host and without `/sdlc:init`. sharpen's command
 files do the same for `.claude/sdlc/`, `.claude/grumpy/` and
 `.claude/worktrees/` with one shell line; this module covers the folders the
-stdlib scripts create. Pure stdlib.
+stdlib scripts create (gate state in `.sharpen/data/`, `base.json` in
+`.claude/sdlc/<branch>/`). Pure stdlib.
 """
 
 import os
@@ -16,19 +17,31 @@ SELF_IGNORE_TEXT = (
 )
 
 
-def ensure_self_ignored(directory):
-    """Make the neutral `.sharpen/data/` folder ignore itself.
+# (parent, folder) pairs sharpen owns outright. `.sharpen/` itself is never
+# one (it holds the committed `simplify.json`), nor an `$SDLC_GATES_PATH`
+# override or the legacy `.claude/data/`, whose folders may hold things that
+# aren't ours.
+OWNED = {
+    (".sharpen", "data"),
+    (".claude", "sdlc"),
+    (".claude", "grumpy"),
+    (".claude", "worktrees"),
+}
 
-    Only `.sharpen/data/` gets one: never `.sharpen/` itself, which holds the
-    committed `simplify.json`, and never an `$SDLC_GATES_PATH` override or the
-    legacy `.claude/data/`, whose folders may hold things that aren't ours.
-    An existing file is left alone. Best effort: a read-only folder fails
-    later, at the real write, with a clearer error.
+
+def ensure_self_ignored(directory):
+    """Make one of sharpen's own artifact folders (`OWNED`) ignore itself.
+
+    Any other folder is left untouched. An existing file is left alone. Best
+    effort: a read-only folder fails later, at the real write, with a clearer
+    error.
     """
     directory = os.path.abspath(directory)
-    if os.path.basename(directory) != "data":
-        return
-    if os.path.basename(os.path.dirname(directory)) != ".sharpen":
+    pair = (
+        os.path.basename(os.path.dirname(directory)),
+        os.path.basename(directory),
+    )
+    if pair not in OWNED:
         return
     path = os.path.join(directory, ".gitignore")
     try:
