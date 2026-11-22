@@ -307,18 +307,22 @@ If `$PLAN` does not exist, skip this step silently.
 Last step, after everything above: leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
 the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
-gate records only from a receipt that matches the branch's current HEAD. Skip
+gate records only from a receipt that names a commit on the branch. The
+writer refuses uncommitted changes, so commit what this pass changed first. Skip
 it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 ```bash
 WT="${WT:-.}"
-RECEIPT="${CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
-# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
-# <grumpy plugin root>/scripts/receipt.py — point RECEIPT there if you know
-# where this skill was loaded from; if you can't, say so in the summary.
-[ -f "$RECEIPT" ] || echo "receipt.py not found at '$RECEIPT'"
-python3 "$RECEIPT" review --worktree "$WT"
+# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there); Claude
+# Code and Codex set CLAUDE_PLUGIN_ROOT per plugin. If neither is set, point
+# RECEIPT at <grumpy plugin root>/scripts/receipt.py yourself.
+RECEIPT="${GRUMPY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+if [ -f "$RECEIPT" ]; then
+  python3 "$RECEIPT" review --worktree "$WT"
+else
+  echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
+fi
 ```
 
 ## Personality Guidelines

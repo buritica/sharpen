@@ -26,9 +26,11 @@ Run `--unroute` when you finish gating `$WT` and keep working in this session â€
 A gate cycle started by `--init` or by auto-init is **receipt-backed**. Each
 grumpy pass ends by writing a small receipt into the gitignored
 `.claude/grumpy/<branch>/receipts/` directory, naming the commit it ran
-against. A skill gate records only from a receipt that names the branch's
-**current HEAD**, was written after this cycle started, and (for a fix gate)
-was written after the gate it follows. That is what makes a gate mean "the
+against. A skill gate records only from a receipt that names a commit on the branch
+(HEAD, or an ancestor when a later pass has already committed), was written
+after this cycle started, and (for a fix gate) was written after the receipt of
+the pass it follows. A pass commits its own edits before writing its receipt;
+the receipt writer refuses a dirty tree. That is what makes a gate mean "the
 pass ran on this code" rather than "the skill was loaded" (sharpen#52, #53).
 
 The recording path is the same on Claude Code, Codex, pi, fx or anything
@@ -42,10 +44,13 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify imagine    # after
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify all        # sweep every receipt on disk
 ```
 
-Run it from the worktree being gated (`cd "$WT"` first when `--worktree` is
-set); routing set with `--route-from` applies exactly as it does to the
+If `$CLAUDE_PLUGIN_ROOT` is empty in your shell (it is set for hook commands,
+not always for the agent's own shell), use the installed sdlc plugin's path
+instead. Run it from the worktree being gated (`cd "$WT"` first when
+`--worktree` is set); routing set with `--route-from` applies exactly as it does to the
 hooks. `--verify` exits non-zero with the reason when the receipt is missing,
-names an older commit, or predates the cycle: re-run the pass, don't work
+names a commit that is no longer on the branch, or predates the cycle (an
+already-recorded gate exits 0): re-run the pass, don't work
 around it. Unlike `--record`, it is never refused for skill gates, because it
 only ever records on a receipt.
 
@@ -63,10 +68,13 @@ A receipt is a record that the work ran, not a security boundary: anyone can
 write one by hand, just as anyone can edit `gates.json`. It stops an agent
 skipping its own steps; it is not meant to stop a person.
 
-**Staleness.** Every receipt-recorded gate stores the commit it saw. If a
-commit lands after the last skill gate, `enforce-sdlc-gates.py` blocks
-`gh pr create` and names the stale gates. Re-init and re-run the chain on the
-new HEAD (see **Reset** below).
+**Staleness.** Every receipt-recorded gate stores the commit it saw. Earlier
+gates sitting on older commits is normal (fix passes commit); what counts is
+the last skill gate. If a commit lands after it, `enforce-sdlc-gates.py`
+blocks `gh pr create` and names the stale gates. Re-init and re-run the chain
+on the new HEAD (see **Reset** below). A rebase moves HEAD too, so rebase
+before running the chain, not after. An attested last gate (`--attest`) is not
+judged on staleness.
 
 **Legacy cycles** (started before receipts, no `evidence` key in the store)
 keep the old event-only recording until their next `--init`. Setting

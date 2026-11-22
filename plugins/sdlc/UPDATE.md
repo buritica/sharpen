@@ -17,13 +17,15 @@ A new gate cycle is now **receipt-backed**:
 - Each grumpy pass (needs grumpy 2.9.0+) ends by writing
   `.claude/grumpy/<branch>/receipts/<pass>.json`, naming the branch and its current HEAD.
 - `record-gate.py --verify <simplify|review|fix|imagine|all>` records the gate from a
-  receipt that names HEAD, is newer than the cycle, and (for a fix gate) is newer than
-  the gate it follows. It works the same on every host.
+  receipt that names a commit on the branch (HEAD, or an ancestor once a later fix has
+  committed), is newer than the cycle, and (for a fix gate) is newer than the receipt
+  of the pass it follows. It works the same on every host.
 - Claude Code runs the same check on its `Stop` hook and pi on `agent_end`, so nothing
   extra is needed there. The `Skill` hook still fires, but now only records once the
   receipt exists.
-- `enforce-sdlc-gates` blocks `gh pr create` when the review gates were earned on an
-  older commit than HEAD, and names the stale gates. Re-run the chain on the new HEAD.
+- `enforce-sdlc-gates` blocks `gh pr create` when the last review gate was earned on
+  an older commit than HEAD, and names the stale gates. Re-run the chain on the new
+  HEAD. A rebase counts, so rebase before the chain (`/sdlc:ship` now says so).
 
 **What an existing repo needs to do:** nothing. A cycle that was already open keeps the old
 event-only recording until it is re-initialised, and receipts are written under the

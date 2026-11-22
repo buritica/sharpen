@@ -6,7 +6,7 @@ Claude PostToolUse Skill hook, the Claude Stop / pi agent_end receipt sweep,
 and `record-gate.py --verify` (which a gate chain runs after each grumpy pass,
 on any host). On a receipt-backed cycle (`evidence: receipts`) the event alone
 proves nothing: the gate records only when the pass's receipt names the
-branch's current HEAD (see gate_store.check_receipt). Legacy cycles keep the
+branch's current HEAD (see gate_receipts.check_receipt). Legacy cycles keep the
 old event-only behaviour. --attest stays the visible fallback when no receipt
 can be produced.
 """
@@ -83,14 +83,15 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
                 "legacy_cycle": True,
             }
         return None, None
-    root, head = (evidence or {}).get(target_branch, (None, None))
-    reason = rc.check_receipt(
+    root, head, reachable = (evidence or {}).get(target_branch, (None, None, ()))
+    rhead, reason = rc.check_receipt(
         rc.receipt_path(root, target_branch, skill),
         skill=skill,
         gate=gate,
         branch=target_branch,
         head=head,
         branch_data=bd,
+        reachable=reachable,
     )
     if reason:
         # Not surprising: "the pass hasn't finished yet" is the normal state
@@ -103,7 +104,7 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
             "reason": f'"{gate}" not recorded: {reason}',
             "awaiting_receipt": True,
         }
-    return head, None
+    return rhead, None
 
 
 def handle_skill_completion(
@@ -299,7 +300,9 @@ def record_skill_completion(
 ):
     """Record a successful normalized host skill-completion event.
 
-    Host adapters must call this only from a trusted post-skill lifecycle event.
+    Callers: the Claude PostToolUse Skill hook (a trusted post-skill event),
+    and the receipt-only paths (`--verify`, the end-of-turn sweep), which pass
+    `require_receipt=True` so they can never stamp without a fresh receipt.
     `skill` is the canonical skill identifier, `cwd` identifies the invoking
     worktree, and `succeeded` must describe the invocation result. Optional host
     metadata is returned for adapter diagnostics but is not persisted as gate
@@ -348,8 +351,13 @@ def record_skill_completion(
     else:
         path = gs.default_store_path(cwd)
         git_cwd = cwd
-    evidence = rc.worktree_heads(git_cwd)
-    active = set(evidence) if evidence is not None else None
+    heads = rc.worktree_heads(git_cwd)
+    active = set(heads) if heads is not None else None
+    # Ancestry needs git, and git never runs inside the store lock.
+    evidence = {
+        b: (root, sha, rc.receipt_heads(root, b, sha) if sha else frozenset())
+        for b, (root, sha) in (heads or {}).items()
+    }
     branch = gs.detect_branch(cwd)
     holder = {}
 
@@ -406,10 +414,12 @@ SWEEP_ORDER = (
 def sweep_receipts(*, cwd, host, host_version=None):
     """Record every skill gate whose receipt is already on disk, in chain
     order. Used by end-of-turn hooks (Claude Stop, pi agent_end) and by
-    `record-gate.py --verify all`, so a pass whose own final --verify was
-    skipped still records. Returns the list of per-skill results that
-    recorded something."""
-    recorded = []
+    `record-gate.py --verify all`, so a pass whose own --verify was skipped
+    still records, as long as its receipt names HEAD or an ancestor of it.
+
+    Returns {"recorded": [results], "refused": [reasons for receipts that
+    exist but don't count], "error": str or None}."""
+    out = {"recorded": [], "refused": [], "error": None}
     for skill in SWEEP_ORDER:
         result = record_skill_completion(
             skill=skill,
@@ -420,7 +430,12 @@ def sweep_receipts(*, cwd, host, host_version=None):
             require_receipt=True,
         )
         if result.get("recorded"):
-            recorded.append(result)
+            out["recorded"].append(result)
         elif result.get("error"):
+            out["error"] = result["error"]
             break
-    return recorded
+        elif result.get("awaiting_receipt") and "no receipt yet" not in result.get(
+            "reason", ""
+        ):
+            out["refused"].append(result["reason"])
+    return out

@@ -74,7 +74,7 @@ That gate can't be faked from the inside, either. The chain records to a JSON st
 
 `sdlc` and `grumpy`'s commands are written host-neutral on purpose — "spawn a subagent if your harness supports it," never a hardcoded Claude tool call. Every command also ships a generated `SKILL.md`, the shared format Codex CLI, Gemini CLI, Cursor, and Copilot all read.
 
-Codex CLI support is **live-verified**, not inferred from docs: a real `gh pr create` got blocked and a real gate cycle got armed on an actual Codex session, hooks firing the same way they do under Claude Code. One gap is confirmed, not hypothetical — see [`plugins/sdlc/README.md`, "Codex CLI support"](plugins/sdlc/README.md#codex-cli-support). The full cross-agent contract, current state and future shape both, is in [`docs/portable-core.md`](docs/portable-core.md).
+Codex CLI support is **live-verified**, not inferred from docs: a real `gh pr create` got blocked and a real gate cycle got armed on an actual Codex session, hooks firing the same way they do under Claude Code. The one confirmed gap, skill gates never recording because Codex fires no `Skill` event, is closed by receipts: each grumpy pass leaves one and `record-gate.py --verify` records from it — see [`plugins/sdlc/README.md`, "Codex CLI support"](plugins/sdlc/README.md#codex-cli-support). The full cross-agent contract, current state and future shape both, is in [`docs/portable-core.md`](docs/portable-core.md).
 
 ## pi (the coding agent) support
 

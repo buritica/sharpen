@@ -303,16 +303,13 @@ agent-neutral: they name the capability ("spawn independent subagents in
 parallel", "use your harness's task-tracking feature if it has one") rather
 than Claude's own Task/TaskCreate/TaskUpdate tools, and explicitly fall back
 to doing the work sequentially / as a plain checklist on a harness with no
-such primitive. Two spots stay deliberately Claude-Code-specific rather than
+such primitive. One spot stays deliberately Claude-Code-specific rather than
 rewritten to sound portable when they aren't:
 
-- **`gate.md`**'s note on Skill-tool instruction caching (`sdlc` plugin) —
-  a Claude Code prompt-caching quirk, not a general concept.
-- **`dispatch.md`**'s gate-recording claim — invoking a mode via a
-  skill/sub-command dispatch mechanism only actually records a gate today
-  when that mechanism is Claude Code's own `Skill` tool, since the
-  auto-record hook hasn't been ported elsewhere (see `sdlc`'s README, "Codex
-  CLI support").
+- **`dispatch.md`**'s note that dispatching (rather than inlining) a mode
+  matters for gates only on a legacy cycle, where Claude Code's `Skill` hook
+  is the recorder. On a receipt-backed cycle the pass's receipt records the
+  gate on any host.
 
 Every command also has a generated `skills/<name>/SKILL.md` — see `sdlc`'s
 README, "Codex CLI support", for how generation and the CI staleness check
@@ -327,10 +324,12 @@ package whose `pi` manifest exposes `./skills` directly:
 pi install git:...sharpen --dir plugins/grumpy
 ```
 
-It has no extension. The gate chain still works: `/sdlc:gate` reads grumpy's
-`review`/`imagine` reports the same way it does under Claude, and skill-gated
-gates record from the receipt each pass writes (`scripts/receipt.py`, see
-"Receipts" in `docs/pi.md` and sdlc's `gate.md`). In the top-level bundle, grumpy's `audit` skill is
+Its one extension (`extensions/grumpy-env.ts`) only exports
+`GRUMPY_PLUGIN_ROOT`, so each pass can find `scripts/receipt.py`; sdlc's
+extension owns the shared `CLAUDE_PLUGIN_ROOT`. The gate chain still works:
+`/sdlc:gate` reads grumpy's `review`/`imagine` reports the same way it does
+under Claude, and skill-gated gates record from the receipt each pass writes
+(see `docs/pi.md` and sdlc's `gate.md`). In the top-level bundle, grumpy's `audit` skill is
 excluded because pi skill names are flat and sdlc's `audit` wins the collision;
 install grumpy alone for its `audit` skill.
 

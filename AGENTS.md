@@ -106,8 +106,9 @@ ported as pi TypeScript extensions (`extensions/*.ts`) that translate pi lifecyc
 Claude hook payloads the existing `scripts/*.py` read on stdin. **The gate logic stays in the
 python scripts — the TS adapter is a thin spawn-and-map layer, never a reimplementation** (Node
 stdlib only, mirroring the repo's pure-stdlib rule). See `docs/pi.md` for the event mapping, the
-interactive gate-confirmation replication, and the pi-only gaps (no `Skill` tool → `--attest`
-fallback; flat skill names → the sdlc/grumpy `audit` collision).
+interactive gate-confirmation replication, and the pi-only gaps (no `Skill` tool, so skill
+gates record from grumpy receipts via `--verify` and the `agent_end` sweep; flat skill names →
+the sdlc/grumpy `audit` collision).
 
 When a hook script changes, the pi extension needs no change (it only names the script); when a
 plugin's version bumps, `package.json` must bump too. `scripts/check-marketplace.py` enforces the

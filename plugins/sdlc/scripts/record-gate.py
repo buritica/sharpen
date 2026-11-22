@@ -197,7 +197,7 @@ def _verify(target, branch_override):
 
     Host-neutral: this is the same recorder the Claude hooks and the pi
     extension call, so a gate chain on any host runs it after each grumpy
-    pass. It only ever records on a fresh receipt (gate_store.check_receipt),
+    pass. It only ever records on a fresh receipt (gate_receipts.check_receipt),
     which is why block-direct-gate-record lets it through while a bare
     `--record <skill-gate>` stays refused."""
     import os
@@ -212,10 +212,15 @@ def _verify(target, branch_override):
         return 1
     cwd = os.path.realpath(os.getcwd())
     if target == "all":
-        recorded = completion.sweep_receipts(cwd=cwd, host="cli")
-        for r in recorded:
+        swept = completion.sweep_receipts(cwd=cwd, host="cli")
+        for r in swept["recorded"]:
             _log(f"[gate] ✓ {r['gate']} recorded on {r['target']} from its receipt")
-        if not recorded:
+        for reason in dict.fromkeys(swept["refused"]):
+            _log(f"[gate] {reason}")
+        if swept["error"]:
+            _log(f"[gate] error: {swept['error']}")
+            return 1
+        if not swept["recorded"]:
             _log("[gate] no new receipts to record")
         return 0
     skill = target if target.startswith("grumpy:") else f"grumpy:{target}"
@@ -235,7 +240,11 @@ def _verify(target, branch_override):
         for g in result.get("invalidated") or []:
             _log(f"[gate] {g} cleared: {result['gate']} can change code, re-run it")
         return 0
-    _log(f"[gate] {skill} not recorded: {result.get('error') or result.get('reason')}")
+    reason = result.get("error") or result.get("reason") or ""
+    if not result.get("error") and "already recorded" in reason:
+        _log(f"[gate] {skill}: nothing left to record ({reason})")
+        return 0
+    _log(f"[gate] {skill} not recorded: {reason}")
     return 1
 
 

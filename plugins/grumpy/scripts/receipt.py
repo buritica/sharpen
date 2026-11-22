@@ -10,8 +10,8 @@ sdlc gate chain records a skill gate only from a receipt that names the
 branch's current HEAD (`record-gate.py --verify <pass>`), so a pass that was
 loaded but never finished earns nothing, on any host.
 
-Run it as the pass's LAST step. For fix, that means after its commit, so the
-receipt names the commit the fixes landed in.
+Run it as the pass's LAST step, after committing whatever the pass changed, so
+the receipt names the commit the work landed in. A dirty tree is refused.
 
 The format is `schemas/grumpy-receipt.v1.schema.json`. It is a record that the
 work ran, not a security boundary. Pure stdlib.
@@ -39,6 +39,11 @@ def write_receipt(pass_name, worktree="."):
     branch = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
     if branch == "HEAD":
         raise ValueError("detached HEAD: a receipt needs a named branch")
+    if _git(worktree, "status", "--porcelain", "--untracked-files=no"):
+        # The receipt names HEAD. Uncommitted edits (simplify's applied fixes,
+        # fix's leftovers) would land in a later commit the pass never saw,
+        # and that commit would make every gate stale at PR time.
+        raise ValueError("uncommitted changes: commit the pass's edits first")
     root = _git(worktree, "rev-parse", "--show-toplevel")
     head = _git(worktree, "rev-parse", "HEAD")
     directory = os.path.join(root, ".claude", "grumpy", branch, "receipts")

@@ -80,7 +80,10 @@ existing skill bodies run verbatim — no edits to the shared files.
   receipt each grumpy pass writes as its last step, on every host. The gate
   chain runs `python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify
   <pass>` after each pass, and the extension's `agent_end` sweep records any
-  receipt whose `--verify` was skipped. `--attest` remains the reason-required
+  receipt whose `--verify` was skipped (including a review receipt a later
+  fix commit has moved past). grumpy's own extension exports
+  `GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py`; `CLAUDE_PLUGIN_ROOT`
+  is sdlc's under pi. `--attest` remains the reason-required
   fallback for a pass that genuinely couldn't leave a receipt.
 - **Flat skill names → the `audit` collision.** pi skills are flat-named, so
   sdlc's `audit` and grumpy's `audit` cannot coexist in one pi package. The

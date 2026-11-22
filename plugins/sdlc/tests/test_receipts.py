@@ -36,6 +36,7 @@ RECORD = os.path.join(SCRIPTS, "record-gate.py")
 ENFORCE = os.path.join(SCRIPTS, "enforce-sdlc-gates.py")
 AUTO = os.path.join(SCRIPTS, "auto-record-skill-gate.py")
 SWEEP = os.path.join(SCRIPTS, "sweep-skill-receipts.py")
+AUTO_INIT = os.path.join(SCRIPTS, "auto-init-gate-cycle.py")
 BRANCH = "feat/x"
 
 
@@ -120,6 +121,29 @@ class InitTest(ReceiptTestBase):
     def test_cli_init_makes_a_receipt_backed_cycle(self):
         self.assertEqual(self.bd().get("evidence"), "receipts")
 
+    def test_auto_init_makes_a_receipt_backed_cycle(self):
+        store = os.path.join(self.repo, ".sharpen", "data", "auto.json")
+        env = dict(self.env, SDLC_GATES_PATH=store)
+        r = subprocess.run(
+            ["python3", AUTO_INIT],
+            input=json.dumps(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git commit -m x"},
+                    "tool_response": {"exit_code": 0},
+                    "cwd": self.repo,
+                }
+            ),
+            capture_output=True,
+            text=True,
+            cwd=self.repo,
+            env=env,
+        )
+        # Exit 2 is the hook's visible "armed a cycle" notice, not a failure.
+        self.assertIn("armed", r.stderr)
+        with open(store) as f:
+            self.assertEqual(json.load(f)[BRANCH].get("evidence"), "receipts")
+
     def test_opt_out_env_makes_a_legacy_cycle(self):
         self.env["SDLC_GATE_EVIDENCE"] = "events"
         self.cli("--init", "small-medium")
@@ -141,12 +165,45 @@ class VerifyTest(ReceiptTestBase):
         head = git(self.repo, "rev-parse", "HEAD")
         self.assertEqual(self.bd()["evidence_heads"]["grumpy-review"], head)
 
-    def test_receipt_for_an_older_commit_is_refused(self):
+    def test_receipt_for_an_ancestor_records_with_its_own_head(self):
+        # A later pass (fix) commits before the sweep runs; the review
+        # receipt still counts, stamped with the commit it reviewed.
         self.receipt("review")
+        reviewed = git(self.repo, "rev-parse", "HEAD")
         self.commit()
+        r = self.verify("review")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.bd()["evidence_heads"]["grumpy-review"], reviewed)
+
+    def test_receipt_for_a_commit_not_on_the_branch_is_refused(self):
+        self.receipt("review")
+        git(self.repo, "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten")
         r = self.verify("review")
         self.assertEqual(r.returncode, 1)
         self.assertIn("re-run the pass", r.stderr)
+
+    def test_already_recorded_verify_is_not_an_error(self):
+        self.receipt("review")
+        self.verify("review")
+        r = self.verify("review")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nothing left to record", r.stderr)
+
+    def test_verify_all_says_why_a_receipt_on_disk_did_not_count(self):
+        self.receipt("review")
+        git(self.repo, "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten")
+        r = self.verify("all")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("re-run the pass", r.stderr)
+
+    def test_late_review_verify_does_not_strand_the_fix_receipt(self):
+        # Review and fix both finished before anything recorded.
+        self.receipt("review")
+        self.receipt("fix")
+        self.assertEqual(self.verify("review").returncode, 0)
+        r = self.verify("fix")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("grumpy-fix-post-review", self.gates())
 
     def test_receipt_from_before_the_cycle_is_refused(self):
         self.receipt("review")
@@ -166,7 +223,7 @@ class VerifyTest(ReceiptTestBase):
         # The fix receipt on disk predates the imagine stamp.
         r = self.verify("fix")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("predates the grumpy-imagine gate", r.stderr)
+        self.assertIn("predates the grumpy-imagine pass", r.stderr)
         self.receipt("fix")
         self.assertEqual(self.verify("fix").returncode, 0)
         self.assertIn("grumpy-fix-post-imagine", self.gates())
@@ -177,7 +234,7 @@ class VerifyTest(ReceiptTestBase):
         self.verify("review")
         r = self.verify("fix")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("predates the grumpy-review gate", r.stderr)
+        self.assertIn("predates the grumpy-review pass", r.stderr)
 
     def test_verify_all_sweeps_in_chain_order(self):
         for step in ("simplify", "review"):
@@ -198,6 +255,34 @@ class VerifyTest(ReceiptTestBase):
         r = self.cli("--record", "grumpy-review")
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("grumpy-review", self.gates())
+
+
+class RoutedVerifyTest(ReceiptTestBase):
+    """gate.md's --worktree flow: a session in worktree B drives the chain for
+    A's branch. The pass writes its receipt in A; --verify runs from B."""
+
+    def test_verify_from_the_driving_worktree_reads_the_target_receipt(self):
+        driver = os.path.join(tempfile.mkdtemp(), "driver")
+        git(self.repo, "worktree", "add", "-q", "-b", "feat/driver", driver)
+        self.addCleanup(
+            subprocess.run,
+            ["git", "-C", self.repo, "worktree", "remove", "-f", driver],
+            capture_output=True,
+        )
+        r = self.cli(
+            "--init", "small-medium", "--branch", BRANCH, "--route-from", driver
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.receipt("review")  # written in A, for A's branch
+        r = subprocess.run(
+            ["python3", RECORD, "--verify", "review"],
+            capture_output=True,
+            text=True,
+            cwd=driver,
+            env=self.env,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("grumpy-review", self.gates())
 
 
 class HostHookTest(ReceiptTestBase):
@@ -233,6 +318,25 @@ class HostHookTest(ReceiptTestBase):
         self.assertIn("recorded from receipts", r.stdout)
         self.assertIn("simplify", self.gates())
         self.assertIn("grumpy-review", self.gates())
+
+    def test_stop_sweep_records_review_and_fix_after_the_fix_commit(self):
+        # The normal chain with no --verify at all: review, then fix commits,
+        # then the turn ends.
+        self.receipt("review")
+        self.commit("fixes")
+        self.receipt("fix")
+        r = self.hook(SWEEP, {"hook_event_name": "Stop", "cwd": self.repo})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("grumpy-review", self.gates())
+        self.assertIn("grumpy-fix-post-review", self.gates())
+
+    def test_stop_sweep_reports_an_unreadable_store(self):
+        with open(self.store, "w") as f:
+            f.write("{not json")
+        self.receipt("review")
+        r = self.hook(SWEEP, {"hook_event_name": "Stop", "cwd": self.repo})
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("sweep stopped", r.stdout)
 
     def test_stop_sweep_with_nothing_to_do_is_silent(self):
         r = self.hook(SWEEP, {"hook_event_name": "Stop", "cwd": self.repo})
@@ -293,6 +397,36 @@ class EnforceStalenessTest(ReceiptTestBase):
         self.assertIn("stale", r.stderr)
         self.assertIn("grumpy-fix-post-imagine", r.stderr)
 
+    def test_earlier_gates_on_older_heads_are_fine_when_the_last_is_on_head(self):
+        # Fix passes commit, so real chains have a different head per gate.
+        for step in ("simplify", "review"):
+            self.receipt(step)
+            self.assertEqual(self.verify(step).returncode, 0)
+        self.commit("review fixes")
+        for step in ("fix", "imagine"):
+            self.receipt(step)
+            self.assertEqual(self.verify(step).returncode, 0)
+        self.commit("imagine fixes")
+        self.receipt("fix")
+        self.assertEqual(self.verify("fix").returncode, 0)
+        for gate in ("tests", "lint", "typecheck"):
+            self.cli("--record", gate)
+        r = self.pr_create()
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_attested_last_gate_is_not_judged_stale(self):
+        for step in ("simplify", "review", "fix", "imagine"):
+            self.receipt(step)
+            self.assertEqual(self.verify(step).returncode, 0)
+        self.commit("fixes")
+        r = self.cli(
+            "--attest", "grumpy-fix-post-imagine", "--reason", "receipt step failed"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for gate in ("tests", "lint", "typecheck"):
+            self.cli("--record", gate)
+        self.assertEqual(self.pr_create().returncode, 0)
+
     def test_legacy_cycle_is_not_judged_on_staleness(self):
         gs.update_store(self.store, lambda d: gs.init_gates(d, BRANCH, "small-medium"))
         # Skill gates first: the code-mutating ones clear bash gates.
@@ -322,6 +456,15 @@ class ReceiptWriterTest(ReceiptTestBase):
         r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
         self.assertEqual(r.returncode, 1)
         self.assertIn("detached HEAD", r.stderr)
+
+    def test_dirty_tree_is_refused(self):
+        path = os.path.join(self.repo, "f.txt")
+        with open(path, "w") as f:
+            f.write("a\n")
+        git(self.repo, "add", "f.txt")
+        r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("uncommitted changes", r.stderr)
 
     def test_unknown_pass_is_refused(self):
         r = self.run_py(GRUMPY_RECEIPT, "audit", "--worktree", self.repo)

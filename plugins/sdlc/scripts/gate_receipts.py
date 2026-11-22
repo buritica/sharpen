@@ -38,10 +38,11 @@ RECEIPT_NAME_FOR_SKILL = {
     "grumpy:imagine": "imagine",
     "grumpy:fix": "fix",
 }
-# The gate a fix receipt must be newer than.
+# Fix gate -> (the gate it follows, that pass's receipt name). A fix receipt
+# must be newer than the receipt of the pass it follows.
 _FIX_PREDECESSOR = {
-    "grumpy-fix-post-review": "grumpy-review",
-    "grumpy-fix-post-imagine": "grumpy-imagine",
+    "grumpy-fix-post-review": ("grumpy-review", "review"),
+    "grumpy-fix-post-imagine": ("grumpy-imagine", "imagine"),
 }
 # `SDLC_GATE_EVIDENCE=events` makes new cycles legacy (event-only) cycles.
 # A migration and test escape hatch, not a recommended mode.
@@ -107,46 +108,89 @@ def _parse_ts(value):
     return ts
 
 
-def check_receipt(path, *, skill, gate, branch, head, branch_data):
-    """Return None when the receipt at `path` earns `gate`, else the reason.
-
-    A receipt earns a gate when it exists, is for this skill and branch,
-    names the branch's current `head`, was written after the cycle started,
-    and (for a fix gate) after the gate it follows. Freshness is what keeps a
-    receipt left over from an earlier cycle, or the first fix's receipt, from
-    earning a later gate."""
+def read_receipt(path):
+    """The receipt at `path` as a dict, or (None, reason)."""
     if not path or not os.path.isfile(path):
-        return f"no receipt yet at {path}" if path else "no receipt location"
+        return None, (f"no receipt yet at {path}" if path else "no receipt location")
     try:
         with open(path) as f:
             receipt = json.load(f)
     except (OSError, ValueError) as e:
-        return f"receipt at {path} is unreadable ({e})"
+        return None, f"receipt at {path} is unreadable ({e})"
     if not isinstance(receipt, dict):
-        return f"receipt at {path} is not a JSON object"
+        return None, f"receipt at {path} is not a JSON object"
+    return receipt, None
+
+
+def _predecessor_written(path, gate, branch_data):
+    """When the pass a fix gate follows wrote ITS receipt (sibling file), or
+    that gate's stamp when no such receipt is on disk. Comparing against the
+    predecessor's receipt, not its stamp, keeps a late --verify or a sweep
+    that records review AFTER fix finished from refusing the fix receipt."""
+    if gate not in _FIX_PREDECESSOR:
+        return None, None
+    before, name = _FIX_PREDECESSOR[gate]
+    sibling, _ = read_receipt(os.path.join(os.path.dirname(path), f"{name}.json"))
+    ts = _parse_ts((sibling or {}).get("written_at"))
+    if ts is None:
+        ts = _parse_ts((branch_data or {}).get("gates", {}).get(before))
+    return before, ts
+
+
+def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=()):
+    """Return (receipt_head, None) when the receipt at `path` earns `gate`,
+    else (None, reason).
+
+    A receipt earns a gate when it is for this skill and branch, names the
+    branch's current `head` or a commit in `reachable` (ancestors of it the
+    caller already checked with git: a later pass such as fix commits before
+    the sweep runs), was written after the cycle started, and (for a fix gate)
+    after the receipt of the pass it follows. The gate is stamped with the
+    receipt's head; enforce then requires the LAST skill gate to sit on HEAD."""
+    receipt, reason = read_receipt(path)
+    if reason:
+        return None, reason
     if receipt.get("protocol_version") != RECEIPT_PROTOCOL:
-        return f"receipt at {path} has an unknown protocol_version"
+        return None, f"receipt at {path} has an unknown protocol_version"
     if receipt.get("skill") != RECEIPT_NAME_FOR_SKILL.get(skill):
-        return f"receipt at {path} is for {receipt.get('skill')!r}, not {skill}"
+        return None, f"receipt at {path} is for {receipt.get('skill')!r}, not {skill}"
     if receipt.get("branch") != branch:
-        return f'receipt at {path} is for branch "{receipt.get("branch")}"'
-    if not head or receipt.get("head") != head:
-        return (
-            f"receipt at {path} reviewed {str(receipt.get('head'))[:12]}, but "
-            f"{branch} is now at {str(head)[:12]} — re-run the pass"
+        return None, f'receipt at {path} is for branch "{receipt.get("branch")}"'
+    rhead = receipt.get("head")
+    if not head or not rhead or (rhead != head and rhead not in reachable):
+        return None, (
+            f"receipt at {path} reviewed {str(rhead)[:12]}, which is not on "
+            f"{branch} at {str(head)[:12]}, re-run the pass"
         )
     written = _parse_ts(receipt.get("written_at"))
     if written is None:
-        return f"receipt at {path} has no valid written_at"
+        return None, f"receipt at {path} has no valid written_at"
     started = _parse_ts((branch_data or {}).get("created_at"))
     if started and written < started:
-        return f"receipt at {path} predates this gate cycle"
-    before = _FIX_PREDECESSOR.get(gate)
-    if before:
-        prior = _parse_ts((branch_data or {}).get("gates", {}).get(before))
-        if prior and written <= prior:
-            return f"receipt at {path} predates the {before} gate it must follow"
-    return None
+        return None, f"receipt at {path} predates this gate cycle"
+    before, prior = _predecessor_written(path, gate, branch_data)
+    if prior and written <= prior:
+        return None, f"receipt at {path} predates the {before} pass it must follow"
+    return rhead, None
+
+
+def receipt_heads(worktree_root, branch, head, cwd=None):
+    """Receipt heads on disk for `branch` that are strict ancestors of
+    `head`. Runs git, so call it before taking the store lock."""
+    found = set()
+    for skill in RECEIPT_NAME_FOR_SKILL:
+        receipt, _ = read_receipt(receipt_path(worktree_root, branch, skill))
+        rhead = (receipt or {}).get("head")
+        if isinstance(rhead, str) and rhead and rhead != head:
+            found.add(rhead)
+    reachable = set()
+    for sha in found:
+        try:
+            gs._git("merge-base", "--is-ancestor", sha, head, cwd=cwd or worktree_root)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        reachable.add(sha)
+    return frozenset(reachable)
 
 
 def worktree_heads(cwd=None):
@@ -177,12 +221,18 @@ def stale_skill_gates(branch_data, head):
     Only receipt-backed cycles carry evidence heads; anything else returns
     []. The rule is strict: once the last recorded skill gate's head differs
     from the branch's head, a commit landed after the review chain, and every
-    skill gate stamped against an older head is stale."""
+    skill gate stamped against an older head is stale. Earlier gates on older
+    heads are normal (fix commits), so only the last one decides."""
     if not uses_receipts(branch_data) or not head:
         return []
     heads = branch_data.get(EVIDENCE_HEADS_KEY, {})
     gates = branch_data.get("gates", {})
-    stamped = [g for g in SKILL_GATE_ORDER if gates.get(g) and heads.get(g)]
-    if not stamped or heads[stamped[-1]] == head:
+    recorded = [g for g in SKILL_GATE_ORDER if gates.get(g)]
+    # A last gate with no head was attested (--attest): a person vouched for
+    # it, so there is nothing to compare. Judging by the gate before it would
+    # block a PR the person just unblocked.
+    attested = branch_data.get("attestations") or {}
+    last = recorded[-1] if recorded else None
+    if not last or last in attested or not heads.get(last) or heads[last] == head:
         return []
-    return [g for g in stamped if heads[g] != head]
+    return [g for g in recorded if heads.get(g) and heads[g] != head]

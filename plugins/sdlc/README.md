@@ -108,15 +108,15 @@ Non-Claude hosts can use the same gate evidence with a v1 capability manifest. T
 
 On a named feature branch with an initialized gate cycle, run `python3 plugins/sdlc/scripts/generic_adapter.py capabilities.json`. It executes the selected profile's commands and attaches a validated, synthetic review report to the gate store. `local_llm_adapter.py` uses the same manifest and gates, then delegates a diff review to an OpenAI-compatible local endpoint; set `LOCAL_LLM_URL` and optionally `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`. For this adapter, declared `review` is fulfilled by the delegated LLM rather than an `x-host-command-map.review` command. A failed gate, invalid or failed delegated review, or inability to attach the report exits non-zero; attaching a report never marks a gate complete.
 
-The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
+The `scripts/` are stdlib python (`gate_store.py`, `gate_receipts.py`, `shell_parse.py` and six hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
 
 - `gate_store.py` — the store plus the rules. `record_gate()` refuses a skill-gated gate unless the caller passes `authorized=True`, so the rule holds for every caller that goes through it: the CLI, the hooks, an inline `python3 -c` that imports the module. A direct write to `gates.json` still bypasses it — the guard is against an agent talking itself past its own process gate, not against an adversary.
-- `gate_receipts.py` — receipt-backed evidence: where a grumpy pass's receipt lives, whether it earns a gate (right branch, current HEAD, newer than the cycle and than the gate it follows), and which review gates went stale after a later commit.
+- `gate_receipts.py` — receipt-backed evidence: where a grumpy pass's receipt lives, whether it earns a gate (right branch, a commit on it, newer than the cycle and than the receipt of the pass it follows), and which review gates went stale after a later commit.
 - `record-gate.py` (CLI) — `--init`/`--record`/`--verify`/`--status`/`--oneline`; the locked read-modify-write that `/sdlc:gate` drives. `--verify <pass>` records a skill gate from the receipt its grumpy pass left, on any host.
 - `enforce-sdlc-gates.py` (PreToolUse) — blocks `gh pr create` until all required gates for the branch's tier pass. On a receipt-backed cycle it also blocks when a commit has landed since the last review gate, naming the stale gates. Opt-in: no cycle for the branch → allowed; an unreadable store fails closed.
 - `block-direct-gate-record.py` (PreToolUse) — blocks manual `--record` of skill-gated gates (`simplify`, `grumpy-*`) before the command runs, with a message pointing at the skill, and blocks hand-driving `auto-record-skill-gate.py`. It reads argv via `shell_parse.py`, so wrapped forms are caught; anything it can't resolve is left to the store, which refuses it there.
-- `auto-record-skill-gate.py` (PostToolUse Skill) — records the matching gate after `/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, `/grumpy:fix`. The only caller that passes `authorized=True`. It skips when the Skill call itself reported an error, and redirects (rather than silently no-oping) a stale invocation of an old, renamed skill name (`gate_store.RENAMED_SKILLS`). Note what it can and cannot attest: PostToolUse fires when the *tool* returns, and a Skill call returns the skill's instructions — so this proves the skill was invoked, not that the agent then followed it. The guard stops an agent talking itself past its own process gate; it is not adversarial. When the current branch has no cycle it will adopt a cycle from another checked-out branch only if there is exactly one candidate — a gate stamped on the wrong branch cannot be corrected. Recording `simplify` or either fix gate also clears any already-recorded `tests`/`lint`/`typecheck` (`gate_store.CODE_MUTATING_GATES`) — those three pass by editing code, so a bash-gate stamp from before the edit no longer verifies anything, and the hook surfaces the clear loudly rather than leaving it to `--status` to notice later. **Receipt-backed cycles** (every cycle created since 4.14.0): the Skill event fires when the instructions load, before the work, so it records only when the pass's receipt already exists; in practice `--verify` or the Stop sweep records the gate.
-- `sweep-skill-receipts.py` (Stop; pi `agent_end`) — at the end of each turn, records every skill gate whose grumpy receipt is already on disk and names the branch's HEAD. Never blocks, never touches a legacy cycle.
+- `auto-record-skill-gate.py` (PostToolUse Skill) — records the matching gate after `/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, `/grumpy:fix`. On a receipt-backed cycle it records only once the pass's receipt exists; `--verify` and the receipt sweep reach the same `authorized=True` recorder. It skips when the Skill call itself reported an error, and redirects (rather than silently no-oping) a stale invocation of an old, renamed skill name (`gate_store.RENAMED_SKILLS`). Note what it can and cannot attest: PostToolUse fires when the *tool* returns, and a Skill call returns the skill's instructions — so this proves the skill was invoked, not that the agent then followed it. The guard stops an agent talking itself past its own process gate; it is not adversarial. When the current branch has no cycle it will adopt a cycle from another checked-out branch only if there is exactly one candidate — a gate stamped on the wrong branch cannot be corrected. Recording `simplify` or either fix gate also clears any already-recorded `tests`/`lint`/`typecheck` (`gate_store.CODE_MUTATING_GATES`) — those three pass by editing code, so a bash-gate stamp from before the edit no longer verifies anything, and the hook surfaces the clear loudly rather than leaving it to `--status` to notice later. **Receipt-backed cycles** (every cycle created since 4.14.0): the Skill event fires when the instructions load, before the work, so it records only when the pass's receipt already exists; in practice `--verify` or the Stop sweep records the gate.
+- `sweep-skill-receipts.py` (Stop; pi `agent_end`) — at the end of each turn, records every skill gate whose grumpy receipt is already on disk and names the branch's HEAD or an ancestor of it (a later fix may have committed). It says so when the store can't be read. Never blocks, never touches a legacy cycle.
 - `auto-init-gate-cycle.py` (PostToolUse Bash) — starts a gate cycle on the first `git commit` to a non-default branch, which is what makes enforcement opt-out rather than opt-in. Defaults to `small-medium`, auto-downgraded to `tiny` when every file changed since `main`/`master` confidently matches a docs/text/asset allowlist (conservative by construction — an unrecognized extension or an undeterminable diff keeps `small-medium`). It announces the arming (exit 2 — visible, non-blocking; the commit already ran), because for anyone who never runs `/sdlc:gate` that is the only notice of which tier landed and how to widen or narrow it. A commit that leaves the branch with *no* cycle says so the same way; genuinely routine outcomes stay quiet.
 
 `hooks/hooks.json` is auto-loaded when the plugin is installed. Run the suite with `python3 tests/test_gate.py` from this directory, or `python3 scripts/run-tests.py` from the marketplace repo root to run every plugin's tests.
@@ -185,10 +185,9 @@ command in `sdlc`, `grumpy`, and `sdlc-guardrails` has been rewritten to
 describe the capability conditionally instead (spawn a subagent if your
 harness supports it, otherwise do the work yourself sequentially) — see
 [`../grumpy/README.md`](../grumpy/README.md), "Portability beyond Claude
-Code", for the two spots (`gate.md`'s Skill-tool-caching note, and
-`dispatch.md`'s gate-recording claim) that stay explicitly Claude-Code-only
-rather than being rewritten to sound portable when the underlying mechanism
-isn't.
+Code", for the one spot (`dispatch.md`'s legacy-cycle gate-recording note)
+that stays explicitly Claude-Code-only rather than being rewritten to sound
+portable when the underlying mechanism isn't.
 
 **Every `commands/<name>.md` also has a generated `skills/<name>/SKILL.md`**
 — the cross-host format Codex CLI, Gemini CLI, Cursor, and Copilot all read
@@ -263,7 +262,8 @@ existing script, and maps its exit code / stderr back to a pi decision:
 | `SessionStart` | `session_start` | run `claude-session-start.py` |
 | `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` + `block-direct-gate-record.py`; block on non-zero exit |
 | `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
-| `PostToolUse` Skill | — | no pi equivalent — see the attest fallback below |
+| `Stop` | `agent_end` | run `sweep-skill-receipts.py`; surface its notice |
+| `PostToolUse` Skill | — | not needed: skill gates record from receipts |
 
 **Gate confirmations are replicated, not dropped.** When a hook denies (e.g. an
 ungated `gh pr create`), pi shows an interactive confirmation with the reason
@@ -282,16 +282,17 @@ this plugin alone). The pi manifest is `package.json`'s `pi` key; the top-level
 the pi manifest's version in sync with `plugin.json` and verifies every hook
 script the extension references still exists.
 
-**Same skill-gate gap as Codex**: pi has no `Skill` tool, so
-`auto-record-skill-gate.py` cannot fire and gates 2–6 record via the documented
-`record-gate.py --attest <gate> --reason "<text>"` fallback (marked unverified
-in `--status`, exactly as in Claude). See [`docs/pi.md`](../../docs/pi.md) for
+**No `Skill` tool, and gates 2–6 still record**: each grumpy pass writes a
+receipt, the gate chain runs `record-gate.py --verify <pass>`, and the
+`agent_end` sweep catches a skipped one. grumpy's own pi extension exports
+`GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py` (sdlc's extension owns
+`CLAUDE_PLUGIN_ROOT`). `--attest` stays the last resort. See [`docs/pi.md`](../../docs/pi.md) for
 the full contract and the flat-name `audit` skill collision in the top-level
 bundle.
 
 ## Composability
 
-- **grumpy** installed? Gates 3-6 use `/grumpy:review`, `/grumpy:fix`, `/grumpy:imagine`. Without grumpy, the agent performs self-review and announces the fallback at the start of the gate — but note that self-review **cannot record** gates 3-6: only the auto-record hook can, when the skill actually runs. With the hooks registered and grumpy absent, a `small-medium`/`significant` cycle cannot complete, so install grumpy or use the `tiny` cycle where it genuinely applies.
+- **grumpy** installed? Gates 3-6 use `/grumpy:review`, `/grumpy:fix`, `/grumpy:imagine`. Without grumpy, the agent performs self-review and announces the fallback at the start of the gate — but note that self-review **cannot record** gates 3-6: they record only from the receipt a real grumpy pass leaves. With the hooks registered and grumpy absent, a `small-medium`/`significant` cycle cannot complete, so install grumpy or use the `tiny` cycle where it genuinely applies.
 - **sdlc hooks registered** (from `hooks/hooks.json`)? `gh pr create` is blocked until all required gates pass for the current branch. Without hooks, the gate chain is advisory.
 - **sdlc-guardrails** installed? Adds opt-in main-branch commit protection (independent of gate tracking, which this plugin owns).
 - Works with any language/framework — auto-detects toolchain from lock files and config.

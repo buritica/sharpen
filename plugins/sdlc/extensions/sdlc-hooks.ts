@@ -17,7 +17,8 @@
  *   PostToolUse Skill -> no pi equivalent (no Skill tool). Skill-gated gates
  *                        record from grumpy receipts: the gate chain runs
  *                        `record-gate.py --verify <skill>` after each pass,
- *                        and the agent_end sweep catches a skipped one.
+ *                        and the agent_end sweep records any receipt on HEAD
+ *                        or an ancestor of it.
  *
  * The gate confirmation: when a PreToolUse hook denies, Claude shows an
  * interactive modal with the reason and lets a human confirm. pi replicates
