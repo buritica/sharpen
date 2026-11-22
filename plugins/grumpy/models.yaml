@@ -35,8 +35,10 @@
 #           calls when --provider openai is given no --model. Checked against
 #           developers.openai.com/api/docs/models on 2026-11-22. Which id suits
 #           which role is UNVERIFIED until scripts/bench-grumpy.py has measured
-#           it. oneshot.py reads only `analysis`; a `compatible` server (Ollama
-#           and the like) has no column, because its models are the user's own.
+#           it. oneshot.py reads only `analysis`, and --model, SHARPEN_LLM_MODEL
+#           and an sdlc adapter manifest's provider.model all beat it. A
+#           `compatible` server (Ollama and the like) has no column, because its
+#           models are the user's own.
 # pi has no column: it can't choose a model per subagent either, and the
 # provider is the user's choice, so pi runs everything on the session's model.
 

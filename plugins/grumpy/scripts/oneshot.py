@@ -48,12 +48,18 @@ SHARPEN_LLM_MODEL beats the map. Keys are read from the environment only and
 never written to the report, the receipt or any log line; provider error text
 is redacted before it is printed.
 
-Exit codes: 0 report saved and receipt written; 1 the pass ran but earned
-nothing (empty diff, failed calls, unusable report, receipt refused);
-2 usage, configuration or extraction error. Pure stdlib.
+Exit codes: 0 report saved and receipt written. 1 the pass earned nothing:
+a dirty tree, an empty diff, a git failure, any finding pass that failed or
+answered in prose (the report is saved so you can read it, but no receipt),
+an unusable aggregation, HEAD moving during the run, or a refused receipt.
+2 usage or configuration: unknown flag, provider or aspect, no key, no model,
+a detached HEAD or the default branch, a provider that rejects the request
+as unauthorized or unknown (400/401/403/404), or an extraction error.
+Pure stdlib.
 """
 
 import concurrent.futures
+import http.client
 import json
 import os
 import re
@@ -115,7 +121,14 @@ class ExtractionError(ValueError):
 
 
 class ProviderError(RuntimeError):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+# A provider answering with one of these won't do better on a retry or for
+# another pass: the key, the model or the URL is wrong. That's setup (exit 2).
+SETUP_STATUSES = (400, 401, 403, 404)
 
 
 # --- reading the command ----------------------------------------------------
@@ -274,7 +287,11 @@ def model_from_map(worktree, column="openai", role="analysis"):
     with open(os.path.join(PLUGIN_ROOT, "models.yaml"), encoding="utf-8") as f:
         model = parse_models(f.read()).get(role, {}).get(column)
     note = ""
-    override = os.path.join(worktree, ".sharpen", "models.yaml")
+    try:
+        root = _git(worktree, "rev-parse", "--show-toplevel").strip()
+    except (OSError, subprocess.CalledProcessError):
+        root = worktree
+    override = os.path.join(root, ".sharpen", "models.yaml")
     if os.path.exists(override):
         try:
             with open(override, encoding="utf-8") as f:
@@ -326,29 +343,49 @@ class ChatClient:
         headers = {"Content-Type": "application/json"}
         if self._key:
             headers["Authorization"] = f"Bearer {self._key}"
-        last = None
+        last, status = None, None
         for attempt in range(attempts):
             req = urllib.request.Request(self.url, data=body, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     return _content(json.load(resp))
             except urllib.error.HTTPError as e:
-                snippet = e.read(500).decode("utf-8", "replace")
-                last = f"HTTP {e.code}: {snippet}"
+                status = e.code
+                last = f"HTTP {e.code}: {_snippet(e)}"
                 if e.code != 429 and e.code < 500:
                     break
-            except (urllib.error.URLError, OSError, ValueError) as e:
-                last = f"{type(e).__name__}: {e}"
+            except (
+                urllib.error.URLError,
+                http.client.HTTPException,
+                OSError,
+                ValueError,
+            ) as e:
+                # HTTPException covers a truncated body (IncompleteRead) and a
+                # dropped connection; ValueError a body that isn't JSON or an
+                # answer cut short. All of them are worth one retry.
+                status, last = None, f"{type(e).__name__}: {e}"
             if attempt + 1 < attempts:
                 time.sleep(2 * (attempt + 1))
-        raise ProviderError(redact(f"{self.provider}: {last}", [self._key]))
+        raise ProviderError(redact(f"{self.provider}: {last}", [self._key]), status)
+
+
+def _snippet(error):
+    try:
+        return error.read(500).decode("utf-8", "replace")
+    except (http.client.HTTPException, OSError):
+        return "(no readable body)"
 
 
 def _content(data):
+    """The answer's text. An answer the provider cut short (`finish_reason`
+    length or content_filter) is an error, not a short review."""
     try:
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise ValueError("response has no choices[0].message.content") from None
+    if choice.get("finish_reason") in ("length", "content_filter"):
+        raise ValueError(f"answer cut short (finish_reason {choice['finish_reason']})")
     if isinstance(content, list):  # content parts
         content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
     if not isinstance(content, str):
@@ -360,34 +397,44 @@ def _content(data):
 
 
 def _git(wt, *args):
+    # errors="replace": one latin-1 file in the diff must not end the review.
     return subprocess.check_output(
-        ["git", "-C", wt, *args], stderr=subprocess.DEVNULL, text=True
+        ["git", "-C", wt, *args],
+        stderr=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
 def resolve_diff(wt, require_clean=True):
-    """(base, diff, files). Same base as the command; the tree must be clean,
-    because the receipt names HEAD and the review must be of HEAD."""
-    if (
-        require_clean
-        and _git(wt, "status", "--porcelain", "--untracked-files=no").strip()
-    ):
-        raise ValueError("uncommitted changes: commit first (the receipt names HEAD)")
+    """(base, head sha, diff, files). Same base as the command. The tree must
+    be clean, and the diff is taken at a fixed sha: the receipt must name the
+    commit that was reviewed, so `run` refuses it if HEAD moved meanwhile."""
+    if require_clean:
+        receipt.require_clean(wt)
+    head = _git(wt, "rev-parse", "HEAD").strip()
     base, _why = diff_base.resolve(wt)
     if not base:
         base = "HEAD~1"
-    diff = _git(wt, "diff", f"{base}...HEAD")[:DIFF_CAP]
-    names = _git(wt, "diff", "--name-only", f"{base}...HEAD").split()
-    return base, diff, names
+        _log("no branch base resolved: reviewing the last commit only (HEAD~1)")
+    diff = _git(wt, "diff", f"{base}...{head}")[:DIFF_CAP]
+    names = [
+        n
+        for n in _git(wt, "diff", "-z", "--name-only", f"{base}...{head}").split("\0")
+        if n
+    ]
+    return base, head, diff, names
 
 
-def changed_files_text(wt, names):
+def changed_files_text(wt, names, head="HEAD"):
     out, total = [], 0
     for name in names:
         try:
-            text = _git(wt, "show", f"HEAD:{name}")
-        except (subprocess.CalledProcessError, UnicodeDecodeError):
-            continue  # deleted or binary
+            text = _git(wt, "show", f"{head}:{name}")
+        except subprocess.CalledProcessError:
+            continue  # deleted
+        if "\0" in text:
+            continue  # binary
         text = text[:FILE_CAP]
         if total + len(text) > FILES_CAP:
             out.append(f"--- {name} (omitted: context cap reached)")
@@ -398,10 +445,12 @@ def changed_files_text(wt, names):
 
 
 def settled_entries(wt, branch):
-    """The `## Settled` entries of fix.md, new folder and legacy, as Step 4 reads them."""
+    """The `## Settled` entries of fix.md, as Step 4 reads them: the new
+    folder's, or the legacy `.claude/grumpy/` one only when the new file is
+    missing (a migrated fix.md carries its settled entries along)."""
     root = _git(wt, "rev-parse", "--show-toplevel").strip()
     entries = []
-    for folder in (receipt.GRUMPY_ROOT, (".claude", "grumpy")):
+    for folder in (receipt.GRUMPY_ROOT, receipt.LEGACY_GRUMPY_ROOT):
         path = os.path.join(root, *folder, branch, "fix.md")
         try:
             with open(path, encoding="utf-8") as f:
@@ -414,6 +463,7 @@ def settled_entries(wt, branch):
                     break
                 if line.startswith("- "):
                     entries.append(line)
+        break  # the new file wins; the legacy one is only a fallback
     return entries
 
 
@@ -586,15 +636,20 @@ def configure(args, env):
 
 
 def select_aspects(parts, wanted):
-    names = wanted.split(",") if wanted else None
-    aspects = [(n, d) for n, d in parts["aspects"] if not names or n in names]
-    if not aspects:
-        raise Stop(2, f"no known aspect in {wanted!r}")
-    return aspects
+    known = [n for n, _ in parts["aspects"]]
+    names = [n.strip() for n in wanted.split(",") if n.strip()] if wanted else known
+    unknown = [n for n in names if n not in known]
+    if unknown or not names:
+        raise Stop(
+            2, f"unknown aspect(s) {unknown or wanted!r} (known: {', '.join(known)})"
+        )
+    return [(n, d) for n, d in parts["aspects"] if n in names]
 
 
 def run_passes(client, model, passes, jobs, timeout):
-    """{aspect: (lines, errored, failure)}, in parallel; Stop(1) if every call failed."""
+    """{aspect: (lines, errored, failure)}, in parallel. Stop(2) when the
+    provider rejected the request as setup (key, model, URL); Stop(1) when
+    every call failed."""
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         futures = {
@@ -605,6 +660,8 @@ def run_passes(client, model, passes, jobs, timeout):
             try:
                 results[name] = (*parse_pass_lines(fut.result()), None)
             except ProviderError as e:
+                if e.status in SETUP_STATUSES:
+                    raise Stop(2, f"the provider rejected the request: {e}") from None
                 results[name] = ([], False, str(e))
                 _log(f"pass {name} failed: {e}")
     if all(r[2] for r in results.values()):
@@ -626,15 +683,19 @@ def save_report(wt, branch, pass_name, report):
 def run(args, env):
     wt, pass_name = args["worktree"], args["pass"]
     provider, parts, model, note = configure(args, env)
+    aspects = select_aspects(parts, args["aspects"])
     try:
-        branch = _git(wt, "rev-parse", "--abbrev-ref", "HEAD").strip()
-        base, diff, names = resolve_diff(wt, require_clean=not args["dry_run"])
-    except (ValueError, subprocess.CalledProcessError) as e:
+        # Before any paid call: the receipt would refuse these anyway.
+        branch = receipt.named_branch(wt)
+    except (ValueError, OSError, subprocess.CalledProcessError) as e:
+        raise Stop(2, f"no review: {e}") from None
+    try:
+        base, head, diff, names = resolve_diff(wt, require_clean=not args["dry_run"])
+    except (ValueError, OSError, subprocess.CalledProcessError) as e:
         raise Stop(1, f"no review: {e}") from None
     if not diff.strip():
         raise Stop(1, f"nothing to review against {base}")
-    aspects = select_aspects(parts, args["aspects"])
-    files_text = changed_files_text(wt, names)
+    files_text = changed_files_text(wt, names, head)
     model_line = f"_Model: {model} via {provider} (one-shot, no agent){'; ' + note if note else ''}_"
     passes = {n: pass_messages(parts, n, d, base, diff, files_text) for n, d in aspects}
     if args["dry_run"]:
@@ -662,7 +723,26 @@ def run(args, env):
         )
     except (ProviderError, ValueError) as e:
         raise Stop(1, f"aggregation failed: {e}. No report, no receipt") from None
-    _log(f"report saved: {save_report(wt, branch, pass_name, report)}")
+    try:
+        _log(f"report saved: {save_report(wt, branch, pass_name, report)}")
+    except OSError as e:
+        raise Stop(1, f"report not saved: {e}") from None
+    incomplete = sorted(
+        n for n, (_, errored, failure) in results.items() if errored or failure
+    )
+    if incomplete:
+        # A review with an aspect missing isn't the review gate 3 asks for.
+        raise Stop(
+            1,
+            f"aspect(s) {', '.join(incomplete)} failed or answered in prose: the "
+            "report is saved for reading, but no receipt. Re-run to earn the gate",
+        )
+    try:
+        moved = _git(wt, "rev-parse", "HEAD").strip() != head
+    except (OSError, subprocess.CalledProcessError):
+        moved = True
+    if moved:
+        raise Stop(1, f"HEAD moved during the run (reviewed {head[:12]}): no receipt")
     executor = {"host": EXECUTOR_HOST, "provider": provider, "model": model}
     try:
         rpath, _ = receipt.write_receipt(pass_name, wt, executor=executor)

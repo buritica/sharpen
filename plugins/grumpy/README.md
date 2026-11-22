@@ -72,7 +72,8 @@ agent and escalating one tier on a failed `accept:` check:
 The role→model map lives in `models.yaml`. Each role has the Anthropic API id,
 the Claude Code alias passed to subagents (`opus`, `sonnet`, `haiku`), and the
 model to start a Codex session on, since Codex (like pi) can't pick a model per
-subagent. Review runs its finding passes on the `analysis` role; imagine stays
+subagent, plus the OpenAI API id the no-agent path calls (`openai`, see "No agent
+installed"). Review runs its finding passes on the `analysis` role; imagine stays
 on the session's model until a larger benchmark run settles which model suits
 it; fix routes by `exec:` tier; audit dispatches its dimension reviews on
 `analysis`. A repo can override single values in a committed
@@ -433,8 +434,10 @@ python3 <grumpy>/scripts/oneshot.py review --provider compatible --model <a mode
 ```
 
 `<grumpy>` is the grumpy plugin folder: a clone of sharpen's `plugins/grumpy`, or the
-installed plugin's cache folder. Commit first: the pass reviews `HEAD` and refuses a dirty
-tree. `--dry-run` prints every prompt it would send and calls nothing; `--aspects` picks
+installed plugin's cache folder. Arm a gate cycle first if you want the gate
+(`python3 <sdlc>/scripts/record-gate.py --init small-medium`), or `--verify review` has
+nothing to record into. Commit first: the pass reviews `HEAD`, refuses a dirty tree, and
+refuses a detached HEAD or the default branch before it calls anything. `--dry-run` prints every prompt it would send and calls nothing; `--aspects` picks
 review aspects; `--worktree` points it at another checkout. sdlc's `openai_adapter.py` and
 `local_llm_adapter.py` run the gate commands from a capability manifest and then this.
 
@@ -467,9 +470,20 @@ use `--provider compatible`. The key is read from the environment only: it is ne
 to the report, the receipt or a log line, and provider error text is redacted before it is
 printed.
 
-Exit codes: 0 report and receipt written; 1 the pass earned nothing (empty diff, failed
-calls, unusable report, refused receipt); 2 setup error (no key, no model, extraction
-failed).
+**It earns the gate only for a complete review.** If any aspect's call fails or answers in
+prose instead of finding lines, the report is still saved so you can read it, but no receipt
+is written: re-run to earn gate 3. The receipt names the commit that was diffed, and the run
+refuses it if `HEAD` moved meanwhile.
+
+The model: `--model`, else `SHARPEN_LLM_MODEL`, else (from sdlc's adapters) the manifest's
+`provider.model`, else `models.yaml`'s `analysis.openai` for `--provider openai`.
+`compatible` has no default.
+
+Exit codes: 0 report and receipt written. 1 the pass earned nothing: a dirty tree, an empty
+diff, a git failure, an aspect that failed or answered in prose, an unusable aggregation,
+`HEAD` moving during the run, or a refused receipt. 2 setup: an unknown flag, provider or
+aspect, no key, no model, a detached `HEAD` or the default branch, a provider that rejects the
+request as unauthorized or unknown (400, 401, 403, 404), or an extraction error.
 
 ## Upgrading
 

@@ -29,7 +29,9 @@ sys.path.insert(0, SCRIPTS)
 import oneshot  # noqa: E402
 
 BRANCH = "feature/x"
-KEY = "sk-test-0123456789abcdef"
+# Not shaped like a key, so only the explicit redaction of the configured key
+# can hide it, never the key-shape regex.
+KEY = "Zq9plainsecret0123456789"
 REPORT = """# Code Review: a thing
 
 _Model: whatever the model claims_
@@ -251,21 +253,38 @@ class HelperTest(unittest.TestCase):
 
 class Handler(BaseHTTPRequestHandler):
     calls = []
-    status = 200
+    status = 200  # or callable(prompt, call number) -> status
     reply = None  # callable(prompt) -> content
+    finish = "stop"
+    truncate = 0  # this many calls get a body shorter than Content-Length
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         Handler.calls.append({"auth": self.headers.get("Authorization"), "body": body})
-        if Handler.status != 200:
+        prompt = body["messages"][-1]["content"]
+        status = Handler.status
+        if callable(status):
+            status = status(prompt, len(Handler.calls))
+        if status != 200:
             payload = json.dumps({"error": f"Incorrect API key provided: {KEY}"})
         else:
-            content = Handler.reply(body["messages"][-1]["content"])
-            payload = json.dumps({"choices": [{"message": {"content": content}}]})
-        self.send_response(Handler.status)
+            choice = {
+                "message": {"content": Handler.reply(prompt)},
+                "finish_reason": Handler.finish,
+            }
+            payload = json.dumps({"choices": [choice]})
+        data = payload.encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        if Handler.truncate > 0:
+            Handler.truncate -= 1
+            self.send_header("Content-Length", str(len(data) + 100))
+            self.end_headers()
+            self.wfile.write(data[:10])
+            return
+        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(payload.encode())
+        self.wfile.write(data)
 
     def log_message(self, *args):
         pass
@@ -280,6 +299,7 @@ def default_reply(prompt):
 class _Repo(unittest.TestCase):
     def setUp(self):
         Handler.calls, Handler.status, Handler.reply = [], 200, default_reply
+        Handler.finish, Handler.truncate = "stop", 0
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -359,16 +379,72 @@ class RunTest(_Repo):
         for text in (report, json.dumps(rec), r.stderr, r.stdout):
             self.assertNotIn(KEY, text)
 
-    def test_provider_error_is_redacted_and_earns_nothing(self):
+    def test_rejected_key_is_redacted_and_a_setup_error(self):
         Handler.status = 401
         r = self.run_oneshot(
             "--provider", "compatible", "--model", "m", "--aspects", "code"
         )
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)
         self.assertNotIn(KEY, r.stderr)
         self.assertIn("[redacted]", r.stderr)
+        self.assertEqual(len(Handler.calls), 1)  # a 401 is not retried
         self.assertFalse(os.path.exists(self.artifact("review.md")))
         self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))
+
+    def test_server_errors_retry_once_then_earn_nothing(self):
+        Handler.status = 500
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "code"
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(len(Handler.calls), 2)
+        self.assertNotIn(KEY, r.stderr)
+
+    def test_rate_limit_is_retried(self):
+        Handler.status = lambda prompt, n: 429 if n == 1 else 200
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "code"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(Handler.calls), 3)  # 429, retry, aggregation
+
+    def test_truncated_body_is_retried(self):
+        Handler.truncate = 1
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "code"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_cut_short_answer_is_not_a_clean_pass(self):
+        Handler.finish = "length"
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "code"
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))
+
+    def test_one_failed_pass_saves_the_report_but_no_receipt(self):
+        Handler.status = lambda prompt, n: (
+            500 if "focusing on errors" in prompt else 200
+        )
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "code,errors"
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("errors", r.stderr.split("failed or answered in prose")[0])
+        self.assertTrue(os.path.exists(self.artifact("review.md")))
+        self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))
+        agg = Handler.calls[-1]["body"]["messages"][-1]["content"]
+        self.assertIn("[errors] errored: the call failed", agg)
+
+    def test_finding_lines_reach_the_aggregator(self):
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "m", "--aspects", "errors"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        agg = Handler.calls[-1]["body"]["messages"][-1]["content"]
+        self.assertIn("[errors]\nCRIT|app.py:2|swallows the error|fact|errors", agg)
 
     def test_unusable_report_earns_nothing(self):
         Handler.reply = lambda p: "Looks fine to me." if "aggregator" in p else ""
@@ -415,15 +491,40 @@ class RunTest(_Repo):
         self.assertIn("- app.py:2 | swallows | declined | demo only", agg)
         self.assertNotIn("- other", agg)
 
-    def test_errored_pass_is_named_to_the_aggregator(self):
+    def test_prose_pass_is_named_and_earns_nothing(self):
         Handler.reply = lambda p: REPORT if "aggregator" in p else "Prose " * 50
         r = self.run_oneshot(
             "--provider", "compatible", "--model", "m", "--aspects", "code"
         )
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 1)
         agg = Handler.calls[-1]["body"]["messages"][-1]["content"]
         self.assertTrue(
             re.search(r"\[code\] errored: the response was not pipe lines", agg)
+        )
+        self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))
+
+    def test_detached_head_is_refused_before_any_call(self):
+        self.git("checkout", "-q", "--detach")
+        r = self.run_oneshot("--provider", "compatible", "--model", "m")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("detached HEAD", r.stderr)
+        self.assertEqual(Handler.calls, [])
+
+    def test_settled_legacy_file_is_read_only_when_the_new_one_is_missing(self):
+        legacy = os.path.join(self.repo, ".claude", "grumpy", BRANCH)
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "fix.md"), "w") as f:
+            f.write("## Settled\n- old.py:1 | x | declined | legacy\n")
+        self.assertEqual(
+            oneshot.settled_entries(self.repo, BRANCH),
+            ["- old.py:1 | x | declined | legacy"],
+        )
+        os.makedirs(self.artifact(), exist_ok=True)
+        with open(self.artifact("fix.md"), "w") as f:
+            f.write("## Settled\n- new.py:1 | x | declined | new\n")
+        self.assertEqual(
+            oneshot.settled_entries(self.repo, BRANCH),
+            ["- new.py:1 | x | declined | new"],
         )
 
 
@@ -460,7 +561,9 @@ class MainTest(_Repo):
             self.assertEqual(self.main(), 2)
 
     def test_empty_diff_earns_nothing(self):
-        with mock.patch.object(oneshot, "resolve_diff", return_value=("main", "", [])):
+        with mock.patch.object(
+            oneshot, "resolve_diff", return_value=("main", "a" * 40, "", [])
+        ):
             self.assertEqual(self.main(), 1)
         self.assertEqual(Handler.calls, [])
 
@@ -481,11 +584,49 @@ class MainTest(_Repo):
             self.assertEqual(self.main(), 1)
         self.assertFalse(os.path.exists(self.artifact("review.md")))
 
+    def test_head_moving_during_the_run_earns_nothing(self):
+        real = oneshot.finish_report
+
+        def commit_then_finish(text, line):
+            self.commit("late.py", "x = 1\n", "landed mid-run")
+            return real(text, line)
+
+        with mock.patch.object(
+            oneshot, "finish_report", side_effect=commit_then_finish
+        ):
+            self.assertEqual(self.main(), 1)
+        self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))
+
+    def test_aspects_are_stripped_and_unknown_ones_refused(self):
+        self.assertEqual(self.main("--aspects", " code , errors"), 0)
+        Handler.calls = []
+        self.assertEqual(self.main("--aspects", "code,bogus"), 2)
+        self.assertEqual(Handler.calls, [])
+
+    def test_override_is_read_from_the_toplevel(self):
+        os.makedirs(os.path.join(self.repo, ".sharpen"), exist_ok=True)
+        with open(os.path.join(self.repo, ".sharpen", "models.yaml"), "w") as f:
+            f.write("roles:\n  analysis:\n    openai: gpt-top\n")
+        sub = os.path.join(self.repo, "sub")
+        os.makedirs(sub)
+        self.assertEqual(oneshot.model_from_map(sub)[0], "gpt-top")
+
+    def test_receipt_executor_needs_a_host(self):
+        for bad in ({"provider": "p"}, "oneshot"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                oneshot.receipt._checked_executor(bad)
+        self.assertEqual(
+            oneshot.receipt._checked_executor(
+                {"host": "oneshot", "model": None, "provider": 3}
+            ),
+            {"host": "oneshot"},
+        )
+
     def test_no_base_falls_back_to_previous_commit(self):
         with mock.patch.object(
             oneshot.diff_base, "resolve", return_value=(None, "none")
         ):
-            base, diff, names = oneshot.resolve_diff(self.repo)
+            base, _head, _diff, names = oneshot.resolve_diff(self.repo)
         self.assertEqual((base, names), ("HEAD~1", ["app.py"]))
 
     def test_changed_files_skip_deleted_and_respect_the_cap(self):

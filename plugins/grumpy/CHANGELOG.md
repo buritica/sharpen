@@ -14,6 +14,12 @@ receipt, so `record-gate.py --verify review` records gate 3. Simplify, fix and (
 next release) imagine still need an agent host. The diff and changed files go to the
 provider; see the README's "No agent installed".
 
+- It earns the gate only for a complete review: an aspect that fails or answers in prose
+  leaves the report but no receipt (exit 1), the receipt names the commit that was diffed,
+  and a detached HEAD, the default branch, or a provider rejecting the key or model (exit 2)
+  stop it before anything is spent.
+- `receipt.py` gains `named_branch()` and `require_clean()` (shared with `oneshot.py`), and
+  refuses an `executor` without a non-empty `host`.
 - Receipts may carry an `executor` (`{host, provider, model}`); `oneshot.py` writes it and
   sdlc 4.22's `--status` shows it next to the gate. Agent hosts don't write it.
 - `models.yaml` has an `openai` column (API ids). `oneshot.py` reads `analysis.openai`
