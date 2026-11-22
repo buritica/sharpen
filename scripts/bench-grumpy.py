@@ -695,8 +695,10 @@ def compare(
                 f"{name}: {cs['failed_runs']}/{cs['runs']} run(s) failed"
                 f" (baseline {bs['failed_runs']}/{bs['runs']}; statuses {cs.get('statuses', {})})"
             )
+        # A note, not a problem: whether a host may save under .claude/
+        # depends on its permission setup as much as on the prompt.
         if _rate(cs, "from_output") > _rate(bs, "from_output"):
-            problems.append(
+            notes.append(
                 f"{name}: {cs['from_output']}/{cs['runs']} run(s) printed the report"
                 " without saving it"
             )

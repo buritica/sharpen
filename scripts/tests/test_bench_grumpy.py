@@ -574,13 +574,14 @@ class SummaryCompareTest(unittest.TestCase):
         )
         self.assertEqual(problems, [])
 
-    def test_underrated_save_failures_and_interruptions_are_regressions(self):
+    def test_underrated_and_interruptions_are_regressions_save_failures_a_note(self):
         cand = _results({"a/review": {"underrated": 1.0, "from_output": 3}})
         cand["interrupted"] = True
-        problems, _ = bench.compare(
+        problems, notes = bench.compare(
             _results({"a/review": {"underrated": 0.0, "from_output": 0}}), cand
         )
-        self.assertEqual(len(problems), 3)
+        self.assertEqual(len(problems), 2)
+        self.assertIn("without saving", notes[0])
 
     def test_overrated_and_duplicate_rises_are_regressions(self):
         problems, _ = bench.compare(

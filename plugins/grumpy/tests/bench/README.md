@@ -56,7 +56,9 @@ against the baseline:
 
 A run fails when it wrote no report, timed out (even with a half-written report), raised
 an error, or produced a report with none of the severity headings the scorer reads.
-Runs scored from printed output are counted in `from_output`.
+Runs scored from printed output are counted in `from_output`; a rise is printed as a
+note, not a regression, because whether a host may save under `.claude/` depends on its
+permission setup as much as on the prompt.
 
 ## Hosts
 
