@@ -5,8 +5,10 @@ git pre-push hook: the host-agnostic floor under the PR gate.
 The PreToolUse hooks see a PR being opened only when an agent host runs it
 through a tool they can read (pr_paths.py). They never see `make pr`, a script,
 a user's gh alias, `curl`, or a person who pushes and then opens the PR in the
-browser, and instructions-only hosts (Gemini, Cursor, Copilot) have no hooks at
-all. A push is the one step every one of those paths shares, so this checks the
+browser. Instructions-only hosts (Gemini, Cursor, Copilot) have no hooks at
+all; this reaches them only where the sdlc scripts are installed on the machine
+and the shim is in the repo (say, by a Claude Code, Codex or pi session), since
+`npx skills add` ships no scripts. A push is the one step every one of those paths shares, so this checks the
 same thing the PR hook checks, for each branch being pushed: every gate the
 cycle requires is recorded, and the review gates are not stale for the commit
 being pushed (gate_receipts.stale_skill_gates, the same rule enforce uses).
@@ -51,19 +53,42 @@ def mode(cwd=None):
     return value if value in MODES else "warn"
 
 
-def pushed_branches(lines):
+def pushed_branches(lines, cwd=None):
     """(branch, local sha) for each branch update on stdin. Deletes (a zero
-    local sha) and non-branch refs (tags) are not PRs."""
+    local sha) and non-branch refs (tags) are not PRs.
+
+    `git push origin HEAD` (how /sdlc:ship pushes), `HEAD:x` and a sha
+    refspec report the local ref as the literal `HEAD` or the sha, not
+    `refs/heads/*`. Those resolve to the checked-out branch when it is at the
+    pushed sha, else to the branch name of the remote ref, which is the
+    branch a PR would be opened from."""
     out = []
     for line in lines:
         parts = line.split()
         if len(parts) != 4:
             continue
-        local_ref, local_sha = parts[0], parts[1]
-        if local_sha.strip("0") == "" or not local_ref.startswith("refs/heads/"):
+        local_ref, local_sha, remote_ref = parts[0], parts[1], parts[2]
+        if local_sha.strip("0") == "":
             continue
-        out.append((local_ref[len("refs/heads/") :], local_sha))
+        if local_ref.startswith("refs/heads/"):
+            out.append((local_ref[len("refs/heads/") :], local_sha))
+        elif not local_ref.startswith("refs/"):
+            branch = _branch_for_head(local_sha, cwd)
+            if not branch and remote_ref.startswith("refs/heads/"):
+                branch = remote_ref[len("refs/heads/") :]
+            if branch:
+                out.append((branch, local_sha))
     return out
+
+
+def _branch_for_head(sha, cwd=None):
+    """The checked-out branch, when it points at `sha`; else None."""
+    try:
+        branch = gs._git("symbolic-ref", "--short", "-q", "HEAD", cwd=cwd)
+        at = gs._git("rev-parse", f"refs/heads/{branch}", cwd=cwd)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return branch if branch and at == sha else None
 
 
 def problems(data, branch, sha):
@@ -89,7 +114,7 @@ def check(lines, cwd=None):
     m = mode(cwd)
     if m == "off":
         return 0, None
-    branches = pushed_branches(lines)
+    branches = pushed_branches(lines, cwd)
     if not branches:
         return 0, None
     data = gs.load_store(gs.default_store_path(cwd=cwd))

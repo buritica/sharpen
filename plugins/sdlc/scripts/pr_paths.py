@@ -21,6 +21,11 @@ those fails toward allow anyway. They are what the git pre-push floor
 Pure stdlib. @fires-on nothing (library)
 """
 
+# Python 3.9 (Xcode CLT's /usr/bin/python3) evaluates a dataclass's
+# `str | None` annotation at class creation and raises; enforce imports this
+# module at load, so without this the PR gate dies on every tool call there.
+from __future__ import annotations
+
 import os
 import re
 import subprocess
@@ -158,7 +163,7 @@ def shell_pr_opens(command):
 
 def _shell_open(label, raw_head, inv, repo=None):
     head, notes = normalize_head(raw_head)
-    workdir, found, more = resolve_checkout(inv.workdir, repo)
+    workdir, found, more = resolve_checkout(inv.workdir, repo, head)
     return PrOpen(
         label=label,
         head=head,
@@ -275,13 +280,40 @@ def _git_push_mr(inv):
 # --- MCP -----------------------------------------------------------------
 
 
+# Where each MCP server puts the PR's source branch: GitHub `head`, GitLab
+# `source_branch`, Bitbucket-style `sourceBranch`, Azure DevOps
+# `sourceRefName` (`refs/heads/x`), and the GraphQL/other spellings.
+# normalize_head strips `refs/heads/` and `owner:`.
+MCP_HEAD_FIELDS = (
+    "head",
+    "source_branch",
+    "sourceBranch",
+    "sourceRefName",
+    "headRefName",
+    "head_branch",
+)
+
+
 def _mcp_pr_open(tool_name, tool_input):
     owner, repo = tool_input.get("owner"), tool_input.get("repo")
     hint = f"{owner}/{repo}" if owner and repo else tool_input.get("project_id")
-    raw = tool_input.get("head") or tool_input.get("source_branch")
-    head, notes = normalize_head(raw if isinstance(raw, str) else None)
+    raw = next(
+        (
+            v
+            for v in (tool_input.get(k) for k in MCP_HEAD_FIELDS)
+            if isinstance(v, str) and v
+        ),
+        None,
+    )
+    head, notes = normalize_head(raw)
+    if raw is None:
+        notes.append(
+            f"{tool_name} named no head field this gate recognizes "
+            f"({', '.join(MCP_HEAD_FIELDS)}), so it judged the branch checked "
+            "out in the working directory instead."
+        )
     workdir, found, more = resolve_checkout(
-        None, hint if isinstance(hint, str) else None
+        None, hint if isinstance(hint, str) else None, head
     )
     return PrOpen(
         label=f"MCP {tool_name}",
@@ -323,7 +355,7 @@ def normalize_head(head):
     return head or None, []
 
 
-def resolve_checkout(workdir, repo_hint):
+def resolve_checkout(workdir, repo_hint, head=None):
     """The local checkout a PR for `repo_hint` should be judged against ->
     (dir or None, found, notes). `found` is False only when a repo was named,
     the workdir (or cwd) is not a checkout, and no checkout of it is in reach.
@@ -331,13 +363,22 @@ def resolve_checkout(workdir, repo_hint):
     The session's cwd is not always a checkout: a cloud session with several
     repos sits in their parent directory, and an MCP call carries no path at
     all. Judged from there, the store lookup misses and every PR reads as "no
-    cycle, allow". So: the given workdir (or cwd) when it is a checkout whose
-    remotes match the hint (or there is no hint); otherwise the first checkout
-    directly under it (or beside it) whose remote does; otherwise, when the
-    workdir is a checkout, that checkout anyway, with a note. A hint that
-    matches nothing (a fork without an `upstream` remote, a mirror or
-    local-path remote, no remote at all) must not turn into "allow" from inside
-    a gated checkout."""
+    cycle, allow". So, in order:
+
+    1. the given workdir (or cwd) when it is a checkout whose remotes match the
+       hint, or there is no hint;
+    2. that checkout anyway when the PR's branch (`head`, or the branch it has
+       checked out) has a gate cycle in ITS store. This is the fork flow: from
+       a gated fork checkout, `-R upstream/repo` names a repo the fork's
+       remotes don't carry, and a sibling clone of the upstream must not win
+       (its checked-out branch has no cycle, which would read as allow);
+    3. the first checkout directly under it (or beside it) whose remote
+       matches;
+    4. the workdir's checkout when it is one, with a note.
+
+    A hint that matches nothing (a fork without an `upstream` remote, a mirror
+    or local-path remote, no remote at all) must not turn into "allow" from
+    inside a gated checkout."""
     base = workdir or os.getcwd()
     top = _git_out(base, "rev-parse", "--show-toplevel")
     if not repo_hint:
@@ -348,6 +389,16 @@ def resolve_checkout(workdir, repo_hint):
         return workdir, True, []
     if top and _remote_matches(top, repo_hint):
         return workdir, True, []
+    if top and _has_cycle(top, head):
+        return (
+            workdir,
+            True,
+            [
+                f"No remote of {top} is {repo_hint}, but it has a gate cycle for "
+                "this PR's branch, so the gate judged the checkout at "
+                f"{top} (a fork's PR to its upstream)."
+            ],
+        )
     for child in _child_checkouts(top or base):
         if _remote_matches(child, repo_hint):
             return child, True, []
@@ -370,22 +421,44 @@ def resolve_checkout(workdir, repo_hint):
     )
 
 
+def _has_cycle(checkout, head):
+    """Whether the PR's branch (`head`, else the one checked out) has a gate
+    cycle in `checkout`'s store. An unreadable store counts as yes: the
+    enforcer then reads it and fails closed, rather than this lookup quietly
+    sending the PR to a checkout with no cycle."""
+    branch = head or gs.detect_branch(cwd=checkout)
+    if not branch:
+        return False
+    try:
+        return bool(gs.load_store(gs.default_store_path(cwd=checkout)).get(branch))
+    except gs.StoreCorruptError:
+        return True
+    except Exception:
+        return False
+
+
+# A ceiling on directory entries scanned for checkouts, so a ~/code with
+# hundreds of repos can't spend the hook's 10 s timeout spawning `git remote`
+# (a timed-out PreToolUse hook fails open).
+MAX_SCAN = 200
+
+
 def _child_checkouts(base):
     """Git checkouts one level below `base` (and `base`'s siblings when `base`
-    is itself a checkout, which is the multi-repo session's layout)."""
-    roots = [base]
+    is itself a checkout, which is the multi-repo session's layout), from at
+    most MAX_SCAN directory entries."""
+    root = base
     if os.path.exists(os.path.join(base, ".git")):
-        roots = [os.path.dirname(base)]
+        root = os.path.dirname(base)
+    try:
+        names = sorted(os.listdir(root))[:MAX_SCAN]
+    except OSError:
+        return []
     found = []
-    for root in roots:
-        try:
-            names = sorted(os.listdir(root))
-        except OSError:
-            continue
-        for name in names:
-            path = os.path.join(root, name)
-            if path != base and os.path.exists(os.path.join(path, ".git")):
-                found.append(path)
+    for name in names:
+        path = os.path.join(root, name)
+        if path != base and os.path.exists(os.path.join(path, ".git")):
+            found.append(path)
     return found
 
 

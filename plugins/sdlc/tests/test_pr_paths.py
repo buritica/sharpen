@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -234,6 +235,101 @@ class McpPathsTest(ArmedRepo):
         self.assertIn("judged the checkout at", r.stderr)
 
 
+class McpHeadFieldsTest(ArmedRepo):
+    """Every MCP server spells the PR's source branch its own way. Reading only
+    GitHub's `head` judged an Azure DevOps PR on the cwd's branch instead."""
+
+    def setUp(self):
+        super().setUp()
+        git(self.repo, "checkout", "-q", "main")  # cwd branch has no cycle
+
+    def test_each_alias_names_the_head(self):
+        for field in pp.MCP_HEAD_FIELDS:
+            with self.subTest(field=field):
+                r = self.enforce(
+                    "mcp__x__create_pull_request",
+                    {"owner": "o", "repo": "r", field: BRANCH},
+                )
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn(BRANCH, r.stderr)
+
+    def test_azure_devops_source_ref_name_strips_refs_heads(self):
+        r = self.enforce(
+            "mcp__ado__repo_create_pull_request",
+            {"repositoryId": "r", "sourceRefName": "refs/heads/feat/x"},
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('branch "feat/x"', r.stderr)
+
+    def test_no_recognized_head_field_says_so(self):
+        git(self.repo, "checkout", "-q", BRANCH)
+        r = self.enforce("mcp__x__create_pull_request", {"owner": "o", "repo": "r"})
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("named no head field", r.stderr)
+
+
+class ForkFlowTest(unittest.TestCase):
+    """A gated fork checkout next to a clone of the upstream. `-R up/r` names a
+    repo only the sibling's remote carries; the sibling's checked-out branch
+    has no cycle, so judging it read as allow."""
+
+    def setUp(self):
+        self.parent = os.path.realpath(tempfile.mkdtemp())
+        self.fork = make_repo(self.parent, "https://github.com/me/r.git")
+        self.up = make_repo(self.parent, "https://github.com/up/r.git")
+        git(self.up, "checkout", "-q", "main")
+        self.env = {k: v for k, v in os.environ.items() if k != "SDLC_GATES_PATH"}
+        r = run(RECORD, self.fork, env=self.env, args=("--init", "small-medium"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def enforce(self, tool, tool_input, cwd=None):
+        payload = {"tool_name": tool, "tool_input": tool_input}
+        return run(ENFORCE, cwd or self.fork, json.dumps(payload), self.env)
+
+    def test_gh_dash_R_upstream_from_the_gated_fork_blocks(self):
+        for cmd in (
+            "gh pr create -R up/r --fill",
+            "gh pr create -R up/r --head me:feat/x --fill",
+        ):
+            with self.subTest(cmd=cmd):
+                r = self.enforce("Bash", {"command": cmd})
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn(BRANCH, r.stderr)
+
+    def test_mcp_upstream_from_the_gated_fork_blocks(self):
+        for args in (
+            {"owner": "up", "repo": "r", "head": f"me:{BRANCH}", "base": "main"},
+            {"owner": "up", "repo": "r", "base": "main"},  # no head: cwd branch
+        ):
+            with self.subTest(args=args):
+                r = self.enforce("mcp__github__create_pull_request", args)
+                self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_fork_without_a_cycle_still_finds_the_upstream_clone(self):
+        # Only when the cwd checkout has no cycle for the branch does the scan
+        # go looking: arm the upstream clone instead and push from the fork.
+        git(self.up, "checkout", "-q", BRANCH)
+        run(RECORD, self.up, env=self.env, args=("--init", "small-medium"))
+        git(self.fork, "checkout", "-q", "main")
+        r = self.enforce(
+            "mcp__github__create_pull_request",
+            {"owner": "up", "repo": "r", "head": BRANCH, "base": "main"},
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+
+class ScanCapTest(unittest.TestCase):
+    def test_child_scan_reads_at_most_max_scan_entries(self):
+        parent = os.path.realpath(tempfile.mkdtemp())
+        for i in range(5):
+            os.makedirs(os.path.join(parent, f"d{i}", ".git"))
+        real, pp.MAX_SCAN = pp.MAX_SCAN, 3
+        try:
+            self.assertEqual(len(pp._child_checkouts(parent)), 3)
+        finally:
+            pp.MAX_SCAN = real
+
+
 class NoRemoteCheckoutTest(ArmedRepo):
     """A checkout with no remote at all still blocks on its own cycle, whatever
     repo a hint names: no remote can match, and that must not mean allow."""
@@ -353,7 +449,7 @@ class RepoMatchTest(unittest.TestCase):
     def test_hints_each_path_passes(self):
         seen = []
 
-        def fake(workdir, hint):
+        def fake(workdir, hint, head=None):
             seen.append(hint)
             return workdir, True, []
 
@@ -396,7 +492,14 @@ class HookWiringTest(unittest.TestCase):
             "mcp__gitlab__create_merge_request",
         ):
             self.assertTrue(hit(name), name)
-        for name in ("mcp__github__list_issues", "Read", "mcp__github__push_files"):
+        for name in (
+            "mcp__github__list_issues",
+            "Read",
+            "mcp__github__push_files",
+            # A remote Copilot agent's PR: no local branch to judge, and
+            # pr_paths' `$`-anchored pattern doesn't take it either.
+            "mcp__github__create_pull_request_with_copilot",
+        ):
             self.assertFalse(hit(name), name)
 
     def test_pi_extension_filter_matches_python(self):
@@ -492,6 +595,43 @@ class PrePushTest(unittest.TestCase):
         self.assertIn("refusing the push", p.stderr)
 
 
+class PrePushHeadRefspecTest(unittest.TestCase):
+    """`git push -u origin HEAD` is how /sdlc:ship pushes. git reports its local
+    ref as the literal `HEAD`, which the floor used to skip."""
+
+    def setUp(self):
+        self.repo = make_repo()
+        self.store = os.path.join(self.repo, ".sharpen", "data", "gates.json")
+        self.env = dict(os.environ, SDLC_GATES_PATH=self.store)
+        self.bare = os.path.realpath(tempfile.mkdtemp())
+        git(self.bare, "init", "-q", "--bare")
+        git(self.repo, "remote", "set-url", "origin", self.bare)
+        r = run(INSTALL, self.repo, env=self.env, args=("--mode", "block"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run(RECORD, self.repo, env=self.env, args=("--init", "small-medium"))
+
+    def push(self, *refspec):
+        return subprocess.run(
+            ["git", "-C", self.repo, "push", "-q", "-u", "origin", *refspec],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+
+    def test_real_push_of_HEAD_is_refused_in_block_mode(self):
+        p = self.push("HEAD")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("refusing the push", p.stderr)
+        self.assertIn(BRANCH, p.stderr)
+
+    def test_detached_head_falls_back_to_the_remote_ref(self):
+        sha = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "checkout", "-q", "--detach")
+        p = self.push(f"{sha}:refs/heads/{BRANCH}")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("refusing the push", p.stderr)
+
+
 def load_installer():
     spec = importlib.util.spec_from_file_location("install_pre_push", INSTALL)
     mod = importlib.util.module_from_spec(spec)
@@ -543,14 +683,14 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("can't tell whether the chain line is present", r.stdout)
 
-    def run_chain_hook(self, stdin="", env=None):
+    def run_chain_hook(self, stdin="", env=None, sh=("sh",), prelude=""):
         """The printed chain line as the LAST line of someone else's hook,
         which is where people paste an 'add this line' snippet."""
         path = os.path.join(tempfile.mkdtemp(), "pre-push")
         with open(path, "w") as f:
-            f.write(f"#!/bin/sh\necho hi\n{load_installer().chain_line()}\n")
+            f.write(f"#!/bin/sh\n{prelude}echo hi\n{load_installer().chain_line()}\n")
         return subprocess.run(
-            ["sh", path, "origin", "x"],
+            [*sh, path, "origin", "x"],
             input=stdin,
             capture_output=True,
             text=True,
@@ -563,6 +703,55 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.run_chain_hook().returncode, 0)
         git(self.repo, "config", "sharpen.sdlcScripts", "/nonexistent/sdlc/scripts")
         self.assertEqual(self.run_chain_hook().returncode, 0)
+
+    def test_chain_line_exits_0_under_sh_e_and_set_e(self):
+        # husky v9 runs hooks as `sh -e`; hand-written hooks often `set -e`.
+        # `git config --get` exits 1 on an unset key, which used to exit there.
+        for kw in ({"sh": ("sh", "-e")}, {"prelude": "set -e\n"}):
+            with self.subTest(**kw):
+                git(self.repo, "config", "--unset", "sharpen.sdlcScripts", check=False)
+                r = self.run_chain_hook(**kw)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(r.stderr, "")
+                git(self.repo, "config", "sharpen.sdlcScripts", "/nonexistent/sdlc")
+                r = self.run_chain_hook(**kw)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(r.stderr.count("skipped"), 1, r.stderr)
+
+    def test_lefthook_gets_a_yml_snippet_with_use_stdin(self):
+        os.makedirs(os.path.dirname(self.hook), exist_ok=True)
+        with open(self.hook, "w") as f:
+            f.write("#!/bin/sh\n# lefthook generated\nlefthook run pre-push\n")
+        r = self.install()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("lefthook.yml", r.stdout)
+        self.assertIn("use_stdin: true", r.stdout)
+        self.assertIn("pre-push.py", r.stdout)
+
+    def test_shim_is_written_without_leftover_temp_files(self):
+        self.install()
+        left = [
+            n
+            for n in os.listdir(os.path.dirname(self.hook))
+            if n.startswith(".pre-push.")
+        ]
+        self.assertEqual(left, [])
+        self.assertTrue(os.access(self.hook, os.X_OK))
+
+    def test_shim_fails_open_without_python3_on_path(self):
+        self.install()
+        bindir = tempfile.mkdtemp()
+        os.symlink(shutil.which("git"), os.path.join(bindir, "git"))
+        p = subprocess.run(
+            [shutil.which("sh"), self.hook, "origin", "x"],
+            input="",
+            capture_output=True,
+            text=True,
+            cwd=self.repo,
+            env=dict(os.environ, PATH=bindir),
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("python3 not found", p.stderr)
 
     def test_chain_line_still_propagates_a_block(self):
         store = os.path.join(self.repo, ".sharpen", "data", "gates.json")

@@ -29,7 +29,7 @@
         ]
       },
       {
-        "matcher": "Monitor|mcp__.*create_(pull|merge)_request",
+        "matcher": "Monitor|mcp__.*create_(pull|merge)_request$",
         "hooks": [
           {
             "type": "command",

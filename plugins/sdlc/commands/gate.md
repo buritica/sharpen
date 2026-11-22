@@ -177,6 +177,14 @@ Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only wh
 
 Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no external runtime. So enforcement works on any box: the `enforce-sdlc-gates.py` hook blocks opening a PR (`gh pr create`/`new`, `gh api` to `/pulls`, `glab`, `hub`, or an MCP `create_pull_request` tool) when gates are incomplete, and the optional git pre-push hook covers the rest. State the mode in one line, e.g. `Mode: grumpy + enforced gates`.
 
+**Refresh the git pre-push floor on every run**, not only at Initialize. It is idempotent and quiet when nothing changed, and it is what re-points the hook at this plugin's scripts after a plugin update moved the cache (no `--init`, so no gates are reset):
+
+```bash
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/install-pre-push.py" --root "${WT:-.}"
+```
+
+It warns on a push of a branch whose gates are missing or stale and never blocks unless the repo opted in with `git config sharpen.prePush block`. If it reports that hooks are managed elsewhere (husky, lefthook, `core.hooksPath`), pass its chain line (or, for lefthook, its `lefthook.yml` snippet) on to the user rather than editing their hook yourself. Auto-init runs the same installer whenever it arms a cycle.
+
 ## Is AGENTS.md current?
 
 If the repo has an `AGENTS.md` with a managed SDLC block, check it before
@@ -207,13 +215,7 @@ python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --in
 
 Replace `<tier>` with `tiny`, `small-medium`, or `significant`. Drop `--route-from "$PWD"` when you are gating the current worktree.
 
-Then install (or refresh) the git pre-push floor. It is idempotent, and it refreshes the scripts path the hook uses after a plugin update:
-
-```bash
-python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/install-pre-push.py" --root "$WT"
-```
-
-It warns on a push of a branch whose gates are missing or stale and never blocks unless the repo opted in with `git config sharpen.prePush block`. If it reports that hooks are managed elsewhere (husky, lefthook, `core.hooksPath`), pass its chain line on to the user rather than editing their hook yourself.
+The git pre-push floor was already installed or refreshed in the prerequisites step above; Initialize does not need to run it again.
 
 ### Record a gate
 

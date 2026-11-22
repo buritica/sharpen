@@ -1360,6 +1360,48 @@ class AutoInitTest(unittest.TestCase):
         self.assertEqual(data["feat/x"]["tier"], "small-medium")
         self.assertNotIn("profile", data["feat/x"])
 
+    def test_arming_installs_the_pre_push_floor_once(self):
+        # The default path (auto-armed, /sdlc:gate never run) gets the floor
+        # too. The first install is named in the arming message; later arms
+        # refresh it silently.
+        hook = os.path.join(self.repo, ".git", "hooks", "pre-push")
+        r = self._commit()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("pre-push hook", r.stderr.decode())
+        with open(hook) as f:
+            self.assertIn("sdlc pre-push shim", f.read())
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", self.repo, "config", "sharpen.sdlcScripts"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip(),
+            os.path.abspath(SCRIPTS),
+        )
+        # Re-arm on a second branch: installer runs again, says nothing.
+        subprocess.run(["git", "-C", self.repo, "checkout", "-q", "-b", "feat/y"])
+        r = self._commit()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertNotIn("pre-push hook", r.stderr.decode())
+
+    def test_arming_leaves_a_foreign_pre_push_hook_alone(self):
+        hook = os.path.join(self.repo, ".git", "hooks", "pre-push")
+        os.makedirs(os.path.dirname(hook), exist_ok=True)
+        with open(hook, "w") as f:
+            f.write("#!/bin/sh\necho mine\n")
+        r = self._commit()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertNotIn("pre-push hook", r.stderr.decode())
+        with open(hook) as f:
+            self.assertEqual(f.read(), "#!/bin/sh\necho mine\n")
+
+    def test_no_arm_no_install(self):
+        self._commit()
+        hook = os.path.join(self.repo, ".git", "hooks", "pre-push")
+        os.unlink(hook)
+        self._commit()  # cycle exists: nothing armed, nothing installed
+        self.assertFalse(os.path.exists(hook))
+
     def test_git_commit_with_capability_manifest_stores_resolved_profile(self):
         manifest = self._write_manifest(
             ["test", "lint", "typecheck", "review", "imagine", "fix"]
