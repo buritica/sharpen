@@ -22,7 +22,9 @@ python3 scripts/bench-grumpy.py score path/to/review.md --case billing-planted
 
 Each run copies a case into a temp git repo (`before/` committed on `main`, `after/`
 committed on `bench/<case>`), runs the pass there, and reads
-`.claude/grumpy/bench/<case>/<pass>.md`. The report, the host's output and
+`.claude/grumpy/bench/<case>/<pass>.md`. If the pass printed its report but couldn't
+save it (headless Claude Code treats `.claude/` as a sensitive path), the printed
+report is scored and the run is marked `scored-from-output`. The report, the host's output and
 `results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/`, which is gitignored.
 `results.json` records the host, model, CLI version, the exact command and a hash of the
 pass's prompt files, so two runs can be told apart later.
@@ -37,14 +39,16 @@ that wrote no report. Thresholds are flags.
 | Host | How the pass is invoked | Flags verified |
 | --- | --- | --- |
 | Claude Code | `claude -p --plugin-dir plugins/grumpy /grumpy:review`, so the working tree's prompts run, not the installed plugin | yes |
-| Codex | `codex exec ... -`, with the pass's `SKILL.md` sent on stdin | not yet |
-| pi | `pi --print --no-session`, with the pass's `SKILL.md` sent on stdin | not yet |
+| Codex | `codex exec --sandbox workspace-write --skip-git-repo-check -`, with the pass's `SKILL.md` sent on stdin | match OpenAI's docs, no live run yet |
+| pi | `pi --print --no-session`, with the pass's `SKILL.md` sent on stdin | match pi's docs, no live run yet |
 
 Codex and pi get the skill body inline because skill discovery differs per host and
 version, and inlining makes the run independent of what is installed. `--invoke inline`
 does the same on Claude Code. `--cmd` replaces the whole command line (`{model}`,
 `{grumpy}` and `{prompt}` are substituted), so a wrong flag can be fixed without a code
-change. Runs use permission-skipping modes because they work in a throwaway temp repo.
+change. Claude Code runs get `acceptEdits` plus an allowlist of the tools a pass needs
+(git, python3, file tools, Agent), not a permission bypass; Codex runs in its
+`workspace-write` sandbox inside the temp repo.
 
 ## Cost
 

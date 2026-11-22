@@ -52,10 +52,34 @@ BLOCKING = {"CRIT", "WARN"}
 # ---------------------------------------------------------------------------
 # Host profiles. `{model}` is dropped with its flag when no model is given.
 # `{prompt}` is the argv slot for native invocation; inline invocation sends
-# the prompt on stdin. Codex and pi flags are unverified until a live run on
-# a machine that has those CLIs; --cmd overrides any of them without a code
-# change, and `commands` prints exactly what would run.
+# the prompt on stdin. The codex flags (exec, --model, --sandbox
+# workspace-write, --skip-git-repo-check, `-` for stdin) match OpenAI's Codex
+# CLI docs as of 2026-11-22; the pi flags match docs.pi.dev. Neither has had a
+# live run yet, so results record `flags_verified: false` until one does.
+# --cmd overrides any of them without a code change, and `commands` prints
+# exactly what would run.
 # ---------------------------------------------------------------------------
+# What a pass needs on Claude Code, and no more: git and python3 for the diff
+# and the receipt, file tools for the report, Agent for per-aspect passes.
+CLAUDE_TOOLS = ",".join(
+    [
+        "Bash(git:*)",
+        "Bash(python3:*)",
+        "Bash(mkdir:*)",
+        "Bash(ls:*)",
+        "Bash(head:*)",
+        "Read",
+        "Write",
+        "Edit",
+        "Write(.claude/grumpy/**)",
+        "Glob",
+        "Grep",
+        "Agent",
+        "TaskCreate",
+        "TaskUpdate",
+    ]
+)
+
 HOSTS = {
     "claude": {
         "binary": "claude",
@@ -65,7 +89,9 @@ HOSTS = {
             "-p",
             "--plugin-dir",
             "{grumpy}",
-            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools={claude_tools}",
             "--model",
             "{model}",
             "{prompt}",
@@ -73,7 +99,9 @@ HOSTS = {
         "inline": [
             "claude",
             "-p",
-            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools={claude_tools}",
             "--model",
             "{model}",
         ],
@@ -370,9 +398,12 @@ def matches(target, finding, window=WINDOW):
     return False
 
 
-def _max_matching(edges, n_left):
-    """Kuhn's algorithm. edges[i] = right indices for left i. Returns {right: left}."""
-    owner = {}
+def _max_matching(edges, n_left, owner=None):
+    """Kuhn's algorithm. edges[i] = right indices for left i. Returns {right: left}.
+
+    `owner` seeds the matching; augmenting keeps every seeded right matched.
+    """
+    owner = dict(owner or {})
 
     def augment(i, seen):
         for j in edges[i]:
@@ -384,8 +415,10 @@ def _max_matching(edges, n_left):
                 return True
         return False
 
+    matched_left = set(owner.values())
     for i in range(n_left):
-        augment(i, set())
+        if i not in matched_left:
+            augment(i, set())
     return owner
 
 
@@ -398,7 +431,19 @@ def score(key, findings, window=WINDOW):
     p_edges = [
         [j for j, t in enumerate(planted) if matches(t, f, window)] for f in findings
     ]
-    p_owner = _max_matching(p_edges, n)
+    # Prefer pairings where the finding is rated at least as high as the
+    # planted issue, so a CRIT and a NOTE that both describe two neighbouring
+    # issues are paired the right way round; then fill in the rest.
+    rated_ok = [
+        [
+            j
+            for j in p_edges[i]
+            if RANK.get(findings[i].get("severity"), 1)
+            >= RANK.get(planted[j].get("severity", "NOTE"), 1)
+        ]
+        for i in range(n)
+    ]
+    p_owner = _max_matching(p_edges, n, owner=_max_matching(rated_ok, n))
     matched = {i: ("planted", j) for j, i in p_owner.items()}
 
     free = [i for i in range(n) if i not in matched]
@@ -581,6 +626,7 @@ def build_command(
     argv = [
         t.replace("{model}", model or "")
         .replace("{grumpy}", grumpy)
+        .replace("{claude_tools}", CLAUDE_TOOLS)
         .replace("{prompt}", native_prompt)
         for t in out
     ]
@@ -600,6 +646,16 @@ def cli_version(binary):
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+REPORT_TITLES = {"review": "# Code Review", "imagine": "# Production Imagination"}
+
+
+def report_in_output(output, pass_name):
+    """True when output contains the pass's rendered report."""
+    return any(
+        line.startswith(REPORT_TITLES[pass_name]) for line in output.splitlines()
+    )
 
 
 def find_report(repo, branch, pass_name):
@@ -659,14 +715,23 @@ def run_one(
         with open(os.path.join(out_dir, f"{label}.log"), "w", encoding="utf-8") as f:
             f.write(output)
         report = find_report(repo, branch, pass_name)
-        if not report:
+        saved = os.path.join(out_dir, f"{label}.md")
+        if report:
+            shutil.copyfile(report, saved)
+            with open(report, encoding="utf-8") as f:
+                findings = parse_report(f.read())
+            result["status"] = "scored"
+        elif report_in_output(output, pass_name):
+            # The host printed the report but couldn't save it (Claude Code
+            # treats .claude/ as a sensitive path in headless runs). Score what
+            # it printed, and say so: the pass's own write step failed.
+            with open(saved, "w", encoding="utf-8") as f:
+                f.write(output)
+            findings = parse_report(output)
+            result["status"] = "scored-from-output"
+        else:
             result.setdefault("status", "no-report")
             return result
-        saved = os.path.join(out_dir, f"{label}.md")
-        shutil.copyfile(report, saved)
-        with open(report, encoding="utf-8") as f:
-            findings = parse_report(f.read())
-        result["status"] = "scored"
         result["report"] = (
             os.path.relpath(saved, ROOT) if saved.startswith(ROOT) else saved
         )
@@ -789,7 +854,7 @@ def cmd_run(args):
             f"note: the {args.host} command line is unverified; check commands in results.json",
             file=sys.stderr,
         )
-    return 0 if all(r.get("status") == "scored" for r in meta["runs"]) else 1
+    return 0 if all("score" in r for r in meta["runs"]) else 1
 
 
 def cmd_score(args):

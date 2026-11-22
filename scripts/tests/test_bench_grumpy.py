@@ -297,6 +297,45 @@ class ScoreTest(unittest.TestCase):
         s = bench.score(KEY, [F("NOTE", "log line lacks context", line=40)])
         self.assertTrue(s["clean"])
 
+    def test_pairing_prefers_matching_severity(self):
+        # Both findings mention the factory and the missing class. The CRIT
+        # should pair with the CRIT issue, not leave it "underrated".
+        key = {
+            "planted": [
+                {
+                    "id": "undefined",
+                    "severity": "CRIT",
+                    "file": "src/a.py",
+                    "lines": [36, 36],
+                    "keywords": ["doesn't exist", "nameerror"],
+                },
+                {
+                    "id": "factory",
+                    "severity": "NOTE",
+                    "file": "src/a.py",
+                    "lines": [32, 35],
+                    "keywords": ["factory"],
+                },
+            ]
+        }
+        s = bench.score(
+            key,
+            [
+                F(
+                    "CRIT",
+                    "FormatterFactory returns a class that doesn't exist: NameError",
+                    line=34,
+                ),
+                F(
+                    "NOTE",
+                    "factory returns a class that doesn't exist, delete it",
+                    line=33,
+                ),
+            ],
+        )
+        self.assertEqual(s["hits"], ["factory", "undefined"])
+        self.assertEqual(s["underrated"], [])
+
     def test_underrated_planted_issue(self):
         s = bench.score(KEY, [F("NOTE", "undefined", line=30)])
         self.assertEqual(s["underrated"], ["undefined"])
@@ -506,6 +545,8 @@ if mode == "report":
     open(os.path.join(d, "review.md"), "w").write(
         "## Critical Issues\\n\\n- [code]: ChargeResultFormatter is undefined [src/billing/charge.py:36]\\n"
     )
+elif mode == "print":
+    print("# Code Review: x\\n\\n## Critical Issues\\n\\n- ChargeResultFormatter is undefined [src/billing/charge.py:36]")
 print("done")
 """
 
@@ -611,6 +652,27 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(run["status"], "no-report")
         with open(os.path.join(out, run_dir, "clean-refactor-review-1.log")) as f:
             self.assertIn("done", f.read())
+
+    def test_report_printed_but_not_saved_is_scored_from_output(self):
+        os.environ["FAKE_MODE"] = "print"
+        out = os.path.join(self.tmp, "results")
+        code, _ = self.run_cli(
+            "run",
+            "--host",
+            "claude",
+            "--cases",
+            "billing-planted",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 0)
+        (run_dir,) = os.listdir(out)
+        with open(os.path.join(out, run_dir, "results.json")) as f:
+            run = json.load(f)["runs"][0]
+        self.assertEqual(run["status"], "scored-from-output")
+        self.assertEqual(run["score"]["hits"], ["undefined-formatter"])
 
     def test_missing_cli(self):
         os.environ["PATH"] = self.tmp
