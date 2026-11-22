@@ -270,6 +270,7 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write the complete report (from `# Edge Case Analysis:` through `## Verdict`) to `$ARTIFACT_DIR/edge-cases.md` using the Write tool.

@@ -351,3 +351,12 @@ One standing constraint: **`sdlc` and `grumpy` share a path contract** —
 `.claude/sdlc/<branch>/` and `.claude/grumpy/<branch>/`. grumpy's review and imagine read a
 plan `/sdlc:plan` writes; sdlc's gate chain reads what grumpy writes. Upgrade them
 together. Nothing enforces it, because a marketplace has no dependency field.
+
+What sharpen writes inside a repo stays out of git without any setup:
+`.sharpen/data/`, `.claude/sdlc/`, `.claude/grumpy/` and `.claude/worktrees/` each get
+a `.gitignore` holding `*` the moment they are created, on every host. `/sdlc:init` also
+lists them in the repo's `.gitignore`. The one exception is a repo still on the legacy
+`.claude/data/` store, a folder sharpen shares and never marks; init's block covers it.
+`.sharpen/simplify.json` is config and stays tracked, so never ignore `.sharpen/` as a
+whole. A team that commits its plans replaces `.claude/sdlc/.gitignore`'s contents with
+`!*` (deleting it doesn't last: the next command writes it back).

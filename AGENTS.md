@@ -68,12 +68,15 @@ parts of it that are easy to get wrong here:
   findings resolved" never accepts a deferral for a Critical finding, on this repo or any
   other. See the grumpy plugin README for the full eligibility table.
 
-## Plugin changes need a version bump in two places
+## Plugin changes need a version bump in every manifest
 
 A fix doesn't reach installed copies unless you bump the version in **both**:
 
 1. `plugins/<name>/.claude-plugin/plugin.json`
 2. `.claude-plugin/marketplace.json` (the matching entry)
+
+and, for pi, in `plugins/<name>/package.json`; an `sdlc` bump also moves the top-level
+bundle `package.json` (see pi support below).
 
 **The bump must be in the same PR as the change, never a follow-up.** A merged PR without
 it is live in the repo and undelivered to users. `scripts/check-marketplace.py` catches the
@@ -127,8 +130,9 @@ gates record from grumpy receipts via `--verify` and the `agent_end` sweep; flat
 the sdlc/grumpy `audit` collision).
 
 When a hook script changes, the pi extension needs no change (it only names the script); when a
-plugin's version bumps, `package.json` must bump too. `scripts/check-marketplace.py` enforces the
-pi manifest version sync and that every referenced hook script still exists.
+plugin's version bumps, its `package.json` must bump too, and the top-level bundle `package.json`
+carries sdlc's version, so it moves whenever sdlc does. `scripts/check-marketplace.py` enforces
+both version syncs and that every referenced hook script still exists.
 
 ## Tests
 
@@ -172,7 +176,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.17.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.18.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
@@ -203,6 +207,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - Squash merge only. Never force-push `main`. Never bypass hooks (`--no-verify` and friends are forbidden; fix the failure or ask).
 
 ### Artifacts (gitignored)
-- `.claude/sdlc/<branch>/` — plan and spec. `.claude/grumpy/<branch>/` — review, imagine, simplify reports.
-- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present.
+- `.claude/sdlc/<branch>/` — plan and spec. `.claude/grumpy/<branch>/` — review, imagine, simplify reports and pass receipts. `.claude/worktrees/` — `/sdlc:plan` worktrees.
+- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present, so never ignore `.sharpen/` as a whole.
+- Each of these folders ignores itself when sharpen creates it (a `.gitignore` holding `*` inside it); `/sdlc:init` also lists them in the repo's `.gitignore`.
 <!-- sdlc:end -->

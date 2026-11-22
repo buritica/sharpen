@@ -11,5 +11,3 @@ __pycache__/
 .claude/sdlc/
 # Temp worktrees
 .claude/worktrees/
-# Local PR helper files
-.pr-body.md

@@ -32,8 +32,8 @@ install-pre-push.py, so the default path gets it without /sdlc:gate. It is
 named in the arming message only on a first install, and never fails the hook.
 
 No third-party dependencies. Requires capabilities.py, gate_store.py,
-gate_receipts.py, gate_convergence.py, gate_base.py, hook_out.py and
-shell_parse.py in the same directory.
+gate_receipts.py, gate_convergence.py, gate_base.py, artifact_dirs.py,
+hook_out.py and shell_parse.py in the same directory.
 @fires-on Bash tool (PostToolUse)
 """
 

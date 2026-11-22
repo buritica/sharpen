@@ -46,6 +46,28 @@ def _git(wt, *args):
     ).strip()
 
 
+def _ensure_self_ignored(grumpy_root):
+    """Drop a `.gitignore` holding `*` into `.claude/grumpy/`, so reports and
+    receipts stay out of git even in a repo whose own `.gitignore` never
+    listed them. Same text the grumpy commands write; an existing file is
+    left alone."""
+    path = os.path.join(grumpy_root, ".gitignore")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("*\n")
+    except OSError:
+        # A half-written file would be "left alone" forever; remove it so the
+        # next write tries again.
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _report_digest(report, previous_receipts):
     """sha256 of the pass's report, or ValueError when there is no fresh one.
 
@@ -110,6 +132,7 @@ def write_receipt(pass_name, worktree=".", stage=None):
     )
     digest = _report_digest(report, siblings)
     os.makedirs(directory, exist_ok=True)
+    _ensure_self_ignored(os.path.join(root, ".claude", "grumpy"))
     receipt = {
         "protocol_version": "1",
         "skill": pass_name,

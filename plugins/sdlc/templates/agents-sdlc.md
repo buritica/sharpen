@@ -28,5 +28,6 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - Squash merge only. Never force-push `{default_branch}`. Never bypass hooks (`--no-verify` and friends are forbidden; fix the failure or ask).
 
 ### Artifacts (gitignored)
-- `.claude/sdlc/<branch>/` — plan and spec. `.claude/grumpy/<branch>/` — review, imagine, simplify reports.
-- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present.
+- `.claude/sdlc/<branch>/` — plan and spec. `.claude/grumpy/<branch>/` — review, imagine, simplify reports and pass receipts. `.claude/worktrees/` — `/sdlc:plan` worktrees.
+- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present, so never ignore `.sharpen/` as a whole.
+- Each of these folders ignores itself when sharpen creates it (a `.gitignore` holding `*` inside it); `/sdlc:init` also lists them in the repo's `.gitignore`.
