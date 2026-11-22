@@ -58,7 +58,7 @@ When uncertain, step up a tier. Under-classification ships bugs; over-classifica
 
 When the diff touches no executable files, the code gates have nothing to verify and are **vacuously satisfied**. Record `lint`, `typecheck`, and `tests` directly (there is no executable change to lint, type-check, or break), skip the `simplify`/grumpy chain entirely, and go straight to ship. This decouples documentation size from code rigor: a large prose change is not forced through a code-review chain it can't meaningfully use.
 
-The gate command verifies this at run time with `git diff --name-only origin/main...HEAD`; at plan time, classify based on what you expect to change.
+The gate command verifies this at run time with `git diff --name-only "$BASE"...HEAD` (the `Base:` ref `record-gate.py --status` prints, origin/main when the branch isn't stacked); at plan time, classify based on what you expect to change.
 
 ## Step 3 — Identify scope
 

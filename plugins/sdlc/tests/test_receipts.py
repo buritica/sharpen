@@ -108,6 +108,13 @@ class ReceiptTestBase(unittest.TestCase):
     def gates(self):
         return self.bd().get("gates", {})
 
+    def edit_store(self, change):
+        with open(self.store) as f:
+            data = json.load(f)
+        change(data)
+        with open(self.store, "w") as f:
+            json.dump(data, f)
+
     def hook(self, script, payload):
         return self.run_py(script, stdin=json.dumps(payload))
 
@@ -634,6 +641,16 @@ class ReceiptWriterTest(ReceiptTestBase):
     def test_unknown_pass_is_refused(self):
         r = self.run_py(GRUMPY_RECEIPT, "audit", "--worktree", self.repo)
         self.assertEqual(r.returncode, 1)
+
+
+def ignore_artifacts(repo):
+    """Commit the .gitignore a real repo has, so receipts and the store
+    don't count as changes on the branch."""
+    with open(os.path.join(repo, ".gitignore"), "w") as f:
+        f.write(".sharpen/\n.claude/\n")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-q", "-m", "ignore artifacts")
+    git(repo, "branch", "main")
 
 
 if __name__ == "__main__":
