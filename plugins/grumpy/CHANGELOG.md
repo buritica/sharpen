@@ -3,6 +3,42 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.11.0 — stacked branches review their own layer, fix sorts out new capability
+
+`/grumpy:fix` sorts each finding as a fix or as new capability before acting on it, and
+records new-capability findings in its report (`## New capability`, with a ready-to-paste
+issue) instead of building them; `--file-issues` also files them where `gh` is available.
+Its report gains a `## Settled` list (`file:line | finding | decision | reason`) that
+`/grumpy:review` and `/grumpy:imagine` read, holding back a finding only when an entry
+names the same spot and problem with a reason, never a Critical one, and always listing
+what they held back. Both verdicts gain "ship it and file the rest" and "split it". The
+sub-agent prompts and their pipe format are unchanged. Nothing to migrate: an older
+`fix.md` without `## Settled` holds nothing back.
+
+Every gate pass (`simplify`, `review`, `imagine`, `fix`) now diffs against the base
+`scripts/diff_base.py` prints: sdlc's resolved base (`.claude/sdlc/<branch>/base.json`,
+sdlc 4.17.0+), else `git config branch.<branch>.sdlcBase`, else the open PR's base, else
+the branch's local upstream parent, else the default branch. On a stacked branch the passes
+review only its own layer, and `/grumpy:fix` refuses to edit an existing file outside that
+diff (it records such a finding as new capability instead; a Critical there is asked
+about, and fixed here on an unattended run). Each fix run now writes its own receipt
+(`receipt.py fix --stage review|imagine` -> `fix-review.json` / `fix-imagine.json`), so
+one run can't earn both fix gates with sdlc 4.17.0+; it refreshes `fix.json` too, so an
+older installed sdlc still records the fix gates.
+
+What changes without sdlc 4.17: the passes no longer always diff against the default
+branch. With no base file they still try `branch.<branch>.sdlcBase`, the open PR's base
+and a local upstream branch first, so a branch whose PR targets another branch, or that
+tracks a local parent, now reviews only its own layer. A pass that can't run
+`diff_base.py` says so and falls back to the default branch. A base.json or `sdlcBase`
+that no longer resolves, or a failed `gh` call, prints a `[grumpy]` line instead of
+falling through silently, and each report names the base it used and where it came from.
+
+`/grumpy:fix` picks its receipt's stage from the review and imagine receipts' timestamps,
+writes no receipt while a Critical is blocked on another branch, and records the base,
+reverted out-of-scope edits and open questions in `fix.md`. A stageless `receipt.py fix`
+removes earlier stage receipts.
+
 ## 2.10.0 — plugin paths resolve on every host
 
 Every path a pass reads from its own plugin (`scripts/receipt.py`,

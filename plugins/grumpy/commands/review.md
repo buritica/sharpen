@@ -58,13 +58,27 @@ Automatically detect what to review. No questions—just figure it out:
      running review — I can't reliably determine what you're trying to ship."
      and stop.
 2. Determine the best diff, in priority order:
-   - Branch ahead of origin default: resolve `BASE` first, trying each
-     candidate in order until one exists — this mirrors the same fallback
+   - Branch ahead of its base: resolve `BASE` first. On a stacked branch
+     that is the layer below, not main (`scripts/diff_base.py`, which reads
+     sdlc's resolved base); otherwise try each default-branch candidate in
+     order until one exists — this mirrors the same fallback
      chain `auto-init-gate-cycle.py` uses, since a bare `origin/HEAD` symref
      isn't always set and a `master`-only repo would otherwise silently break
      on a hardcoded `origin/main` guess:
      ```bash
-     BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     # The review base (scripts/diff_base.py): sdlc's resolved base for a
+     # stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+     # branch's upstream parent, then the default branch. On a stack this keeps
+     # the pass on this branch's own layer.
+     # If this path comes out empty (a host that does not fill in the braced
+     # name), point DIFF_BASE_PY at <grumpy plugin root>/scripts/diff_base.py.
+     DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+     BASE=""
+     # --why adds a second line naming the source; echo both for the report.
+     if [ -f "$DIFF_BASE_PY" ]; then OUT=$(python3 "$DIFF_BASE_PY" --worktree "$WT" --why) && BASE=$(printf '%s\n' "$OUT" | sed -n 1p) && echo "base: $BASE, from $(printf '%s\n' "$OUT" | sed -n 2p)" || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
+     if [ -z "$BASE" ]; then
+       BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     fi
      if [ -z "$BASE" ]; then
        for candidate in origin/main origin/master main master; do
          git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
@@ -219,12 +233,43 @@ Each agent returns raw pipe-delimited lines, not prose — the persona voice and
 
 ## Step 4: Aggregate and Deliver the Verdict
 
+### Settled findings (held back, never hidden)
+
+Before rendering, read the `## Settled` sections of
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it; set
+`GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
+`BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
+file exists. Each entry is
+`- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
+written by `/grumpy:fix` for a finding it already decided. Hold back a
+finding of yours only when ALL of these hold:
+
+- an entry names the same file, and a line within 3 of yours (or the same
+  construct, if the code moved);
+- the entry's finding text describes the same problem as yours, not merely
+  the same area;
+- the entry has a non-empty reason;
+- your finding is not 🚨 Critical (a Critical is always reported, settled or
+  not).
+
+One entry holds back one finding: merge duplicates of the same problem
+(several agents reporting it) first, then hold back that one. A different
+problem at the same spot, such as a misleading comment next to a settled
+fake assertion, is still reported. Ignore an entry that names a whole file,
+a directory, an aspect or a category, or that has no reason: it settles
+nothing. `## Fixed` entries settle nothing either; if a finding there still
+shows in the diff, report it as usual. A held-back finding
+is never dropped silently: the report lists it (below). This is aggregation
+only; the sub-agent prompts and their pipe format do not change.
+
 Once all agents complete, combine their findings into one unified review:
 
 ```markdown
 # Code Review: [Brief Description]
 
 _[One grumpy sentence summarizing your overall impression]_
+
+_Base: [DIFF_BASE], from [the source the `base:` line named, or "the default branch fallback"]_
 
 ## Critical Issues 🚨
 
@@ -253,6 +298,11 @@ _[One grumpy sentence summarizing your overall impression]_
 covered them: one line, `Deferred findings honored: N — already marked at
 the line, not re-raised.` Omit entirely when the count is zero.]
 
+[If any finding was held back as settled: `Settled findings held back: N`
+(a finding already skipped for its `ponytail:` marker counts there, not here),
+then one line each, `- [file:line]: [finding] — settled as [decision]:
+[reason]`. Omit entirely when the count is zero.]
+
 ## Strengths
 
 [What's actually working and should be preserved. Grudging or not, say it.]
@@ -263,8 +313,15 @@ the line, not re-raised.` Omit entirely when the count is zero.]
 
 ## Verdict
 
-[Overall assessment: ship it (grudgingly), fix and reship, or burn it down and
-start over]
+[Overall assessment: ship it (grudgingly), fix and reship, ship it and file
+the rest, split it, or burn it down and start over. Say "ship it and file the
+rest" when nothing Critical remains and every remaining finding is new
+capability (as `/grumpy:fix` Step 1a sorts it: the remedy adds behavior the
+branch's plan and diff never set out to provide, or touches a file outside
+the branch's diff, for a problem the diff did not introduce) or a Questionable
+nit. Say "split it" when fixing the findings would add files outside the
+branch's plan or roughly double the diff's added lines; name the part to move
+to its own branch. When both apply, "split it" wins.]
 ```
 
 ## Step 5: Persist Review Output
@@ -296,7 +353,7 @@ If `$PLAN` exists, append under `## Notes`:
 
 ```markdown
 ### Review — YYYY-MM-DD
-- **Verdict**: <ship it / fix and reship / burn it down>
+- **Verdict**: <ship it / fix and reship / ship it and file the rest / split it / burn it down>
 - **Critical**: <one-line summary per critical issue, or "none">
 - **Decisions**: <any approach changes or resolved questions>
 ```

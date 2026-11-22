@@ -146,7 +146,19 @@ always set), then the merge base `MB` that every base-side measurement uses:
 
 ```bash
 WT="${WT:-.}"
-BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+# The review base (scripts/diff_base.py): sdlc's resolved base for a
+# stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+# branch's upstream parent, then the default branch. On a stack this keeps
+# the pass on this branch's own layer.
+# If this path comes out empty (a host that does not fill in the braced
+# name), point DIFF_BASE_PY at <grumpy plugin root>/scripts/diff_base.py.
+DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+BASE=""
+# --why adds a second line naming the source; echo both for the report.
+if [ -f "$DIFF_BASE_PY" ]; then OUT=$(python3 "$DIFF_BASE_PY" --worktree "$WT" --why) && BASE=$(printf '%s\n' "$OUT" | sed -n 1p) && echo "base: $BASE, from $(printf '%s\n' "$OUT" | sed -n 2p)" || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
+if [ -z "$BASE" ]; then
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+fi
 if [ -z "$BASE" ]; then
   for candidate in origin/main origin/master main master; do
     git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
@@ -215,7 +227,19 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+# The review base (scripts/diff_base.py): sdlc's resolved base for a
+# stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+# branch's upstream parent, then the default branch. On a stack this keeps
+# the pass on this branch's own layer.
+# If this path comes out empty (a host that does not fill in the braced
+# name), point DIFF_BASE_PY at <grumpy plugin root>/scripts/diff_base.py.
+DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+BASE=""
+# --why adds a second line naming the source; echo both for the report.
+if [ -f "$DIFF_BASE_PY" ]; then OUT=$(python3 "$DIFF_BASE_PY" --worktree "$WT" --why) && BASE=$(printf '%s\n' "$OUT" | sed -n 1p) && echo "base: $BASE, from $(printf '%s\n' "$OUT" | sed -n 2p)" || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
+if [ -z "$BASE" ]; then
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+fi
 if [ -z "$BASE" ]; then
   for candidate in origin/main origin/master main master; do
     git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
@@ -471,7 +495,7 @@ verdict.
 
 _[One grumpy sentence on the overall state of the numbers]_
 
-Policy: [summary.config_source] · merge base [summary.base, short] · simplify_policy [summary.version] · [measured/estimated/unmeasured counts from summary.confidence]
+Policy: [summary.config_source] · base [the `base:` line: ref, from source] · merge base [summary.base, short] · simplify_policy [summary.version] · [measured/estimated/unmeasured counts from summary.confidence]
 
 ## Scorecard
 
