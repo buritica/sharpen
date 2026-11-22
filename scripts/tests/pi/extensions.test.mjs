@@ -82,6 +82,9 @@ const bash = (command) => ({ toolName: "bash", input: { command } });
 
 let sdlc;
 let guard;
+// One gate store for the whole file, and the store is keyed by branch name
+// only, not by repo. Every test that touches it uses its own feature/<letter>
+// branch so one test's cycle can't leak into another's decision.
 let gatesPath;
 
 before(async () => {

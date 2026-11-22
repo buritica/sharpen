@@ -1,5 +1,6 @@
-# Lint, test, marketplace consistency and the pi extension smoke test.
-# Every job fans through the shared setup workflow and runs on every event:
+# Lint, test, marketplace consistency, the pi extension smoke test and the
+# portable gate check. lint, test and marketplace fan through the shared setup
+# workflow; pi and gates set up their own. Every job runs on every event:
 # there is no path filter, because a filter that misses one file the checks
 # depend on (it once missed package.json, pyproject.toml and schemas/) turns
 # into a green ci-pass that validated nothing.
@@ -19,9 +20,8 @@ on:
   # BASE CHANGES. The default set (opened/synchronize/reopened) does not include
   # it, so when a parent PR merges and GitHub auto-retargets a stacked PR to
   # main, no new run fires — and the stacked PR keeps a green earned against a
-  # base that no longer exists, computed from a path gate diffed against that
-  # old base. `edited` also fires on title/body edits, so this costs some extra
-  # runs. That is the deliberate trade: a few wasted minutes against a required
+  # base that no longer exists. `edited` also fires on title/body edits, so
+  # this costs some extra runs. That is the deliberate trade: a few wasted minutes against a required
   # check that means "we validated this against a different branch."
   pull_request:
     types: [opened, synchronize, reopened, edited]
@@ -121,7 +121,11 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           set -eu
-          summary=$(printf '%s' "$NEEDS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"')
+          summary=$(printf '%s' "$NEEDS" | python3 -c '
+          import json, sys
+          for job, need in json.load(sys.stdin).items():
+              print("%s=%s" % (job, need["result"]))
+          ')
           [ -n "$summary" ] || { echo "ERROR: no job results found; is the needs list empty?"; exit 1; }
           echo "$summary"
           failed=$(printf '%s\n' "$summary" | grep -v '=success$' || true)

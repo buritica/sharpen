@@ -53,9 +53,9 @@ _generate_skill_spec.loader.exec_module(generate_skill)
 # interpreters fall back to _is_stdlib_by_location() instead of skipping
 # the check.
 STDLIB_MODULE_NAMES = getattr(sys, "stdlib_module_names", None)
+_SYS_PATHS = sysconfig.get_paths()
 _STDLIB_DIRS = tuple(
-    os.path.realpath(p)
-    for p in {sysconfig.get_paths()["stdlib"], sysconfig.get_paths()["platstdlib"]}
+    {os.path.realpath(_SYS_PATHS[k]) for k in ("stdlib", "platstdlib")}
 )
 
 
@@ -78,9 +78,7 @@ def _is_stdlib_by_location(mod):
     locations += list(spec.submodule_search_locations or [])
     for loc in locations:
         real = os.path.realpath(loc)
-        if "site-packages" in real.split(os.sep) or "dist-packages" in real.split(
-            os.sep
-        ):
+        if {"site-packages", "dist-packages"} & set(real.split(os.sep)):
             continue
         if any(real.startswith(d + os.sep) for d in _STDLIB_DIRS):
             return True

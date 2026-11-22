@@ -11,11 +11,12 @@
 #
 # core.hooksPath makes git ignore .git/hooks, so this hook then calls, in
 # order:
-#   1. the sdlc plugin's product pre-push (plugins/sdlc/scripts/pre-push.py,
-#      arriving with the area 2 PR in the stack), through the chain line its
-#      installer prints when core.hooksPath is set. A no-op until /sdlc:gate
-#      has recorded `git config sharpen.sdlcScripts`; warn-only unless
-#      `git config sharpen.prePush block`.
+#   1. the sdlc plugin's own pre-push.py, from the scripts dir that the
+#      plugin's install-pre-push.py records in `git config sharpen.sdlcScripts`
+#      (and /sdlc:gate refreshes). That config key and file name are the whole
+#      contract; test_pre_push_hook.py fails if this repo's install-pre-push.py
+#      stops naming either. A no-op while the key is unset (no sdlc version
+#      that ships pre-push.py installed, or /sdlc:gate never run).
 #   2. any other pre-push hook left in .git/hooks.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
@@ -31,9 +32,8 @@ if ! python3 "$ROOT/scripts/check-marketplace.py"; then
   exit 1
 fi
 
-# Never fails a push by being absent: unset config (main before the area 2
-# PR lands, or /sdlc:gate never run) is silent; a recorded path that no
-# longer has pre-push.py (a plugin update moved it) prints one line.
+# Never fails a push by being absent: unset config is silent; a recorded path
+# that no longer has pre-push.py (a plugin update moved it) prints one line.
 dir=$(git config --get sharpen.sdlcScripts || true)
 if [ -n "$dir" ]; then
   if [ -f "$dir/pre-push.py" ]; then

@@ -354,9 +354,8 @@ class WireTests(unittest.TestCase):
         real_open = open
 
         def deny_agents_tmp(path, *args, **kwargs):
-            if os.path.basename(str(path)).startswith("AGENTS.md.") and str(
-                path
-            ).endswith(".sdlc-tmp"):
+            name = os.path.basename(str(path))
+            if name.startswith("AGENTS.md.") and name.endswith(".sdlc-tmp"):
                 raise PermissionError(13, "Permission denied", str(path))
             return real_open(path, *args, **kwargs)
 

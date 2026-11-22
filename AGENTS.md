@@ -18,6 +18,13 @@ gitleaks workflow it shipped with silently no-op'd without an undocumented
 `GITLEAKS_LICENSE` secret, so it was removed rather than fixed. `/sdlc:audit` will flag
 P4 as missing here; that's expected, not a regression to chase.
 
+The same goes for P1-C and P1-D (the always-runs path gate) and the P1-A concurrency shape.
+CI here has no path filter on purpose: a filter that missed one file the checks depend on
+once let `ci-pass` go green having validated nothing, and every job is cheap enough to run on
+every PR. Concurrency cancels superseded PR runs but gives runs on `main` a group per run, so
+a quick second merge can't cancel the first one's result. `/sdlc:audit` will report both as
+deviations from `spec.md`; they are deliberate, not regressions.
+
 `/sdlc:new` is for consumer repos, not this one; this repo is already scaffolded. The
 managed **SDLC** block at the bottom of this file is `/sdlc:init` step 10's output — when
 the toolchain changes, re-run `python3 plugins/sdlc/scripts/agents_md.py --root .` with the
@@ -122,10 +129,11 @@ scripts/install-hooks.sh              # once per clone: wires .githooks/pre-push
 ```
 
 Stdlib python only, so there is no runtime to install. **Python 3.9 is the floor** (macOS's
-system `python3`), and CI tests 3.9 and 3.13. ruff targets `py39`, which flags some newer
-syntax (`match`) but not all of it: `int | None` annotations and `zip(strict=True)` pass lint
-and fail at runtime on 3.9, and only the 3.9 test leg catches them, for code the tests reach.
-Don't reach for newer syntax or stdlib APIs without a fallback.
+system `python3`), and CI tests 3.9 and 3.13. ruff targets `py39` and selects `FA102`, so
+`match` and `int | None` annotations fail lint. Newer stdlib APIs and keywords
+(`zip(strict=True)`, `itertools.pairwise`) still pass lint and fail at runtime on 3.9; only
+the 3.9 test leg catches them, for code the tests reach. Don't reach for them without a
+fallback.
 
 `run-tests.py` also runs two contract suites that sit outside any plugin:
 
@@ -141,15 +149,17 @@ Tests must pass as root too: containers and cloud sessions usually run as root, 
 where agents run gate 1. Don't rely on file modes to make a write fail; patch the call.
 
 CI (`.github/workflows/ci.yml`) runs every job on every PR, on each push to `main`, weekly and
-by hand, with no path filter. `ci-pass` is the single required check and fails on any job that
-didn't succeed, skipped included.
+by hand, with no path filter. `ci-pass` is the one check to require on `main` (branch
+protection or a ruleset; it only gates merges once that setting exists) and fails on any job
+that didn't succeed, skipped included.
 
 Two repo-local hooks back that up before a PR exists: `.githooks/pre-push` (any agent or
-human; it also chains the sdlc plugin's product pre-push once that lands from the area 2 stack,
-and any other hook left in `.git/hooks`; until then that step is silent, and
-`scripts/tests/test_pre_push_hook.py` pins that its absence never fails a push), and
-`.claude/settings.json`, which runs `scripts/pre-merge-check.sh` before `gh pr create` /
-`gh pr merge` under Claude Code.
+human; it also chains the sdlc plugin's own `pre-push.py`, found through the
+`git config sharpen.sdlcScripts` path that the plugin's `install-pre-push.py` records, and any
+other hook left in `.git/hooks`. While no sdlc version that ships `pre-push.py` is installed,
+that step is silent, and `scripts/tests/test_pre_push_hook.py` pins that its absence never
+fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.sh` before
+`gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
 <!-- rendered by sdlc 4.13.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->

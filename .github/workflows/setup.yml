@@ -52,6 +52,8 @@ jobs:
         if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
         run: pip install -r requirements-dev.txt
 
+      # ponytail: the 3.13 test leg reinstalls the 3.13 setup-python already
+      # provides; skip uv for it if this step flakes on download or passes 30s.
       - name: Put the requested Python first on PATH
         if: ${{ inputs.python-version != '' && !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
         env:
@@ -62,7 +64,21 @@ jobs:
           uv python install "$PYVER"
           bindir="$(dirname "$(uv python find "$PYVER")")"
           echo "$bindir" >> "$GITHUB_PATH"
-          "$bindir/python3" --version
+
+      # Runs on every runner, self-hosted included (where the uv step above is
+      # skipped): a leg labelled 3.9 must fail rather than test another Python.
+      - name: Check the requested Python is the one on PATH
+        if: ${{ inputs.python-version != '' }}
+        env:
+          PYVER: ${{ inputs.python-version }}
+        run: |
+          set -eu
+          actual="$(python3 -c 'import platform; print(platform.python_version())')"
+          echo "python3 is $actual ($(command -v python3)); requested $PYVER"
+          case "$actual" in
+            "$PYVER" | "$PYVER".*) ;;
+            *) echo "::error::requested Python $PYVER but python3 is $actual"; exit 1 ;;
+          esac
 
       - name: Run
         env:

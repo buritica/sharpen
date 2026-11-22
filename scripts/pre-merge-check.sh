@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 INPUT=$(cat)
+# ponytail: one python3 spawn per field, on every Bash call (settings.json
+# matches all Bash); parse once if this hook adds visible latency (>100ms).
 TOOL=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
 [ "$TOOL" = "Bash" ] || exit 0
 
@@ -24,6 +26,8 @@ printf '%s' "$COMMAND" | grep -qE 'gh\s+pr\s+(create|merge)' || exit 0
 # started at the repo root runs this file from the main checkout even when the
 # command runs in a /sdlc:plan worktree under .claude/worktrees/. The payload's
 # cwd says where the command runs; a leading `cd <dir> &&` is not followed.
+# Any git tree with a scripts/check-marketplace.py counts, so a sibling
+# marketplace repo laid out the same way gets its own checker run.
 CWD=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || echo "")
 TARGET="$REPO_ROOT"
 if [ -n "$CWD" ] && TOP=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) && [ -f "$TOP/scripts/check-marketplace.py" ]; then
@@ -33,9 +37,11 @@ fi
 OUTPUT=$(cd "$TARGET" && python3 "$TARGET/scripts/check-marketplace.py" 2>&1) && exit 0
 
 # Failed: deny with a single-line reason (JSON-escaped via python).
-printf '%s' "$OUTPUT" | python3 -c "
-import sys, json
+# Name the tree that was checked: it may be a worktree, not this checkout.
+printf '%s' "$OUTPUT" | TARGET="$TARGET" python3 -c "
+import os, sys, json
 msg = sys.stdin.read().strip()
-print(json.dumps({'decision': 'deny', 'reason': 'Marketplace check failed; fix before opening/merging a PR:\n' + msg}))
+where = os.environ['TARGET']
+print(json.dumps({'decision': 'deny', 'reason': 'Marketplace check failed in ' + where + '; fix before opening/merging a PR:\n' + msg}))
 " >&2
 exit 2

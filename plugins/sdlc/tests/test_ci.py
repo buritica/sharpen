@@ -2,9 +2,12 @@
 """Tests for this repo's own CI workflow: the ci-pass aggregator, triggers
 and the Python floor."""
 
+import json
 import os
 import re
+import subprocess
 import sys
+import textwrap
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,6 +68,47 @@ class TestCiPassJob(unittest.TestCase):
         # A hardcoded job list in the message went stale once already.
         self.assertIn("toJSON(needs)", self.block)
 
+    def _ci_pass_script(self):
+        """The ci-pass `run: |` body, dedented the way Actions runs it."""
+        lines = self.block.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == "run: |")
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        body = []
+        for ln in lines[start + 1 :]:
+            if ln.strip() and len(ln) - len(ln.lstrip()) <= indent:
+                break
+            body.append(ln)
+        return textwrap.dedent("\n".join(body))
+
+    def _run_ci_pass(self, results):
+        needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
+        env = dict(os.environ, NEEDS=json.dumps(needs))
+        return subprocess.run(
+            ["bash", "-c", self._ci_pass_script()],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def test_ci_pass_script_passes_only_when_every_job_succeeded(self):
+        # Runs the real script, so an inverted grep or a broken parse fails
+        # here instead of greening (or blocking) every PR.
+        jobs = ("lint", "test", "marketplace", "pi", "gates")
+        ok = self._run_ci_pass({j: "success" for j in jobs})
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        for bad in ("failure", "cancelled", "skipped"):
+            with self.subTest(result=bad):
+                results = {j: "success" for j in jobs}
+                results["pi"] = bad
+                r = self._run_ci_pass(results)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("pi=" + bad, r.stdout)
+
+    def test_ci_pass_script_fails_on_empty_needs(self):
+        r = self._run_ci_pass({})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
 
 class TestCiTriggers(unittest.TestCase):
     def setUp(self):
@@ -75,6 +119,7 @@ class TestCiTriggers(unittest.TestCase):
         # green ci-pass that validated nothing.
         self.assertNotIn("paths-filter", self.content)
         self.assertNotIn("paths:", self.content)
+        self.assertNotIn("paths-ignore:", self.content)
 
     def test_runs_on_main_weekly_and_by_hand(self):
         self.assertRegex(self.content, r"push:\s*\n\s*branches:\s*\[main\]")

@@ -19,6 +19,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 MIN_NODE = (22, 6)
 
+# ponytail: this invocation is also spelled out in ci.yml's `pi` job and in
+# docs/pi.md (CI runs it directly so a missing Node can't skip there). Move
+# all three behind one script the next time any copy of it changes.
 PI_TEST_CMD = [
     "node",
     "--experimental-strip-types",

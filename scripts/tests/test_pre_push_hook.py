@@ -2,9 +2,11 @@
 """Tests for this repo's own .githooks/pre-push, run in a throwaway repo with
 a stub check-marketplace.py so they don't depend on this checkout's state.
 
-The hook chains to the sdlc plugin's product pre-push (from the area 2 PR in
-the stack), which may not exist yet. These pin that its absence never fails
-a push. Stdlib only.
+The hook chains to the sdlc plugin's own pre-push.py through
+`git config sharpen.sdlcScripts`, which may not be set (no sdlc version that
+ships pre-push.py installed). These pin that its absence never fails a push,
+and that the config key and file name still match what the plugin's
+install-pre-push.py records. Stdlib only.
 """
 
 import os
@@ -17,6 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HOOK = os.path.join(ROOT, ".githooks", "pre-push")
+INSTALLER = os.path.join(ROOT, "plugins", "sdlc", "scripts", "install-pre-push.py")
 REFS = "refs/heads/x 1111111 refs/heads/x 0000000\n"
 
 
@@ -75,7 +78,7 @@ class PrePushHook(unittest.TestCase):
         )
 
     def test_no_product_hook_configured_passes_quietly(self):
-        # main before area 2 merges: sharpen.sdlcScripts is never set.
+        # No sdlc pre-push installed: sharpen.sdlcScripts is never set.
         r = self.push()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stderr, "")
@@ -116,6 +119,26 @@ class PrePushHook(unittest.TestCase):
         os.symlink(self.hook, os.path.join(self.repo, ".git", "hooks", "pre-push"))
         r = self.push()  # timeout=30 turns a loop into an error
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class ChainContract(unittest.TestCase):
+    """The hook finds the sdlc pre-push only through a config key and a file
+    name. If the plugin's installer renames either, the chain silently never
+    fires; this goes red instead. Vacuous until install-pre-push.py exists in
+    this checkout."""
+
+    def test_installer_records_the_key_and_file_the_hook_reads(self):
+        with open(HOOK) as f:
+            hook = f.read()
+        self.assertIn("sharpen.sdlcScripts", hook)
+        self.assertIn('"$dir/pre-push.py"', hook)
+        if not os.path.exists(INSTALLER):
+            return
+        with open(INSTALLER) as f:
+            installer = f.read()
+        self.assertIn("sharpen.sdlcScripts", installer)
+        scripts = os.path.dirname(INSTALLER)
+        self.assertTrue(os.path.isfile(os.path.join(scripts, "pre-push.py")))
 
 
 if __name__ == "__main__":

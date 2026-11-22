@@ -9,7 +9,7 @@
 //   - an extensionless relative import that names a sibling .ts file
 //     resolves to that file.
 import { existsSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const SDK = "@earendil-works/pi-coding-agent";
 const STUB = new URL("./pi-stub.mjs", import.meta.url).href;
@@ -25,7 +25,7 @@ export async function resolve(specifier, context, nextResolve) {
   ) {
     const candidate = new URL(`${specifier}.ts`, context.parentURL);
     if (existsSync(fileURLToPath(candidate))) {
-      return nextResolve(pathToFileURL(fileURLToPath(candidate)).href, context);
+      return nextResolve(candidate.href, context);
     }
   }
   return nextResolve(specifier, context);
