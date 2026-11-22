@@ -209,6 +209,14 @@ class ParseReportTest(unittest.TestCase):
         )
         self.assertEqual(len(bench.parse_report(report)), 1)
 
+    def test_section_body_lines_counts_what_the_parser_skips(self):
+        self.assertEqual(
+            bench.section_body_lines("## Serious Concerns\n\n- None.\n"), 0
+        )
+        self.assertEqual(
+            bench.section_body_lines("## Serious Concerns\n\n| a | b |\n"), 1
+        )
+
     def test_has_severity_sections(self):
         self.assertTrue(bench.has_severity_sections("## Serious Concerns\n"))
         self.assertFalse(bench.has_severity_sections("# Code Review\nAll good.\n"))
@@ -557,6 +565,14 @@ class SummaryCompareTest(unittest.TestCase):
             _results({"a/review": {"runs": 3, "failed_runs": 1}}),
         )
         self.assertEqual(problems, [])
+
+    def test_underrated_save_failures_and_interruptions_are_regressions(self):
+        cand = _results({"a/review": {"underrated": 1.0, "from_output": 3}})
+        cand["interrupted"] = True
+        problems, _ = bench.compare(
+            _results({"a/review": {"underrated": 0.0, "from_output": 0}}), cand
+        )
+        self.assertEqual(len(problems), 3)
 
     def test_overrated_and_duplicate_rises_are_regressions(self):
         problems, _ = bench.compare(
@@ -963,6 +979,48 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(r["status"], "cli-missing")
         self.assertIn("not found on PATH", r["error"])
 
+    def test_dropped_bullets_make_a_run_unparsed(self):
+        report = "# Code Review\\n\\n## Serious Concerns\\n\\n    - indented [a.py:1]"
+        out = [sys.executable, "-c", f"print('{report}')"]
+        r = bench.run_one(
+            "clean-refactor", "review", out, None, self.tmp, "d", 5, False
+        )
+        self.assertEqual(r["status"], "unparsed")
+        self.assertIn("report", r)
+
+    def test_nonzero_exit_is_a_failed_run(self):
+        out = [
+            sys.executable,
+            "-c",
+            "import sys; print('# Code Review\\n\\n## Critical Issues\\n\\n- x [a.py:1]'); sys.exit(3)",
+        ]
+        r = bench.run_one(
+            "clean-refactor", "review", out, None, self.tmp, "n", 5, False
+        )
+        self.assertEqual(r["status"], "exit-nonzero")
+        self.assertEqual(r["exit_code"], 3)
+
+    def test_bad_invocation_fails_before_any_run_or_directory(self):
+        out = os.path.join(self.tmp, "res")
+        code, _ = self.run_cli(
+            "run",
+            "--host",
+            "codex",
+            "--invoke",
+            "native",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(out))
+
+    def test_same_second_runs_get_their_own_directory(self):
+        base = os.path.join(self.tmp, "stamp")
+        self.assertEqual(bench._new_dir(base), base)
+        self.assertEqual(bench._new_dir(base), base + "-2")
+
     def test_unparseable_report_is_a_failed_run(self):
         out = [sys.executable, "-c", "print('# Code Review\\n\\nAll good.')"]
         r = bench.run_one(
@@ -992,7 +1050,7 @@ class RunnerTest(unittest.TestCase):
                 else:
                     os.environ[k] = v
         with open(os.path.join(self.tmp, "e.log"), encoding="utf-8") as f:
-            self.assertEqual(f.read().split(), ["CC=-", "CPR=-", "GPR=True"])
+            self.assertEqual(f.read().split()[:3], ["CC=-", "CPR=-", "GPR=True"])
 
     def test_a_run_that_raises_is_recorded_not_fatal(self):
         args = argparse.Namespace(timeout=5, keep=False)

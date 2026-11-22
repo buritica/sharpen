@@ -27,9 +27,21 @@ committed on `bench/<case>`), runs the pass there, and reads
 `.claude/grumpy/bench/<case>/<pass>.md`. If the pass printed its report but couldn't
 save it (headless Claude Code treats `.claude/` as a sensitive path), the printed
 report is scored and the run is marked `scored-from-output`. The report, the host's output and
-`results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/`, which is gitignored.
-`results.json` records the host, model, CLI version, the exact command and a hash of the
-pass's prompt files, so two runs can be told apart later.
+`results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/` (`default` with no
+`--model`, `/` in a model id becomes `_`, and a second run in the same second gets a
+`-2` suffix), which is gitignored; `--out` picks another root and `--keep` leaves each
+temp repo behind for inspection. `results.json` is rewritten after every run, and
+records the host, model, CLI version, the exact command, and hashes of the pass's prompt
+files and of each case key, so two runs can be told apart later. Each run's entry says
+how every finding was classified (`assigned`).
+
+Every run gets one `status`: `scored`, `scored-from-output`, or a failure: `no-report`,
+`unparsed` (no severity headings, or content the parser couldn't read), `timeout`
+(`--timeout`, default 1200 seconds per run; the host's whole process group is killed),
+`exit-nonzero`, `cli-missing`, `error`, or `no-saved-report` after a `rescore`. `run`
+exits 0 when every run scored, 1 when any failed, was interrupted or nothing ran, and 2
+when the host CLI is missing or the invocation is invalid (checked, with every key,
+before the first paid session).
 
 `--repeat` (default 3) runs each case several times; models aren't deterministic, and the
 spread across repeats is reported next to the mean. `compare` exits 1 when the candidate,
@@ -60,8 +72,8 @@ does the same on Claude Code. `--cmd` replaces the whole command line (`{model}`
 `{grumpy}`, `{claude_tools}` and `{prompt}` are substituted; `{model}` must be its own
 token after its flag, so both drop when no model is given), so a wrong flag can be fixed
 without a code change. Claude Code runs get `acceptEdits` plus an allowlist of what a
-review or imagine pass needs (git, python3, read-only file tools, `Write` scoped to the
-report folder, Agent), not a permission bypass; Codex runs in its
+review or imagine pass needs (git, python3, read-only file tools, file writes scoped to
+the report folder with `Edit(.claude/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
 `workspace-write` sandbox inside the temp repo.
 
 ## Cost
@@ -69,6 +81,21 @@ report folder, Agent), not a permission bypass; Codex runs in its
 Seven cases, five for review and two for imagine. `run --pass all` with the default
 three repeats is 21 headless sessions per host and model. `--cases` and `--repeat 1` give a
 quick check.
+
+Before you run it:
+
+- **Inline runs read the generated SKILL.md.** Codex, pi and `--invoke inline` send
+  `skills/<pass>/SKILL.md`, not `commands/<pass>.md`. After editing a command, run
+  `python3 scripts/generate-skill.py --write-all-in plugins/grumpy` first or you bench
+  the old prompt.
+- **An installed grumpy can shadow the working tree.** `claude -p --plugin-dir` adds the
+  working tree's grumpy but doesn't unload an installed one, and your installed hooks
+  and settings run in the bench session too. Bench where grumpy isn't installed, or
+  compare only runs made on the same machine with the same installs.
+- `--invoke native` exists only for Claude Code; Codex and pi always run inline.
+- The fixture code is excluded from ruff (`pyproject.toml`) and from `/grumpy:simplify`
+  (`.sharpen/simplify.json`), because it plants bugs on purpose. Check a new case by
+  running the unit tests, which validate every key against its files.
 
 ## Cases
 
