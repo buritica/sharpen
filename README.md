@@ -1,8 +1,8 @@
 # sharpen
 
-An opinionated SDLC with one authoritative gate, and an adversarial reviewer that means it.
+An opinionated, local SDLC: a gate chain that runs before the pull request exists, and an adversarial reviewer that means it.
 
-Three Claude Code plugins that make review and enforcement real instead of aspirational: [sdlc](plugins/sdlc/) runs `plan → gate → ship` and makes one CI check the only thing that can block a merge, [grumpy](plugins/grumpy/) is the reviewer that actually reads the diff, and [sdlc-guardrails](plugins/sdlc-guardrails/) keeps commits off your default branch. Point them at any repo — they read the codebase and derive the toolchain, they don't ship one.
+Three Claude Code plugins that make review and enforcement real instead of aspirational: [sdlc](plugins/sdlc/) runs `plan → gate → ship` and blocks the pull request until the gate chain is done, on your machine, [grumpy](plugins/grumpy/) is the reviewer that actually reads the diff, and [sdlc-guardrails](plugins/sdlc-guardrails/) keeps commits off your default branch. Point them at any repo — they read the codebase and derive the toolchain, they don't ship one.
 
 ```sh
 claude plugin marketplace add buritica/sharpen
@@ -58,13 +58,13 @@ It doesn't render findings as a bulleted report and call that a review:
 
 `--level grumpy|grumpier|linus` turns that up or down. It's not just flavor — a review that reads like a linter's word salad gets skimmed, not acted on. See [`plugins/grumpy/README.md`](plugins/grumpy/README.md) for what a finding actually looks like and how `/grumpy:fix` resolves it.
 
-## One gate, no quiet skip
+## The gate is local, and that's the point
 
-Most repos enforce quality in three places: git hooks, CI, and whatever the developer remembers. None is designated the source of truth, so enforcement settles wherever it lands by accident — usually a git hook, while everyone believes it's CI.
+Review happens before the pull request, in the agent's own session. The chain records to a gitignored JSON store keyed by branch, and a review gate records only from the receipt its grumpy pass leaves when it finishes, naming the commit it reviewed — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, or a commit has landed since the review, opening the PR stays blocked, whichever way the agent opens it: `gh pr create`, `gh api`, `glab`, or a GitHub MCP tool. A git pre-push hook is the floor under that for anything the host hooks can't see, and it warns unless the repo opts in to blocking. Nothing goes to CI, and no CI job checks gate evidence.
 
-This picks one: a single required check, `ci-pass`, at the boundary to shared state. Pre-commit hooks and the local gate chain are fast local echoes; they can be skipped, and merge safety never depends on them.
+The limit is stated plainly in the code: enforcement is opt-out per branch, and it's not an adversarial control. It stops an agent talking itself past its own process; it doesn't stop a person who edits the store or opens the PR from somewhere the hooks don't run. That's deliberate. The people and agents using it are coworkers, not attackers.
 
-That gate can't be faked from the inside, either. The chain records to a JSON store keyed by branch, and a review gate records only from the receipt its grumpy pass leaves when it finishes, naming the commit it reviewed — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, or a commit has landed since the review, `gh pr create` stays blocked. The limit is opt-out per branch, and it's stated plainly in the code: this stops an agent talking itself past its own process. It's not an adversarial control.
+CI does a different job. `/sdlc:init` scaffolds your pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, typecheck, build), so merge safety for the code never depends on a git hook someone skipped. It doesn't read gate state, and it doesn't need to.
 
 ## Capabilities, not templates
 

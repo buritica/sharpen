@@ -24,8 +24,8 @@ contributor's own commits ran against their own clone, if any hooks ran at all.
 That reads as "no cycle -> allow" and the PR goes out ungated. This is
 architectural, not a parsing gap: the whole system is local-hook-based state
 with no shared backend across separate clones, so there is no cycle to find.
-Closing it needs a different enforcement point entirely (a CI-side check that
-re-derives gate state from the PR's own commits, not this local store) — not a
+Closing it is out of scope by design: sharpen is local and pre-PR and does no
+CI-side gate checking (docs/portable-core.md, "Enforcement model"). It is not a
 fix to how this hook reads --head.
 
 Denials go out as the documented PreToolUse payload *and* exit 2; caveats that

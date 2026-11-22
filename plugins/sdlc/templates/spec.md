@@ -12,20 +12,25 @@ A generated pipeline is correct when it implements every pattern below using the
 
 ## Core principle: separate **enforcement** from **feedback**
 
-The failure this spec exists to prevent: several layers (git hooks, CI, the gate
-chain) each *re-running the same checks*, with **none designated the source of
+The failure this spec exists to prevent: several layers (git hooks, CI) each
+*re-running the same code checks*, with **none designated the source of
 truth** — so enforcement ends up wherever it accidentally lands (usually git
-hooks), while everyone *thinks* CI or the gate is "the gate."
+hooks), while everyone *thinks* CI is "the gate."
 
-- **Enforcement = exactly one authoritative point**, at the boundary to shared
-  state → a **required CI check** before merge. One place. This is *the* gate.
-- **Feedback = as early as is cheap**, everywhere else. Pre-commit hooks and
-  `/sdlc:gate` are *echoes* of CI for fast local signal — never the source of
-  truth. They may be skipped, bypassed, or absent; merge safety must not depend
-  on them.
+- **Enforcement of the code checks = exactly one authoritative point**, at the
+  boundary to shared state → a **required CI check** before merge. One place.
+- **Feedback = as early as is cheap**, everywhere else. Pre-commit hooks are
+  *echoes* of CI for fast local signal — never the source of truth. They may be
+  skipped, bypassed, or absent; merge safety for the code must not depend on
+  them.
 
 Once split, "should it be a hook or CI?" stops being either/or: **CI enforces,
-hooks and the gate echo early.**
+hooks echo early.**
+
+`/sdlc:gate` is a different layer and out of this spec's scope: the local,
+pre-PR review chain (simplify, review, imagine, fix) that blocks opening the PR
+on the developer's machine. It is not an echo of CI, and CI never reads its
+state.
 
 ## Cadence model: cost × trigger-frequency
 

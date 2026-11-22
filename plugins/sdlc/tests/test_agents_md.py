@@ -85,7 +85,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("not installed", block)
         self.assertNotIn("/grumpy:review", block)
         self.assertIn(
-            "- deploy: CI → halfmoon via bm2\n- CI runs the same commands", block
+            "- deploy: CI → halfmoon via bm2\n- CI runs these commands, and may run more",
+            block,
         )
         self.assertIn("origin/master", block)
         self.assertIn("required check on `master`", block)
