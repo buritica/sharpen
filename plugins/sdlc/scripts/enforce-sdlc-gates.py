@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: block `gh pr create` when SDLC gates are incomplete.
+PreToolUse hook: block opening a PR when SDLC gates are incomplete.
 
-Reads the shared (per-repo, branch-keyed) JSON gate store, takes the branch from
-the command's --head flag (or, failing that, its working directory), and blocks
-if any required gate for the tier is missing. Because the store is shared across
-worktrees, a cycle recorded in one checkout is seen here even when the PR is
-created from another. Opt-in: no cycle for the branch -> allow.
+Every path pr_paths.pr_opens() recognizes is gated: `gh pr create`/`gh pr new`,
+a `gh api` POST to .../pulls or a createPullRequest mutation, `glab mr create`,
+`hub pull-request`, `git push -o merge_request.create`, and MCP
+create_pull_request/create_merge_request tools, from Bash, Monitor or pi's
+bash. For each one it reads the shared (per-repo, branch-keyed) JSON gate
+store of the checkout pr_paths resolved (the workdir, or the checkout whose
+remote matches a `-R`/owner/project hint), takes the branch from the call's
+head (`--head`, `--source-branch`, `head=`, the MCP `head`/`source_branch`;
+`HEAD`, `@` or a shell-expanded value mean the workdir's checked-out branch),
+and blocks if any required gate for the tier is missing or stale. Because the
+store is shared across worktrees, a cycle recorded in one checkout is seen here
+even when the PR is created from another. Opt-in: no cycle for the branch, or a
+named repo with no checkout in reach from a non-checkout cwd -> allow, with a
+note.
 
 KNOWN BLIND SPOT, not a bug to be fixed here: `--head owner:branch` (a PR from a
 fork) strips to the bare branch name for the store lookup (pr_paths.normalize_head),
@@ -22,7 +31,7 @@ fix to how this hook reads --head.
 Denials go out as the documented PreToolUse payload *and* exit 2; caveats that
 accompany an allow can only reach the user. See hook_out for why.
 
-Pure stdlib — runs without bun. @fires-on Bash tool, @blocking
+Pure stdlib — runs without bun. @fires-on Bash, Monitor and MCP PR tools, @blocking
 """
 
 import json

@@ -35,6 +35,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/enforce-sdlc-gates.py\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/block-direct-gate-record.py\"",
+            "timeout": 5
           }
         ]
       }

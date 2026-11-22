@@ -91,10 +91,14 @@ export default function (pi: ExtensionAPI) {
   // PreToolUse: block every PR path (see pr_paths.py) until gates pass, and block direct
   // `record-gate.py --record` for skill-gated gates.
   pi.on("tool_call", async (event, ctx) => {
-    // Any other tool that opens a PR (pi's built-in MCP, or an MCP extension's
-    // `mcp_<server>_create_pull_request`) goes through the same script under
-    // its own name; pr_paths.py decides whether it is a PR. Name-only filter
-    // here so python isn't spawned on every tool call.
+    // An MCP PR tool that pi sees as its own tool (an MCP extension that
+    // registers each server tool directly, e.g. pi-mcp-extension's
+    // `mcp_<server>_create_pull_request` in direct mode) goes through the same
+    // script under its own name; pr_paths.py decides whether it is a PR. pi
+    // ships no MCP of its own, and an adapter that routes every call through
+    // one proxy tool hides the real tool name from this filter: the git
+    // pre-push floor covers that case. Name-only filter here so python isn't
+    // spawned on every tool call.
     const bash = isToolCallEventType("bash", event) ? event : null;
     if (!bash && !MCP_PR_TOOL.test(event.toolName)) return;
     const payload = {

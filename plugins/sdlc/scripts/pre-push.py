@@ -24,6 +24,10 @@ escape hatch, not `--no-verify`, which /sdlc:ship forbids.
 
 Opt-in like the PR gate: a branch with no cycle is not checked. Failures in
 this script fail open with a message, so a broken hook never wedges a push.
+That holds in block mode too: a corrupt gate store, or an unexpected error
+here, lets the push through with a message rather than refusing it. That is
+deliberate, and unlike enforce-sdlc-gates.py, which fails closed on the same
+store; the PR hook is still the gate where a tool hook can see the PR.
 
 Installed by install-pre-push.py as a shim in the repo's common hooks dir.
 Pure stdlib. @fires-on git pre-push, @blocking (block mode only)

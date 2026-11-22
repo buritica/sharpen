@@ -8,6 +8,7 @@ paths block. The rows mirror the path matrix in the area 2 audit, including
 the paths deliberately left to the git pre-push floor.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -67,8 +68,10 @@ def run(script, cwd, stdin="", env=None, args=()):
 
 
 class ArmedRepo(unittest.TestCase):
+    REMOTE = "https://github.com/o/r.git"
+
     def setUp(self):
-        self.repo = make_repo()
+        self.repo = make_repo(remote=self.REMOTE)
         self.store = os.path.join(self.repo, ".sharpen", "data", "gates.json")
         self.env = dict(os.environ, SDLC_GATES_PATH=self.store)
         r = run(RECORD, self.repo, env=self.env, args=("--init", "small-medium"))
@@ -96,9 +99,16 @@ class ShellPathsTest(ArmedRepo):
         "gh api repos/o/r/pulls -f head=feat/x -f base=main -f title=t",
         "gh api --method POST repos/o/r/pulls --input body.json",
         "gh api repos/{owner}/{repo}/pulls -f head=feat/x -f base=main",
+        "gh api -X POST repos/:owner/:repo/pulls -f head=feat/x",
+        "gh pr create -R github.com/o/r --fill",
+        "gh pr create --repo=https://github.com/o/r --fill",
+        # A -R naming a repo this checkout has no remote for (a fork without
+        # an `upstream` remote): judged against the checkout, not allowed.
+        "gh pr create -R upstream-owner/r --fill",
         'gh api graphql -f query="mutation{createPullRequest(input:{}){pullRequest{url}}}"',
         "glab mr create --fill",
         "glab mr create --source-branch feat/x --fill",
+        "glab mr create -R o/r --fill",
         "hub pull-request -m t",
         "git push -o merge_request.create origin feat/x",
         "git push --push-option=merge_request.create origin HEAD",
@@ -207,11 +217,40 @@ class McpPathsTest(ArmedRepo):
         self.assertIn("No gate cycle", r.stdout)
 
     def test_mcp_pr_for_a_repo_with_no_checkout_allows_with_a_note(self):
+        # Only from a cwd that is not a checkout: there is no store to read.
         r = self.enforce(
-            "mcp__github__create_pull_request", {**self.ARGS, "owner": "x", "repo": "y"}
+            "mcp__github__create_pull_request",
+            {**self.ARGS, "owner": "x", "repo": "y"},
+            cwd=os.path.realpath(tempfile.mkdtemp()),
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("No local checkout of x/y", r.stdout)
+
+    def test_mcp_pr_for_an_unmatched_repo_from_a_checkout_judges_it(self):
+        r = self.enforce(
+            "mcp__github__create_pull_request", {**self.ARGS, "owner": "x", "repo": "y"}
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("judged the checkout at", r.stderr)
+
+
+class NoRemoteCheckoutTest(ArmedRepo):
+    """A checkout with no remote at all still blocks on its own cycle, whatever
+    repo a hint names: no remote can match, and that must not mean allow."""
+
+    REMOTE = None
+
+    def test_dash_R_blocks(self):
+        for cmd in ("gh pr create -R o/r --fill", "glab mr create -R o/r --fill"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(cmd).returncode, 2)
+
+    def test_mcp_blocks(self):
+        r = self.enforce(
+            "mcp__github__create_pull_request",
+            {"owner": "o", "repo": "r", "head": BRANCH, "base": "main"},
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
 
 
 class MultiRepoSessionTest(unittest.TestCase):
@@ -248,24 +287,94 @@ class MultiRepoSessionTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_gh_dash_R_from_parent_dir_finds_the_checkout(self):
+        for spec in (
+            "-R o/r",
+            "-R github.com/o/r",
+            "--repo=https://github.com/o/r",
+            "--repo https://github.com/o/r.git",
+        ):
+            with self.subTest(spec=spec):
+                r = self.enforce(
+                    "Bash",
+                    {"command": f"gh pr create {spec} --head feat/x --fill"},
+                    self.parent,
+                )
+                self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_glab_dash_R_from_parent_dir_finds_the_checkout(self):
         r = self.enforce(
-            "Bash", {"command": "gh pr create -R o/r --head feat/x --fill"}, self.parent
+            "Bash",
+            {"command": "glab mr create -R o/r --source-branch feat/x --fill"},
+            self.parent,
         )
         self.assertEqual(r.returncode, 2, r.stderr)
 
 
-class RepoSlugTest(unittest.TestCase):
-    def test_remote_spellings(self):
+class GitlabNestedGroupTest(unittest.TestCase):
+    def test_mcp_project_id_with_nested_group_finds_the_checkout(self):
+        parent = os.path.realpath(tempfile.mkdtemp())
+        make_repo(parent, "git@github.com:o/other.git")
+        repo = make_repo(parent, "https://gitlab.com/group/sub/r.git")
+        env = {k: v for k, v in os.environ.items() if k != "SDLC_GATES_PATH"}
+        r = run(RECORD, repo, env=env, args=("--init", "small-medium"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        payload = {
+            "tool_name": "mcp__gitlab__create_merge_request",
+            "tool_input": {
+                "project_id": "group/sub/r",
+                "source_branch": BRANCH,
+                "target_branch": "main",
+            },
+        }
+        r = run(ENFORCE, parent, json.dumps(payload), env)
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+
+class RepoMatchTest(unittest.TestCase):
+    def test_remote_spellings_match_owner_repo(self):
         for url in (
             "https://github.com/o/r.git",
-            "https://github.com/o/r",
+            "https://github.com/O/R",
             "git@github.com:o/r.git",
             "ssh://git@github.com/o/r.git",
             "http://local_proxy@127.0.0.1:43/git/o/r",
-            "https://gitlab.com/group/sub/o/r.git",
         ):
             with self.subTest(url=url):
-                self.assertEqual(pp._repo_slug(url), "o/r")
+                self.assertTrue(pp._spec_matches(url, "o/r"))
+
+    def test_nested_groups_match_by_suffix(self):
+        url = "https://gitlab.com/group/sub/r.git"
+        self.assertTrue(pp._spec_matches(url, "group/sub/r"))
+        self.assertTrue(pp._spec_matches(url, "Group/Sub/R.git"))
+        self.assertTrue(pp._spec_matches(url, "sub/r"))
+        self.assertFalse(pp._spec_matches(url, "other/sub/r"))
+        self.assertFalse(pp._spec_matches(url, "r"))  # one segment never matches
+
+    def test_hints_each_path_passes(self):
+        seen = []
+
+        def fake(workdir, hint):
+            seen.append(hint)
+            return workdir, True, []
+
+        real, pp.resolve_checkout = pp.resolve_checkout, fake
+        try:
+            for cmd, want in (
+                ("gh pr create -R github.com/o/r", "o/r"),
+                ("gh pr create --repo=https://github.com/o/r.git", "o/r"),
+                ("glab mr create -R group/sub/r", "group/sub/r"),
+                ("glab mr create --repo=group/sub/r", "group/sub/r"),
+                ("gh api -X POST repos/:owner/:repo/pulls -f head=x", None),
+                ("gh api -X POST repos/{owner}/{repo}/pulls -f head=x", None),
+                ("gh api -X POST repos/o/r/pulls -f head=x", "o/r"),
+                ("hub pull-request -m t", None),
+            ):
+                with self.subTest(cmd=cmd):
+                    seen.clear()
+                    self.assertEqual(len(pp.shell_pr_opens(cmd)), 1)
+                    self.assertEqual(seen, [want])
+        finally:
+            pp.resolve_checkout = real
 
 
 class HookWiringTest(unittest.TestCase):
@@ -350,12 +459,21 @@ class PrePushTest(unittest.TestCase):
         self.assertEqual(self.pre_push(stdin).returncode, 0)
 
     def test_corrupt_store_fails_open_with_a_message(self):
+        # Even in block mode: a push hook must never wedge a push.
+        git(self.repo, "config", "sharpen.prePush", "block")
         os.makedirs(os.path.dirname(self.store))
         with open(self.store, "w") as f:
             f.write("{ broken")
         r = self.pre_push(self.push_line())
         self.assertEqual(r.returncode, 0)
         self.assertIn("unreadable", r.stderr)
+
+    def test_unexpected_error_fails_open_with_a_message(self):
+        git(self.repo, "config", "sharpen.prePush", "block")
+        os.makedirs(self.store)  # a directory where the store file should be
+        r = self.pre_push(self.push_line())
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("unexpected error, not checked", r.stderr)
 
     def test_real_push_runs_the_installed_shim(self):
         bare = os.path.realpath(tempfile.mkdtemp())
@@ -372,6 +490,13 @@ class PrePushTest(unittest.TestCase):
         )
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("refusing the push", p.stderr)
+
+
+def load_installer():
+    spec = importlib.util.spec_from_file_location("install_pre_push", INSTALL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class InstallerTest(unittest.TestCase):
@@ -411,6 +536,74 @@ class InstallerTest(unittest.TestCase):
         r = self.install()
         self.assertIn("pre-push.py", r.stdout)
         self.assertFalse(os.path.exists(self.hook))
+
+    def test_core_hooks_path_check_says_it_cannot_tell(self):
+        git(self.repo, "config", "core.hooksPath", ".githooks")
+        r = self.install("--check")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("can't tell whether the chain line is present", r.stdout)
+
+    def run_chain_hook(self, stdin="", env=None):
+        """The printed chain line as the LAST line of someone else's hook,
+        which is where people paste an 'add this line' snippet."""
+        path = os.path.join(tempfile.mkdtemp(), "pre-push")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\necho hi\n{load_installer().chain_line()}\n")
+        return subprocess.run(
+            ["sh", path, "origin", "x"],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            cwd=self.repo,
+            env=env or os.environ,
+        )
+
+    def test_chain_line_exits_0_when_sdlc_is_not_configured(self):
+        git(self.repo, "config", "--unset", "sharpen.sdlcScripts", check=False)
+        self.assertEqual(self.run_chain_hook().returncode, 0)
+        git(self.repo, "config", "sharpen.sdlcScripts", "/nonexistent/sdlc/scripts")
+        self.assertEqual(self.run_chain_hook().returncode, 0)
+
+    def test_chain_line_still_propagates_a_block(self):
+        store = os.path.join(self.repo, ".sharpen", "data", "gates.json")
+        env = dict(os.environ, SDLC_GATES_PATH=store)
+        run(RECORD, self.repo, env=env, args=("--init", "small-medium"))
+        git(self.repo, "config", "sharpen.sdlcScripts", SCRIPTS)
+        git(self.repo, "config", "sharpen.prePush", "block")
+        sha = git(self.repo, "rev-parse", "HEAD")
+        line = f"refs/heads/{BRANCH} {sha} refs/heads/{BRANCH} {'0' * 40}\n"
+        r = self.run_chain_hook(line, env)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("refusing the push", r.stderr)
+
+    def test_an_outdated_shim_of_ours_is_updated(self):
+        os.makedirs(os.path.dirname(self.hook), exist_ok=True)
+        mod = load_installer()
+        with open(self.hook, "w") as f:
+            f.write(f"#!/bin/sh\n{mod.MARKER} (old)\nexit 0\n")
+        self.assertEqual(self.install("--check").returncode, 1)  # stale
+        r = self.install()
+        self.assertIn("updated", r.stdout)
+        with open(self.hook) as f:
+            self.assertEqual(f.read(), mod.SHIM)
+        self.assertEqual(self.install("--check").returncode, 0)
+
+    def test_common_dir_without_path_format_support(self):
+        # git < 2.31 rejects --path-format; the fallback resolves the plain
+        # --git-common-dir against --root.
+        mod = load_installer()
+        real = mod.subprocess.run
+
+        def old_git(cmd, *a, **kw):
+            if "--path-format=absolute" in cmd:
+                return subprocess.CompletedProcess(cmd, 129, "", "unknown option")
+            return real(cmd, *a, **kw)
+
+        mod.subprocess.run = old_git
+        try:
+            self.assertEqual(mod.common_dir(self.repo), os.path.join(self.repo, ".git"))
+        finally:
+            mod.subprocess.run = real
 
     def test_shim_fails_open_when_scripts_are_gone(self):
         self.install()

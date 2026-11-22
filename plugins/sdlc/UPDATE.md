@@ -23,7 +23,9 @@ Three bypasses inside the old path are closed: `gh pr new`, a head the shell exp
 used to read as an unknown branch, so "no cycle, allow". They now resolve to the branch
 checked out in the working directory. When the session's cwd isn't the PR's checkout (an
 MCP call, `gh pr create -R owner/repo`, a cloud session sitting above several repos), the
-hook finds the checkout whose remote matches instead of missing the store. An MCP PR for
+hook finds the checkout whose remote matches instead of missing the store. If no remote
+matches and the cwd is itself a checkout, that checkout is judged, so a `-R` spelling
+never turns into "allow" from inside a gated repo. An MCP PR for
 a branch with no cycle is still allowed, as before, but now says so: a branch pushed only
 through MCP never had a local commit to arm one.
 
@@ -33,9 +35,11 @@ records the plugin's scripts dir in `git config sharpen.sdlcScripts`. On each pu
 the same check for every pushed branch that has a cycle. This catches what no tool hook
 sees: `make pr`, scripts, gh aliases, `curl`, instructions-only hosts, and a push followed
 by the web UI. It **warns by default**. `git config sharpen.prePush block` makes it refuse
-the push, with `SDLC_ALLOW_PUSH=1 git push` as the one-shot escape. `off` silences it. It
-never overwrites another hook. If husky, lefthook or `core.hooksPath` own your hooks, it
-prints one line to add to theirs.
+the push, with `SDLC_ALLOW_PUSH=1 git push` as the one-shot escape. `off` silences it. A
+corrupt gate store or an error in the script lets the push through with a message, even in
+block mode. It never overwrites another hook. If husky, lefthook or `core.hooksPath` own
+your hooks, it prints one line to add to theirs, and that line exits 0 on a machine without
+sdlc configured, so it is safe in a committed `.githooks/`.
 
 **`/sdlc:ship` no longer commits after the chain.** The up-to-date check now says to
 rebase before `/sdlc:gate`, and the post-PR step that committed `plan.md` (a gitignored

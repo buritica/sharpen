@@ -24,6 +24,7 @@ Pure stdlib. @fires-on nothing (library)
 import os
 import re
 import subprocess
+from dataclasses import dataclass, field
 
 import gate_store as gs
 import shell_parse as sp
@@ -93,6 +94,7 @@ _GH_API_VALUE_FLAGS = _GH_API_FIELD_FLAGS | {
 _PULLS_PATH = re.compile(r"^/?repos/([^/]+)/([^/]+)/pulls/?$")
 
 
+@dataclass
 class PrOpen:
     """One attempted PR open.
 
@@ -105,20 +107,12 @@ class PrOpen:
     label: how to name this path in a message ("gh pr create", "MCP ...").
     """
 
-    __slots__ = ("label", "head", "workdir", "names_workdir", "notes", "no_checkout")
-
-    def __init__(
-        self, label, head, workdir, names_workdir=False, notes=None, no_checkout=False
-    ):
-        self.label = label
-        self.head = head
-        self.workdir = workdir
-        self.names_workdir = names_workdir
-        self.notes = list(notes or [])
-        self.no_checkout = no_checkout
-
-    def __repr__(self):
-        return f"PrOpen({self.label!r}, head={self.head!r}, workdir={self.workdir!r})"
+    label: str
+    head: str | None
+    workdir: str | None
+    names_workdir: bool = False
+    notes: list = field(default_factory=list)
+    no_checkout: bool = False
 
 
 def pr_opens(tool_name, tool_input):
@@ -147,7 +141,11 @@ def shell_pr_opens(command):
             found.append(pr)
     for inv in sp.invocations(command, "glab mr create"):
         head = sp.flag_value(inv.argv, "--source-branch", "-s")
-        found.append(_shell_open("glab mr create", head, inv))
+        # glab's -R takes OWNER/REPO, GROUP/NAMESPACE/REPO or a URL, which is
+        # what _hint_segments reads, so it passes through unchanged.
+        repo = sp.flag_value(inv.argv, "--repo", "-R")
+        found.append(_shell_open("glab mr create", head, inv, repo))
+    # hub has no repo flag: it always opens against the cwd's remote.
     for inv in sp.invocations(command, "hub pull-request"):
         head = sp.flag_value(inv.argv, "--head", "-h")
         found.append(_shell_open("hub pull-request", head, inv))
@@ -161,11 +159,23 @@ def shell_pr_opens(command):
 def _shell_open(label, raw_head, inv, repo=None):
     head, notes = normalize_head(raw_head)
     workdir, found, more = resolve_checkout(inv.workdir, repo)
-    return PrOpen(label, head, workdir, inv.names_workdir, notes + more, not found)
+    return PrOpen(
+        label=label,
+        head=head,
+        workdir=workdir,
+        names_workdir=inv.names_workdir,
+        notes=notes + more,
+        no_checkout=not found,
+    )
 
 
 def _gh_create(name, inv):
     repo = sp.flag_value(inv.argv, "--repo", "-R")
+    if repo:
+        # gh reads -R as [HOST/]OWNER/REPO or a URL, never a nested path, so
+        # OWNER/REPO is the last two segments of whatever was given.
+        segs = _hint_segments(repo)
+        repo = "/".join(segs[-2:]) if len(segs) >= 2 else repo
     return _shell_open(name, extract_head_flag(inv.argv), inv, repo)
 
 
@@ -226,7 +236,10 @@ def _gh_api(inv):
     if not m or method != "POST":
         return None
     owner, name = m.groups()
-    repo = None if "{" in owner + name else f"{owner}/{name}"
+    # gh fills `{owner}`/`{repo}` and the legacy `:owner`/`:repo` from the
+    # cwd's repo, so either spelling means "the checkout in the workdir".
+    placeholder = "{" in owner + name or owner[:1] == ":" or name[:1] == ":"
+    repo = None if placeholder else f"{owner}/{name}"
     return _shell_open("gh api .../pulls", fields.get("head"), inv, repo)
 
 
@@ -270,7 +283,13 @@ def _mcp_pr_open(tool_name, tool_input):
     workdir, found, more = resolve_checkout(
         None, hint if isinstance(hint, str) else None
     )
-    return PrOpen(f"MCP {tool_name}", head, workdir, False, notes + more, not found)
+    return PrOpen(
+        label=f"MCP {tool_name}",
+        head=head,
+        workdir=workdir,
+        notes=notes + more,
+        no_checkout=not found,
+    )
 
 
 # --- shared --------------------------------------------------------------
@@ -305,37 +324,50 @@ def normalize_head(head):
 
 
 def resolve_checkout(workdir, repo_hint):
-    """The local checkout a PR for `repo_hint` ("owner/name") should be judged
-    against -> (dir or None, found, notes). `found` is False only when a repo
-    was named and no checkout of it is in reach.
+    """The local checkout a PR for `repo_hint` should be judged against ->
+    (dir or None, found, notes). `found` is False only when a repo was named,
+    the workdir (or cwd) is not a checkout, and no checkout of it is in reach.
 
     The session's cwd is not always a checkout: a cloud session with several
     repos sits in their parent directory, and an MCP call carries no path at
     all. Judged from there, the store lookup misses and every PR reads as "no
     cycle, allow". So: the given workdir (or cwd) when it is a checkout whose
     remotes match the hint (or there is no hint); otherwise the first checkout
-    directly under it whose remote does."""
+    directly under it (or beside it) whose remote does; otherwise, when the
+    workdir is a checkout, that checkout anyway, with a note. A hint that
+    matches nothing (a fork without an `upstream` remote, a mirror or
+    local-path remote, no remote at all) must not turn into "allow" from inside
+    a gated checkout."""
     base = workdir or os.getcwd()
     top = _git_out(base, "rev-parse", "--show-toplevel")
-    if top and (not repo_hint or _remote_matches(top, repo_hint)):
+    if not repo_hint:
+        if not top:
+            children = _child_checkouts(base)
+            if len(children) == 1:
+                return children[0], True, []
         return workdir, True, []
-    if repo_hint:
-        for child in _child_checkouts(top or base):
-            if _remote_matches(child, repo_hint):
-                return child, True, []
+    if top and _remote_matches(top, repo_hint):
+        return workdir, True, []
+    for child in _child_checkouts(top or base):
+        if _remote_matches(child, repo_hint):
+            return child, True, []
+    if top:
         return (
             workdir,
-            False,
+            True,
             [
-                f"No local checkout of {repo_hint} was found from {base}, so "
-                "there was no gate cycle to check."
+                f"No checkout whose remote is {repo_hint} was found, so the gate "
+                f"judged the checkout at {top} instead."
             ],
         )
-    if not top:
-        children = _child_checkouts(base)
-        if len(children) == 1:
-            return children[0], True, []
-    return workdir, True, []
+    return (
+        workdir,
+        False,
+        [
+            f"No local checkout of {repo_hint} was found from {base}, so "
+            "there was no gate cycle to check."
+        ],
+    )
 
 
 def _child_checkouts(base):
@@ -358,24 +390,32 @@ def _child_checkouts(base):
 
 
 def _remote_matches(checkout, repo_hint):
-    want = repo_hint.strip("/").lower().removesuffix(".git")
+    """Whether any remote of `checkout` is the repo `repo_hint` names.
+
+    Compared by path suffix, so a remote's host or proxy prefix doesn't matter
+    and a GitLab nested group (`group/sub/proj`) matches as a whole: the hint's
+    N segments (N >= 2) must equal the remote path's last N."""
     out = _git_out(checkout, "remote", "-v") or ""
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and _repo_slug(parts[1]) == want:
-            return True
-    return False
+    return any(
+        len(parts) >= 2 and _spec_matches(parts[1], repo_hint)
+        for parts in (line.split() for line in out.splitlines())
+    )
 
 
-def _repo_slug(url):
-    """`owner/name` from any remote URL spelling: https, ssh `git@host:o/n`,
-    or a proxy path that ends in `/o/n`. Nested GitLab groups keep only the
-    last two segments, which is all an MCP owner/repo pair carries anyway."""
-    path = re.sub(r"^[a-z+]+://[^/]+/", "", url.strip())
+def _spec_matches(remote_url, repo_hint):
+    want = _hint_segments(repo_hint)
+    have = _hint_segments(remote_url)
+    return len(want) >= 2 and len(have) >= len(want) and have[-len(want) :] == want
+
+
+def _hint_segments(spec):
+    """The lowercased path segments of a repo spelling, minus scheme, host and
+    `.git`: https and ssh URLs, scp-style `git@host:o/n`, a proxy path ending
+    in `/o/n`, or a bare `o/n` / `group/sub/n`."""
+    path = re.sub(r"^[a-z+]+://[^/]+/", "", spec.strip(), flags=re.I)
     path = re.sub(r"^[^/@]+@[^:/]+:", "", path)
     path = path.rstrip("/").removesuffix(".git")
-    segs = [s for s in path.split("/") if s]
-    return "/".join(segs[-2:]).lower() if len(segs) >= 2 else None
+    return [s.lower() for s in path.split("/") if s]
 
 
 def _git_out(cwd, *args):

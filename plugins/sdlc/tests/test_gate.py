@@ -2605,6 +2605,17 @@ class CliSkillGatedGuardTest(unittest.TestCase):
         self.assertIn("simplify", reason)
         self.assertIn("grumpy-review", reason)
 
+    def test_monitor_tool_is_checked_like_bash(self):
+        # Claude Code's Monitor runs a shell command outside the Bash matcher.
+        cmd = "record-gate.py --record grumpy-review"
+        r = run_hook(
+            BLOCK,
+            {"tool_name": "Monitor", "tool_input": {"command": cmd}},
+            HERE,
+            "/nope",
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
+
     def test_refuses_every_skill_gated_gate(self):
         for g in gs.SKILL_FOR_GATE:
             r = run_cli(["--record", g], self.repo, self.gp)
