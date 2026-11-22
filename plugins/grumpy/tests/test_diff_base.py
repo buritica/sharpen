@@ -49,10 +49,10 @@ class DiffBaseTest(unittest.TestCase):
 
     def run_script(self, *args):
         # PATH starts with our own bin: a fake gh when a test wrote one, and
-        # otherwise a gh that always fails, so a real gh never runs.
+        # otherwise a gh that finds no PR, so a real gh never runs.
         if not os.path.exists(os.path.join(self.bin, "gh")):
             with open(os.path.join(self.bin, "gh"), "w") as f:
-                f.write("#!/bin/sh\nexit 1\n")
+                f.write("#!/bin/sh\necho 'no pull requests found' >&2\nexit 1\n")
             os.chmod(os.path.join(self.bin, "gh"), 0o755)
         env = dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin")
         return subprocess.run(
@@ -97,7 +97,23 @@ class DiffBaseTest(unittest.TestCase):
         os.makedirs(d)
         with open(os.path.join(d, "base.json"), "w") as f:
             json.dump({"ref": "gone-branch"}, f)
-        self.assertEqual(self.base()[0], "main")
+        git(self.repo, "config", "branch.top.sdlcBase", "also-gone")
+        r = self.run_script("--worktree", self.repo)
+        self.assertEqual(r.stdout.strip(), "main")
+        self.assertIn("'gone-branch', which doesn't resolve", r.stderr)
+        self.assertIn("sdlcBase is 'also-gone'", r.stderr)
+
+    def test_a_failed_gh_call_is_not_silent(self):
+        with open(os.path.join(self.bin, "gh"), "w") as f:
+            f.write("#!/bin/sh\necho 'HTTP 401: Bad credentials' >&2\nexit 1\n")
+        os.chmod(os.path.join(self.bin, "gh"), 0o755)
+        r = self.run_script("--worktree", self.repo)
+        self.assertEqual(r.stdout.strip(), "main")
+        self.assertIn("`gh pr view` failed (HTTP 401", r.stderr)
+
+    def test_no_pr_is_quiet(self):
+        r = self.run_script("--worktree", self.repo)
+        self.assertEqual((r.stdout.strip(), r.stderr), ("main", ""))
 
     def test_open_pr_base_beats_the_upstream(self):
         self.fake_gh("layer-a")

@@ -18,7 +18,10 @@ order itself:
   5. the default branch (origin/HEAD, origin/main, origin/master, main, master)
 
 Prints the ref (pass it to `git diff "$BASE"...HEAD`), and with `--why` a
-second line saying where it came from. Exits 1 with nothing on stdout when no
+second line saying where it came from. A source that is set but doesn't
+resolve (base.json or sdlcBase naming a renamed or deleted branch, a `gh`
+call that failed rather than finding no PR) prints a `[grumpy]` line on
+stderr before the next source is tried. Exits 1 with nothing on stdout when no
 base resolves. Pure stdlib.
 """
 
@@ -44,15 +47,39 @@ def _exists(wt, ref):
     )
 
 
+def _note(msg):
+    print(f"[grumpy] {msg}", file=sys.stderr)
+
+
 def _from_sdlc(wt, root, branch):
     path = os.path.join(root, ".claude", "sdlc", branch, "base.json")
     try:
         with open(path) as f:
             base = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        _note(f"sdlc's base.json is unreadable ({e}); trying the next source")
         return None
     ref = base.get("ref") if isinstance(base, dict) else None
-    return ref if _exists(wt, ref) else None
+    if _exists(wt, ref):
+        return ref
+    _note(
+        f"sdlc's base.json names {ref!r}, which doesn't resolve (renamed or "
+        "deleted?); trying the next source. Fix it with "
+        "`record-gate.py --set-base <parent>` (or `auto`)."
+    )
+    return None
+
+
+def _from_config(wt, branch):
+    ref = _git(wt, "config", "--get", f"branch.{branch}.sdlcBase")
+    if not ref or _exists(wt, ref):
+        return ref or None
+    _note(
+        f"branch.{branch}.sdlcBase is {ref!r}, which doesn't resolve; trying the next source"
+    )
+    return None
 
 
 def _from_pr(wt, branch):
@@ -66,8 +93,14 @@ def _from_pr(wt, branch):
             text=True,
             timeout=10,
         )
-        info = json.loads(proc.stdout) if proc.returncode == 0 else {}
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+        if proc.returncode != 0:
+            if "no pull requests found" not in proc.stderr.lower():
+                err = (proc.stderr.strip().splitlines() or ["no output"])[-1]
+                _note(f"`gh pr view` failed ({err}); skipping the PR base")
+            return None
+        info = json.loads(proc.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        _note(f"`gh pr view` failed ({type(e).__name__}); skipping the PR base")
         return None
     name = info.get("baseRefName") if info.get("state") == "OPEN" else None
     for ref in (f"origin/{name}", name) if name else ():
@@ -112,7 +145,7 @@ def resolve(wt="."):
         ),
         (
             "git config branch.<branch>.sdlcBase",
-            lambda: _git(wt, "config", "--get", f"branch.{branch}.sdlcBase") or None,
+            lambda: _from_config(wt, branch),
         ),
         ("the open PR's base branch", lambda: _from_pr(wt, branch)),
         ("the branch's upstream", lambda: _from_upstream(wt, branch)),

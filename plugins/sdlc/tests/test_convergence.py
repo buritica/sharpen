@@ -372,7 +372,7 @@ class FixReceiptTest(ReceiptTestBase):
             GRUMPY_RECEIPT, "fix", "--stage", "imagine", "--worktree", self.repo
         )
         self.assertEqual(r.returncode, 1)
-        self.assertIn("predates the last receipt", r.stderr)
+        self.assertIn("is no newer than the receipt", r.stderr)
 
     def test_one_shared_fix_receipt_cannot_earn_both_fix_gates(self):
         self.receipt("fix")  # first fix: --verify skipped

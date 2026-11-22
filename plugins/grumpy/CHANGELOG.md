@@ -30,7 +30,14 @@ What changes without sdlc 4.17: the passes no longer always diff against the def
 branch. With no base file they still try `branch.<branch>.sdlcBase`, the open PR's base
 and a local upstream branch first, so a branch whose PR targets another branch, or that
 tracks a local parent, now reviews only its own layer. A pass that can't run
-`diff_base.py` says so and falls back to the default branch.
+`diff_base.py` says so and falls back to the default branch. A base.json or `sdlcBase`
+that no longer resolves, or a failed `gh` call, prints a `[grumpy]` line instead of
+falling through silently, and each report names the base it used and where it came from.
+
+`/grumpy:fix` picks its receipt's stage from the review and imagine receipts' timestamps,
+writes no receipt while a Critical is blocked on another branch, and records the base,
+reverted out-of-scope edits and open questions in `fix.md`. A stageless `receipt.py fix`
+removes earlier stage receipts.
 
 ## 2.10.0 — plugin paths resolve on every host
 

@@ -75,9 +75,12 @@ Automatically detect what to imagine. No questions:
      # stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
      # branch's upstream parent, then the default branch. On a stack this keeps
      # the pass on this branch's own layer.
+     # If this path comes out empty (a host that does not fill in the braced
+     # name), point DIFF_BASE_PY at <grumpy plugin root>/scripts/diff_base.py.
      DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
      BASE=""
-     if [ -f "$DIFF_BASE_PY" ]; then BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
+     # --why adds a second line naming the source; echo both for the report.
+     if [ -f "$DIFF_BASE_PY" ]; then OUT=$(python3 "$DIFF_BASE_PY" --worktree "$WT" --why) && BASE=$(printf '%s\n' "$OUT" | sed -n 1p) && echo "base: $BASE, from $(printf '%s\n' "$OUT" | sed -n 2p)" || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
      if [ -z "$BASE" ]; then
        BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
      fi
@@ -521,7 +524,7 @@ Once all agents complete, combine findings into one report:
 ```markdown
 # Production Imagination: [Brief Description]
 
-_Analyzed: [DIFF_BASE] — HEAD at [HEAD_SHA]_
+_Analyzed: [DIFF_BASE], from [the source the `base:` line named, or "the default branch fallback"] — HEAD at [HEAD_SHA]_
 
 _[One grumpy sentence about what you found overall]_
 

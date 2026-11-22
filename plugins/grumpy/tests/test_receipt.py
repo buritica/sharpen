@@ -85,7 +85,27 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(self.run_receipt("fix", "--stage", "review").returncode, 0)
         r = self.run_receipt("fix")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("predates the last receipt", r.stderr)
+        self.assertIn("is no newer than the receipt fix", r.stderr)
+
+    def test_a_stageless_fix_removes_stale_stage_receipts(self):
+        # Left in place, sdlc 4.17+ would read fix-review.json (it prefers a
+        # stage file) and refuse it as older than the latest review.
+        self.report()
+        self.assertEqual(self.run_receipt("fix", "--stage", "review").returncode, 0)
+        self.report()
+        r = self.run_receipt("fix")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        receipts = os.path.join(self.dir, "receipts")
+        self.assertFalse(os.path.exists(os.path.join(receipts, "fix-review.json")))
+        self.assertNotIn("stage", self.receipt("fix"))
+
+    def test_a_failed_fix_json_copy_keeps_the_stage_receipt(self):
+        os.makedirs(os.path.join(self.dir, "receipts", "fix.json"))
+        self.report()
+        r = self.run_receipt("fix", "--stage", "imagine")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sdlc 4.17+ records from it", r.stderr)
+        self.assertEqual(self.receipt("fix-imagine")["stage"], "imagine")
 
 
 if __name__ == "__main__":

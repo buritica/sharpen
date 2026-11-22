@@ -108,8 +108,10 @@ I can't fix code you haven't had me look at yet."
 If there are no Critical or Serious findings, respond: "Fine. Nothing's on fire.
 Either your code is actually decent, or I missed something."
 
-If Optional findings exist, compute the scope below, then skip to Step 5 to
-offer them (Step 5's fixes go through Step 1a and the scope rule too). Otherwise respond:
+If Optional findings exist, compute the scope below, run Steps 1a and 1b
+against the Optional bucket (new capability is sorted out and deferrable
+findings get their markers), then skip to Step 5 to offer what is left
+(Step 5's fixes go through the scope rule too). Otherwise respond:
 "And there's nothing questionable either. Either this is genuinely good code, or
 you've somehow broken my ability to find problems. I'll choose to believe the
 former."
@@ -122,10 +124,14 @@ PR. Resolve the same base the review used and list the branch's files:
 
 ```bash
 WT="${WT:-.}"
+# If this path comes out empty (a host that does not fill in the braced
+# name), point DIFF_BASE_PY at <grumpy plugin root>/scripts/diff_base.py.
 DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
-BASE=""; SCOPE=""
-if [ -f "$DIFF_BASE_PY" ]; then
-  BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; falling back to the default branch" >&2
+BASE="${BASE:-}"; SCOPE=""
+if [ -n "$BASE" ]; then
+  :  # Step 4: reuse the base Step 1 printed, so the check matches the fixers' scope
+elif [ -f "$DIFF_BASE_PY" ]; then
+  OUT=$(python3 "$DIFF_BASE_PY" --worktree "$WT" --why) && BASE=$(printf '%s\n' "$OUT" | sed -n 1p) && echo "from: $(printf '%s\n' "$OUT" | sed -n 2p)" || echo "[grumpy] diff_base.py failed; falling back to the default branch" >&2
 else
   echo "[grumpy] diff_base.py not found at $DIFF_BASE_PY; falling back to the default branch" >&2
 fi
@@ -139,8 +145,10 @@ fi
 ```
 
 Shell state does not persist between calls: Step 4 runs this block again
-before its scope check, and you pass `$SCOPE`'s file list (not the variable)
-to the fixers.
+before its scope check with `BASE=<the base printed here>` set first, so it
+checks against the same base the fixers were scoped to, and you pass
+`$SCOPE`'s file list (not the variable) to the fixers. Note the `base:` and
+`from:` lines for the report.
 
 A finding whose fix would modify an existing file that is not in `$SCOPE`,
 for a problem this diff did **not** cause, is not fixed here: sort it as **new
@@ -157,8 +165,10 @@ branch that owns the file first; on an unattended run, fix it here. A finding
 fixed here this way is exempt from the revert below, and the summary names its
 file as outside the diff. When the person says to fix it in the owning branch,
 list it under the summary's and the report's **Blocked elsewhere** block with
-that branch: gates 4 and 6 stay open for a Critical until that fix lands and
-this branch is restacked on it.
+that branch. For a Critical, this run writes no receipt (Step 6), so gates 4
+and 6 stay open until that fix lands, this branch is restacked on it, and fix
+runs again. The gate chain does not read fix.md, so the missing receipt is
+what holds the gate.
 
 Adding a new file (a test for this branch's code, say) is fine. Pass the
 scope to every fixer sub-agent in Step 3 as the files it may modify, and
@@ -525,17 +535,18 @@ clean fix, or flagged structural problems beyond the scope of a minimal fix:
 - Note which files have uncertain fixes in the summary
 - Recommend the developer review those files manually before committing
 
-Then check the scope: run the scope block from "This branch's files" again in
-this same call, and revert any change to an existing file outside `$SCOPE`
+Then check the scope: set `BASE` to the base Step 1 printed and run the
+scope block from "This branch's files" again in this same call, and revert any change to an existing file outside `$SCOPE`
 that isn't an approved exception (a Critical, or a diff-caused finding, fixed
 here). Say in the summary what you reverted. With an empty `$SCOPE`, skip the
 check and say so.
 
 ```bash
 WT="${WT:-.}"
+BASE="<the base Step 1 printed>"
 # (scope block from "This branch's files" here, then:)
-for f in $(git -C "$WT" diff --name-only); do
-  printf '%s\n' "$SCOPE" | grep -qxF "$f" || echo "outside scope: $f"   # revert unless approved
+git -C "$WT" diff --name-only | while IFS= read -r f; do
+  printf '%s\n' "$SCOPE" | grep -qxF -- "$f" || echo "outside scope: $f"   # revert unless approved
 done
 ```
 
@@ -571,12 +582,17 @@ Open questions [N]: [Critical findings that looked like new capability, asked an
 ...
 
 Blocked elsewhere [N]: [findings the person chose to fix in the branch that owns the file]
-- [file:line]: [one-line summary] — fix in [branch]; gates 4/6 wait on it for a Critical
+- [file:line]: [one-line summary] — fix in [branch]; for a Critical, no receipt this run
+...
+
+Reverted [N]: [changes to files outside this branch's diff that the scope check undid]
+- [file]: [what the fixer changed there]
 ...
 
 [If all fixes applied cleanly]: "You're welcome."
 [If any sub-agent flagged uncertainty]: "Double-check [file] — I fixed what I could but that section had 'here be dragons' energy."
-[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"; the same for New capability and Open questions]
+[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"; the same for New capability, Open questions, Blocked elsewhere and Reverted]
+[A fix made in a file outside the diff (an approved or unattended Critical, or a diff-caused finding) ends its line with "(outside the diff)"]
 ```
 
 ## Step 4b: Persist the Fix Report
@@ -599,8 +615,10 @@ imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fi
 ```markdown
 ### Fix — YYYY-MM-DD
 
+_Base: [BASE], from [the `from:` line] · scope: [N files, or "empty: every reviewed file in scope"] · stage: [review|imagine]_
+
 ## Fixed
-- [file:line]: [one-line description of what changed]
+- [file:line]: [one-line description of what changed] [" (outside the diff)" when the file is not in the scope]
 
 ## New capability
 - [file:line]: [finding text] — [#issue, "would file", or "filing failed: <reason>"]
@@ -612,6 +630,12 @@ imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fi
 
 ## Blocked elsewhere
 - [file:line]: [finding text] — fix in [branch] (omit the section when empty)
+
+## Open questions
+- [file:line]: [the question as asked, and what was done meanwhile] (an unattended run's questions land here, since nobody reads its chat)
+
+## Reverted
+- [file]: [the out-of-scope change the scope check undid]
 
 ## Deferred
 - [Serious|Questionable] [file:line]: [marker text] — [#issue or "not filed"]
@@ -680,6 +704,10 @@ Save `fix.md` before Step 6, so the receipt covers the final report.
 
 ## Step 6: Leave a Receipt
 
+If this run listed a 🚨 Critical under **Blocked elsewhere**, write no
+receipt: say "no receipt: a Critical waits on [branch]" in the summary and
+stop here. The fix gate is earned by the run after that fix lands.
+
 Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
 the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
@@ -710,14 +738,23 @@ if [ -f "$RECEIPT" ]; then
   # gate: `imagine` (gate 6) when imagine.md is newer than review.md, i.e.
   # imagine ran after the last review and this run fixed its findings;
   # otherwise `review` (gate 4).
+  # Decided from the review and imagine receipts' written_at (the order sdlc
+  # checks), not the reports' mtimes, which a re-save or copy changes.
   A="$(git -C "$WT" rev-parse --show-toplevel)/.claude/grumpy/$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
-  STAGE=review
-  [ -f "$A/imagine.md" ] && [ "$A/imagine.md" -nt "$A/review.md" ] && STAGE=imagine
+  STAGE=$(python3 -c 'import json,os,sys
+def at(n):
+    try:
+        return json.load(open(os.path.join(sys.argv[1], n + ".json")))["written_at"]
+    except Exception:
+        return ""
+print("imagine" if at("imagine") > at("review") else "review")' "$A/receipts")
   python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
-  # If sdlc then refuses gate 6 with "is for the fix after review" (review
-  # was re-run after imagine, so review.md is newer), re-run /grumpy:imagine
-  # and fix its findings; or, if this run did fix imagine.md's findings, save
-  # fix.md again and run: python3 "$RECEIPT" fix --stage imagine --worktree "$WT"
+  # If sdlc refuses the fix gate, its message names the receipt it read and
+  # what that receipt predates or belongs to. Re-run the pass it names
+  # (review or imagine) and fix its findings. If this run did fix the other
+  # report's findings, save fix.md again and re-run receipt.py with that
+  # --stage. After a reset, re-run the passes from simplify: the old stage
+  # receipts predate the new cycle.
 else
   echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
 fi

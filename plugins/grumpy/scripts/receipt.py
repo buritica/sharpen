@@ -15,7 +15,9 @@ loaded but never finished earns nothing, on any host.
 `fix --stage review` (or `imagine`) names which review the fix run resolved
 and writes `fix-review.json` (or `fix-imagine.json`), so one fix run earns one
 fix gate (sdlc 4.17.0+). It refreshes `fix.json` too, the name older sdlc
-reads; without `--stage` only `fix.json` is written.
+reads. Without `--stage` only `fix.json` is written, and any stage files
+from an earlier run are removed, so sdlc 4.17+ (which prefers a stage file)
+reads the fresh `fix.json` instead of a stale stage receipt.
 
 Run it as the pass's LAST step, after committing whatever the pass changed, so
 the receipt names the commit the work landed in. A dirty tree is refused.
@@ -59,9 +61,16 @@ def _report_digest(report, previous_receipts):
         raise ValueError(f"report not written ({report}): save it first") from None
     if not data.strip():
         raise ValueError(f"report is empty ({report})")
-    previous = [os.path.getmtime(p) for p in previous_receipts if os.path.exists(p)]
-    if previous and os.path.getmtime(report) <= max(previous):
-        raise ValueError(f"report predates the last receipt ({report}): save it again")
+    previous = [
+        (os.path.getmtime(p), p) for p in previous_receipts if os.path.exists(p)
+    ]
+    if previous:
+        newest, newest_path = max(previous)
+        if os.path.getmtime(report) <= newest:
+            raise ValueError(
+                f"report {report} is no newer than the receipt "
+                f"{os.path.basename(newest_path)}: save it again"
+            )
     return hashlib.sha256(data).hexdigest()
 
 
@@ -122,8 +131,24 @@ def write_receipt(pass_name, worktree=".", stage=None):
         try:
             _write_json(directory, os.path.join(directory, "fix.json"), receipt)
         except OSError as e:
-            raise OSError(f"wrote {path}, but not fix.json for older sdlc: {e}") from e
+            raise PartialReceipt(path, e) from e
+    elif pass_name == "fix":
+        # A stageless run supersedes earlier stage receipts; left in place,
+        # sdlc 4.17+ would read them instead of this fix.json.
+        for n in FIX_STAGES:
+            stale = os.path.join(directory, f"fix-{n}.json")
+            if os.path.exists(stale):
+                os.unlink(stale)
     return path, receipt
+
+
+class PartialReceipt(OSError):
+    """The stage receipt was written; only the fix.json copy failed."""
+
+    def __init__(self, path, cause):
+        super().__init__(f"{path} written, fix.json not refreshed: {cause}")
+        self.path = path
+        self.cause = cause
 
 
 def _write_json(directory, path, data):
@@ -163,6 +188,14 @@ def main(argv):
         return 1
     try:
         path, receipt = write_receipt(args[0], worktree, stage)
+    except PartialReceipt as e:
+        # sdlc 4.17+ reads the stage file, which is in place; don't retry
+        # (the report is now older than it). Only an older sdlc misses out.
+        sys.stderr.write(
+            f"[grumpy] fix receipt written to {e.path}; sdlc 4.17+ records "
+            f"from it. Copying it to fix.json for older sdlc failed: {e.cause}\n"
+        )
+        return 0
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         sys.stderr.write(f"[grumpy] receipt not written: {e}\n")
         return 1

@@ -289,11 +289,21 @@ On a stack (main <- A <- B <- yours) the passes review only your layer, and
 that this diff didn't cause is recorded as new capability. A Critical, or a bug
 this diff caused in a file it didn't touch, is asked about (fix here, or in the
 branch that owns the file); an unattended run fixes it here, the one case where
-fix edits another layer's file.
+fix edits another layer's file. A Critical the person sends to the owning branch
+holds back fix's receipt, so gates 4 and 6 wait for that fix.
+
+To see which base a pass will use and why, run `python3 scripts/diff_base.py
+--why` from the plugin root (with `--worktree <path>` if needed). Each pass also
+writes it at the top of its report. A source that is set but doesn't resolve (a
+base.json or `sdlcBase` naming a renamed or deleted parent) or a failed `gh`
+call prints a `[grumpy]` line and falls through to the next source. Without
+sdlc's base.json, each pass makes its own `gh pr view` call (10 s timeout).
 
 Each fix run writes its own receipt, `receipt.py fix --stage review` (gate 4)
 or `--stage imagine` (gate 6), so with sdlc 4.17+ one run can never earn both fix
-gates. It refreshes `fix.json` too, which an older sdlc reads.
+gates. It refreshes `fix.json` too, which an older sdlc reads. The stage comes
+from the review and imagine receipts' timestamps. A stageless `receipt.py fix`
+removes earlier stage receipts so the fresh `fix.json` is the one read.
 
 ## Keeping review loops short (sharpen#37)
 

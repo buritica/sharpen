@@ -65,8 +65,9 @@ settled list, so their recall must stay 100% on all seven.
 lock finding is asked about, never sorted on its own; the ordering bug and the
 test gap are fixes; the event-and-red-exit finding is new capability, recorded
 under `## New capability` and `## Settled` with no code marker. Run fix on a
-scratch repo: commit the pre-images (`src/notes/*.py` before `sample.diff`) on
-main, apply `sample.diff` on a branch and commit it, so `$SCOPE` holds only the
+scratch repo: the fixture ships no pre-images, so build them from the diff's
+context lines (and write a small `src/notes/ingest.py` with the unlocked write
+the review describes), commit them on main, apply `sample.diff` on a branch and commit it, so `$SCOPE` holds only the
 diff's files and `ingest.py` is outside it; put the plan at
 `.claude/sdlc/<branch>/plan.md` and the review at
 `.claude/grumpy/<branch>/review.md`, and compare by hand. `ask` is the attended
