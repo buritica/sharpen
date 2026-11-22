@@ -31,9 +31,16 @@ if ! python3 "$ROOT/scripts/check-marketplace.py"; then
   exit 1
 fi
 
+# Never fails a push by being absent: unset config (main before the area 2
+# PR lands, or /sdlc:gate never run) is silent; a recorded path that no
+# longer has pre-push.py (a plugin update moved it) prints one line.
 dir=$(git config --get sharpen.sdlcScripts || true)
-if [ -n "$dir" ] && [ -f "$dir/pre-push.py" ]; then
-  python3 "$dir/pre-push.py" "$@" < "$PUSH_STDIN_FILE" || exit $?
+if [ -n "$dir" ]; then
+  if [ -f "$dir/pre-push.py" ]; then
+    python3 "$dir/pre-push.py" "$@" < "$PUSH_STDIN_FILE" || exit $?
+  else
+    echo "pre-push: sdlc pre-push not found at $dir (sharpen.sdlcScripts); skipped. Re-run /sdlc:gate to refresh it." >&2
+  fi
 fi
 
 resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }

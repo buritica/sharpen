@@ -130,7 +130,9 @@ Don't reach for newer syntax or stdlib APIs without a fallback.
 `run-tests.py` also runs two contract suites that sit outside any plugin:
 
 - `scripts/tests/test_hook_payloads.py` replays full Claude and Codex hook payloads
-  (`scripts/tests/fixtures/hook-payloads/`, provenance in its README) through the real hooks.
+  (`scripts/tests/fixtures/hook-payloads/`) through the real hooks. All of them are
+  `transcribed/` from the hosts' docs today; captures from live sessions go in `recorded/`
+  (steps in that README).
 - `scripts/tests/pi/extensions.test.mjs` loads the pi extensions against a stub pi API and
   drives them through the real hooks. Node 22.6+ with `node:test` only, no npm. Without Node
   the wrapper prints SKIP; CI's `pi` job runs it directly so it can't skip there.
@@ -144,7 +146,8 @@ didn't succeed, skipped included.
 
 Two repo-local hooks back that up before a PR exists: `.githooks/pre-push` (any agent or
 human; it also chains the sdlc plugin's product pre-push once that lands from the area 2 stack,
-and any other hook left in `.git/hooks`), and
+and any other hook left in `.git/hooks`; until then that step is silent, and
+`scripts/tests/test_pre_push_hook.py` pins that its absence never fails a push), and
 `.claude/settings.json`, which runs `scripts/pre-merge-check.sh` before `gh pr create` /
 `gh pr merge` under Claude Code.
 
