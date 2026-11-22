@@ -53,6 +53,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+from artifact_dirs import ensure_self_ignored
+
 
 class StoreCorruptError(Exception):
     """The store file exists but could not be parsed. Distinct from 'no file
@@ -522,6 +524,7 @@ def _sweep_orphan_temps(directory):
 def save_store(path, data):
     directory = _store_dir(path)
     os.makedirs(directory, exist_ok=True)
+    ensure_self_ignored(directory)
     # Atomic replace: temp file in the same dir (same filesystem), then rename.
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=_TMP_PREFIX, suffix=".tmp")
     try:
@@ -544,6 +547,7 @@ def _exclusive_lock(path):
     updates. The lock lives on a sidecar file next to the store."""
     directory = _store_dir(path)
     os.makedirs(directory, exist_ok=True)
+    ensure_self_ignored(directory)
     # The sidecar lock sits next to the (shared, per-repo) store and is
     # intentionally NEVER deleted: unlinking a flock'd file lets another process
     # create a new inode and lock *that* instead, silently breaking mutual

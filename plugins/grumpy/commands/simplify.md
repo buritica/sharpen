@@ -242,6 +242,7 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
 # The review base (scripts/diff_base.py): sdlc's resolved base for a
 # stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
 # branch's upstream parent, then the default branch. On a stack this keeps
@@ -570,6 +571,7 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write the complete report (from `# Simplify:` through `## Verdict`) to

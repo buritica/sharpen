@@ -1,6 +1,6 @@
 {
   "name": "sharpen-grumpy",
-  "version": "2.11.0",
+  "version": "2.12.0",
   "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents, as a pi package. Skills, plus a one-line extension exporting GRUMPY_PLUGIN_ROOT so each pass can write the receipt the sdlc gate chain records from.",
   "private": true,
   "type": "module",

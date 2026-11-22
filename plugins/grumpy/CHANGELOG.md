@@ -3,6 +3,14 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.12.0 — the report folder ignores itself
+
+Every pass that creates `.claude/grumpy/<branch>/` now also writes
+`.claude/grumpy/.gitignore` holding `*` (one shell line beside each command's `mkdir -p`,
+and `receipt.py` does the same), so reports and receipts stay out of git in a repo whose
+own `.gitignore` never listed them, on every host. An existing `.gitignore` there is left
+alone. Pairs with sdlc 4.18.0, which does the same for `.sharpen/data/`, `.claude/sdlc/`
+and `.claude/worktrees/`.
 ## 2.11.0 — stacked branches review their own layer, fix sorts out new capability
 
 `/grumpy:fix` sorts each finding as a fix or as new capability before acting on it, and

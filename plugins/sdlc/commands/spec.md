@@ -34,6 +34,8 @@ gh issue view <number> --json title,body,labels,comments
 
 ```bash
 git pull origin main
+mkdir -p .claude/worktrees
+[ -e .claude/worktrees/.gitignore ] || printf '*\n' > .claude/worktrees/.gitignore  # the folder ignores itself, on any host
 git worktree add -b feature/<short-name> .claude/worktrees/<short-name> origin/main
 ```
 
@@ -103,6 +105,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/sdlc/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+[ -e "$GIT_ROOT/.claude/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/sdlc/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write to `$ARTIFACT_DIR/spec.md` using the Write tool.

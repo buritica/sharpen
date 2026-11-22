@@ -26,6 +26,8 @@ Pick a branch name from the task description:
 
 ```bash
 git fetch origin main -q
+mkdir -p .claude/worktrees
+[ -e .claude/worktrees/.gitignore ] || printf '*\n' > .claude/worktrees/.gitignore  # the folder ignores itself, on any host
 git worktree add -b <prefix>/<short-name> .claude/worktrees/<short-name> origin/main
 cd .claude/worktrees/<short-name>
 ```
@@ -131,6 +133,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/sdlc/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
+[ -e "$GIT_ROOT/.claude/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/sdlc/.gitignore"  # the folder ignores itself, on any host
 ```
 
 If `$ARTIFACT_DIR/spec.md` exists (written by `/sdlc:spec`), include its Goals and User scenarios in the Approach section as acceptance criteria.

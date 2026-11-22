@@ -400,6 +400,42 @@ class PiManifestTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("version drift", out)
 
+    def _set_bundle_version(self, root, version):
+        path = os.path.join(root, "package.json")
+        with open(path) as f:
+            pkg = json.load(f)
+        pkg["version"] = version
+        with open(path, "w") as f:
+            json.dump(pkg, f)
+
+    def test_bundle_version_drift_from_sdlc_is_an_error(self):
+        # The bundle sat at 4.12.1 while sdlc was 4.13.0 and nothing noticed.
+        root = make_marketplace({"sdlc": {"version": "4.13.0"}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._set_bundle_version(root, "4.12.1")
+        r = run(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("top-level package.json: version drift", out)
+        self.assertIn("4.13.0", out)
+
+    def test_bundle_version_matching_sdlc_passes(self):
+        root = make_marketplace(
+            {"sdlc": {"version": "4.13.0"}, "grumpy": {"version": "2.8.0"}}
+        )
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._set_bundle_version(root, "4.13.0")
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_bundle_version_is_unchecked_without_sdlc(self):
+        # A marketplace that doesn't list the tracked plugin has nothing to
+        # compare against (the fixture bundle is 1.0.0, foo is 2.0.0).
+        root = make_marketplace({"foo": {"version": "2.0.0"}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run(root)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
     def test_valid_pi_manifest_passes(self):
         # A real skills dir + extension file (which references a real hook
         # script) must pass cleanly.
