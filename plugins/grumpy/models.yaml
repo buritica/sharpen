@@ -1,33 +1,71 @@
-# Grumpy model map — single switch point for model routing.
+# Grumpy model map: which model each kind of work runs on.
 #
-# Commands and `exec:` hints reference ROLE names, never raw model strings.
-# To bump a model rev, change one column and nothing downstream changes.
+# Commands name ROLES, never raw model strings. The fallback aliases written in
+# the commands (used only when this file can't be read) and the README's tier
+# names repeat the `native` column: when you change it, grep the commands for
+# the old alias.
 #
-# Native dispatch: the Task/Agent tool's `model` argument accepts only
-# `sonnet` / `opus` / `haiku`. The `audit` role's real model (Fable) is
-# `wrapper_required` — not reachable through the generic dispatch tool yet —
-# so it falls back to its `native` model. Commands MUST announce the
-# substitution rather than silently downgrade.
+# How a command reads it (the one place this is written down):
+#   1. Read this file from grumpy's plugin root,
+#      ${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml. Never use a
+#      repo-relative plugins/grumpy/ path: in an installed plugin it resolves
+#      against the reviewed repo and silently doesn't exist.
+#   2. Then the override, <root of the worktree under review>/.sharpen/models.yaml,
+#      if it exists. It has the same shape. It overrides per role and per
+#      column: each value it sets replaces that one value, and everything it
+#      doesn't set keeps this file's value. `analysis: {native: sonnet}` changes
+#      only the alias Claude Code dispatches.
+#   3. Say in the report which model ran. If the override changed anything, name
+#      it and the entries it changed. If the override can't be parsed or names
+#      an unknown role or alias, ignore it and say so. If this file can't be
+#      read, say so and use the command's written fallback.
+#
+# Columns:
+#   claude  Anthropic API id, for reference and API users. Checked against
+#           platform.claude.com/docs/en/models/overview on 2026-11-22. Nothing
+#           dispatches by it: Claude Code dispatches by `native`.
+#   native  Claude Code's per-subagent `model` argument: an alias, one of
+#           sonnet / opus / haiku (each resolves to the 5.5 model).
+#   codex   The model to start a Codex session on for this role. Codex can't
+#           choose a model per subagent, so every pass runs on the session's
+#           model and this column is advice for next time. Ids are from
+#           OpenAI's Codex models page on 2026-11-22. Which id suits which role
+#           is UNVERIFIED until scripts/bench-grumpy.py has measured it on Codex.
+# pi has no column: it can't choose a model per subagent either, and the
+# provider is the user's choice, so pi runs everything on the session's model.
 
 roles:
-  audit:        # grumpy:audit synthesis + planning (heaviest reasoning)
-    claude: claude-fable-5
-    native: opus              # Fable is wrapper_required; opus is the native dispatch
-    wrapper_required: [claude-fable-5]
-  analysis:     # review / architecture / security / product / edge-cases finding passes
-    claude: claude-opus-4-8
-    native: opus              # opus is natively dispatchable
+  audit:        # the model to start a /grumpy:audit session on (synthesis runs in the session)
+    claude: claude-opus-5-5
+    native: opus
+    codex: gpt-6.2-astra
+  analysis:     # review's finding passes, audit's dimension reviews, the top rung of fix's ladder
+    claude: claude-opus-5-5
+    native: opus
+    codex: gpt-6.2-astra
   exec:         # default fix execution (M steps)
-    claude: claude-sonnet-4-6
+    claude: claude-sonnet-5-5
     native: sonnet
+    codex: gpt-6.2-sol
   exec-trivial: # S mechanical steps (exec: trivial)
-    claude: claude-haiku-4-5
+    claude: claude-haiku-5-5
     native: haiku
-  escalation:   # gate-failure bump target — one rung up; native ceiling is `analysis` (opus)
-    order: [exec-trivial, exec, analysis]
+    codex: gpt-6-luna
 
-# Native dispatch ladder for `--max-tier` clamping + escalation (low → high):
-#   exec-trivial(haiku) < exec(sonnet) < analysis(opus)
-# The `audit` role exists for grumpy:audit's own synthesis model selection
-# (Fable, wrapper_required → opus fallback); natively it collapses to `analysis`,
-# so escalation tops out at analysis — there is no higher native rung.
+# Fix's escalation ladder (low → high). --max-tier clamps to a rung; a failed
+# check escalates one rung. If an override makes two rungs the same alias,
+# there is no higher model to escalate to: stop and report instead of retrying.
+escalation: [exec-trivial, exec, analysis]
+
+# Why review routes and imagine doesn't: the benchmark (scripts/bench-grumpy.py,
+# Claude Code, Sonnet session, 3 repeats per case, 2026-11-22; the table is in
+# PR #60's description). Review's passes on `analysis` matched or beat the
+# session model. On one imagine case opus lost recall, and 3 repeats is too small
+# a sample to say which model is better at imagine, so imagine stays on the
+# session's model until a larger rerun. That's a pending measurement, not a
+# verdict on opus.
+#
+# Fable is not routed. Claude Code accepts `fable` as an alias, but it resolves
+# to Fable 5.1 unless ANTHROPIC_DEFAULT_FABLE_MODEL is set, and the benchmark
+# doesn't cover /grumpy:audit yet, so moving audit to it would be an unmeasured
+# change.

@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1068,6 +1069,40 @@ class RunnerTest(unittest.TestCase):
         )
         self.assertEqual(r["status"], "error")
         self.assertIn("error", r)
+
+    def test_analysis_pin_is_written_where_the_passes_read_it(self):
+        probe = [sys.executable, "-c", "print(open('.sharpen/models.yaml').read())"]
+        bench.run_one(
+            "clean-refactor",
+            "review",
+            probe,
+            None,
+            self.tmp,
+            "p",
+            5,
+            False,
+            analysis="sonnet",
+        )
+        with open(os.path.join(self.tmp, "p.log"), encoding="utf-8") as f:
+            self.assertIn("analysis:\n    native: sonnet", f.read())
+
+    def test_models_map_is_consistent(self):
+        path = os.path.join(bench.GRUMPY, "models.yaml")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        roles = dict(
+            (m.group(1), m.group(2))
+            for m in re.finditer(r"^  ([a-z-]+):[^\n]*\n((?:    .*\n)+)", text, re.M)
+        )
+        self.assertEqual(set(roles), {"audit", "analysis", "exec", "exec-trivial"})
+        for name, body in roles.items():
+            cols = dict(re.findall(r"^    (\w+): (\S+)", body, re.M))
+            self.assertEqual(set(cols), {"claude", "native", "codex"}, name)
+            self.assertIn(cols["native"], {"haiku", "sonnet", "opus"}, name)
+        ladder = re.search(r"^escalation: \[(.*)\]", text, re.M).group(1)
+        self.assertEqual(
+            [r.strip() for r in ladder.split(",")], ["exec-trivial", "exec", "analysis"]
+        )
 
     def test_keep_leaves_the_repo_behind(self):
         quiet = [sys.executable, "-c", "pass"]
