@@ -4,7 +4,7 @@
 # reach a PR. Reads the Claude Code hook JSON from stdin; denies (exit 2)
 # with the check output when it fails.
 #
-# Wired in this repo's .claude/settings.json. Self-enforcing for the
+# Wired in this repo's .claude/settings.json (PreToolUse, Bash). Self-enforcing for the
 # sharpen marketplace only -- it does not affect other repos.
 
 set -euo pipefail
@@ -20,7 +20,17 @@ COMMAND=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sy
 # Only gate the operations that publish/merge a PR.
 printf '%s' "$COMMAND" | grep -qE 'gh\s+pr\s+(create|merge)' || exit 0
 
-OUTPUT=$(python3 "$REPO_ROOT/scripts/check-marketplace.py" 2>&1) && exit 0
+# Check the tree the PR is opened from, not this script's checkout: a session
+# started at the repo root runs this file from the main checkout even when the
+# command runs in a /sdlc:plan worktree under .claude/worktrees/. The payload's
+# cwd says where the command runs; a leading `cd <dir> &&` is not followed.
+CWD=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || echo "")
+TARGET="$REPO_ROOT"
+if [ -n "$CWD" ] && TOP=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) && [ -f "$TOP/scripts/check-marketplace.py" ]; then
+  TARGET="$TOP"
+fi
+
+OUTPUT=$(cd "$TARGET" && python3 "$TARGET/scripts/check-marketplace.py" 2>&1) && exit 0
 
 # Failed: deny with a single-line reason (JSON-escaped via python).
 printf '%s' "$OUTPUT" | python3 -c "

@@ -6,27 +6,41 @@
 #
 # Wire it once per clone: scripts/install-hooks.sh (sets core.hooksPath).
 #
+# Limit: the check reads the working tree, not the commits being pushed, so
+# uncommitted edits can mask or cause a failure. Commit (or stash) first.
+#
 # core.hooksPath makes git ignore .git/hooks, so this hook then calls, in
-# order: the sdlc plugin's product pre-push (its documented chain line; a
-# no-op until /sdlc:gate has recorded sharpen.sdlcScripts, and warn-only
-# unless `git config sharpen.prePush block`), and any other pre-push hook
-# left in .git/hooks.
+# order:
+#   1. the sdlc plugin's product pre-push (plugins/sdlc/scripts/pre-push.py,
+#      arriving with the area 2 PR in the stack), through the chain line its
+#      installer prints when core.hooksPath is set. A no-op until /sdlc:gate
+#      has recorded `git config sharpen.sdlcScripts`; warn-only unless
+#      `git config sharpen.prePush block`.
+#   2. any other pre-push hook left in .git/hooks.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
-# git feeds the refs being pushed on stdin; read it once and pass it on.
-PUSH_STDIN="$(cat)"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+# git feeds the refs being pushed on stdin; read it once and replay it from a
+# file, so a chained hook that never reads stdin can't SIGPIPE this script.
+PUSH_STDIN_FILE="$(mktemp)"
+trap 'rm -f "$PUSH_STDIN_FILE"' EXIT
+cat > "$PUSH_STDIN_FILE"
 
 if ! python3 "$ROOT/scripts/check-marketplace.py"; then
   echo "pre-push: marketplace check failed; fix it before pushing." >&2
   exit 1
 fi
 
-# sdlc product pre-push (plugins/sdlc/scripts/pre-push.py), via the chain line
-# its installer prints when core.hooksPath is set.
-dir=$(git config --get sharpen.sdlcScripts || true); [ -n "$dir" ] && [ -f "$dir/pre-push.py" ] && { printf '%s\n' "$PUSH_STDIN" | python3 "$dir/pre-push.py" "$@" || exit $?; }
+dir=$(git config --get sharpen.sdlcScripts || true)
+if [ -n "$dir" ] && [ -f "$dir/pre-push.py" ]; then
+  python3 "$dir/pre-push.py" "$@" < "$PUSH_STDIN_FILE" || exit $?
+fi
 
+resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 CHAINED="$(git rev-parse --git-common-dir)/hooks/pre-push"
-if [ -x "$CHAINED" ] && [ "$(cd "$(dirname "$CHAINED")" && pwd -P)" != "$(cd "$ROOT/.githooks" && pwd -P)" ]; then
-  printf '%s\n' "$PUSH_STDIN" | "$CHAINED" "$@"
+# Compare resolved files, not directories: .git/hooks/pre-push may be a
+# symlink back to this script, and chaining to it would loop forever.
+if [ -x "$CHAINED" ] && [ "$(resolve "$CHAINED")" != "$(resolve "$SELF")" ]; then
+  "$CHAINED" "$@" < "$PUSH_STDIN_FILE"
 fi
 exit 0

@@ -35,9 +35,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Superseded PR runs are cancelled; runs on main are not, so every merge
-  # gets its own result.
+  # Superseded PR runs are cancelled. Runs on main get a group of their own
+  # (the run id): a shared group would keep only one pending run, so a third
+  # quick merge would cancel the second's queued run and that merge would
+  # never get a result.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

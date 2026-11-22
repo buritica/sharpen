@@ -122,8 +122,10 @@ scripts/install-hooks.sh              # once per clone: wires .githooks/pre-push
 ```
 
 Stdlib python only, so there is no runtime to install. **Python 3.9 is the floor** (macOS's
-system `python3`), and CI tests 3.9 and 3.13; ruff targets `py39`, so syntax newer than 3.9
-fails lint. Don't reach for a newer stdlib API without a fallback.
+system `python3`), and CI tests 3.9 and 3.13. ruff targets `py39`, which flags some newer
+syntax (`match`) but not all of it: `int | None` annotations and `zip(strict=True)` pass lint
+and fail at runtime on 3.9, and only the 3.9 test leg catches them, for code the tests reach.
+Don't reach for newer syntax or stdlib APIs without a fallback.
 
 `run-tests.py` also runs two contract suites that sit outside any plugin:
 
@@ -141,7 +143,8 @@ by hand, with no path filter. `ci-pass` is the single required check and fails o
 didn't succeed, skipped included.
 
 Two repo-local hooks back that up before a PR exists: `.githooks/pre-push` (any agent or
-human; it also chains the sdlc plugin's own pre-push and anything in `.git/hooks`), and
+human; it also chains the sdlc plugin's product pre-push once that lands from the area 2 stack,
+and any other hook left in `.git/hooks`), and
 `.claude/settings.json`, which runs `scripts/pre-merge-check.sh` before `gh pr create` /
 `gh pr merge` under Claude Code.
 

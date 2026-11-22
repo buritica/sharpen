@@ -116,8 +116,14 @@ class HookPayloadReplay(unittest.TestCase):
                 git(self.repo, "checkout", "-q", "-B", branch, MAIN)
                 git(self.repo, "commit", "-q", "--allow-empty", "-m", "work")
                 p = self.payload(host, "posttooluse-git-commit")
-                self.run_hook(os.path.join(SDLC, "auto-init-gate-cycle.py"), p)
-                self.assertIn(branch, json.dumps(self.store()))
+                r = self.run_hook(os.path.join(SDLC, "auto-init-gate-cycle.py"), p)
+                err = r.stderr.decode()
+                # Arming a cycle exits 2 on purpose: the message asks the
+                # model to confirm the tier (see the hook's docstring).
+                self.assertEqual(r.returncode, 2, err)
+                self.assertNotIn("Traceback", err)
+                self.assertIn(branch, self.store(), err)
+                self.assertIn("tier", self.store()[branch])
 
     def test_commit_on_protected_default_branch_is_denied(self):
         subprocess.run(
