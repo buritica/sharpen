@@ -170,6 +170,14 @@ JSON shape) didn't hold up — `enforce-sdlc-gates.py` and
 `auto-init-gate-cycle.py` work on Codex via the same `hooks/hooks.json` every
 other host reads, no per-host manifest or env var required.
 
+**MCP PR tools (4.16.0):** the second `PreToolUse` entry in `hooks/hooks.json`
+(matcher `Monitor|mcp__.*create_(pull|merge)_request`) is live-verified on Claude
+Code 2.1.330: a headless session's MCP `create_pull_request` call and a `Monitor`
+call running `gh pr create` were both blocked with the full reason. On Codex it is
+**not yet live-verified**. Codex's hooks docs say `PreToolUse` fires for MCP tools
+under the same `mcp__<server>__<tool>` names and call tool hooks "a useful guardrail,
+not a complete enforcement boundary". The git pre-push floor still applies there.
+
 **The gap this used to be, and how receipts close it**: event-driven
 recording (`auto-record-skill-gate.py`) depends on a distinct `Skill` tool
 call firing `PostToolUse`. Live-tested on Codex, a grumpy review genuinely ran
