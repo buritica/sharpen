@@ -272,6 +272,24 @@ class ScoreTest(unittest.TestCase):
         )
         self.assertEqual(s["hits"], ["none-return", "swallow"])
 
+    def test_second_finding_for_a_claimed_issue_is_a_duplicate(self):
+        s = bench.score(
+            KEY,
+            [
+                F("CRIT", "undefined", line=30),
+                F("WARN", "undefined name again", line=31),
+            ],
+        )
+        self.assertEqual(s["duplicates"], 1)
+        self.assertEqual(s["noise"], 0)
+        self.assertEqual(s["precision"], 1.0)
+
+    def test_finding_without_a_file_is_unlocated_not_noise(self):
+        s = bench.score(KEY, [F("WARN", "nothing logs anything", file="", line=None)])
+        self.assertEqual(s["unlocated"], 1)
+        self.assertEqual(s["noise"], 0)
+        self.assertIsNone(s["precision"])
+
     def test_noise_counts_against_precision(self):
         s = bench.score(
             KEY,

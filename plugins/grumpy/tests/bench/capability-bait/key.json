@@ -66,6 +66,20 @@
         "absent"
       ],
       "max_severity": "NOTE"
+    },
+    {
+      "id": "substring-untested",
+      "file": "notes/test_merge.py",
+      "lines": [
+        29,
+        50
+      ],
+      "keywords": [
+        "substring",
+        "unrelated",
+        "partial"
+      ],
+      "max_severity": "WARN"
     }
   ]
 }

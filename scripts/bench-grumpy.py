@@ -422,12 +422,10 @@ def _max_matching(edges, n_left, owner=None):
     return owner
 
 
-def score(key, findings, window=WINDOW):
-    """Score findings against a case key. Planted issues are matched first."""
-    planted = key.get("planted", [])
-    acceptable = key.get("acceptable", [])
+def _pair_findings(findings, planted, acceptable, window):
+    """Pair findings with planted issues first, then leftovers with acceptable
+    ones. Returns ({finding index: (kind, target index)}, planted edge lists)."""
     n = len(findings)
-
     p_edges = [
         [j for j, t in enumerate(planted) if matches(t, f, window)] for f in findings
     ]
@@ -454,7 +452,11 @@ def score(key, findings, window=WINDOW):
     a_owner = _max_matching(a_edges, len(free))
     for j, k in a_owner.items():
         matched[free[k]] = ("acceptable", j)
+    return matched, p_edges
 
+
+def _rate_matches(matched, findings, planted, acceptable):
+    """(planted ids hit, planted ids underrated, acceptable ids overrated)."""
     hits, underrated, overrated = [], [], []
     for i, (kind, j) in matched.items():
         sev = findings[i].get("severity", "NOTE")
@@ -466,9 +468,48 @@ def score(key, findings, window=WINDOW):
             cap = acceptable[j].get("max_severity")
             if cap and RANK.get(sev, 1) > RANK[cap]:
                 overrated.append(acceptable[j]["id"])
+    return hits, underrated, overrated
 
-    blocking = [i for i in range(n) if findings[i].get("severity") in BLOCKING]
-    noise = [i for i in range(n) if i not in matched]
+
+def _classify_unmatched(findings, matched, p_edges, acceptable, window):
+    """Split the unmatched findings into (duplicates, unlocated, noise)."""
+    unmatched = [i for i in range(len(findings)) if i not in matched]
+    # An unmatched finding that describes an issue another finding already
+    # claimed is a duplicate: a dedup miss, reported separately, not noise.
+    duplicates = [
+        i
+        for i in unmatched
+        if p_edges[i] or any(matches(t, findings[i], window) for t in acceptable)
+    ]
+    # A finding with no file reference can't be scored or acted on (the
+    # report contract asks for [file:line]); it's a format miss, kept apart
+    # from noise and out of the precision denominator.
+    unlocated = [
+        i
+        for i in unmatched
+        if i not in duplicates
+        and not any(loc.get("file") for loc in findings[i].get("locations", []))
+    ]
+    noise = [i for i in unmatched if i not in duplicates and i not in unlocated]
+    return duplicates, unlocated, noise
+
+
+def score(key, findings, window=WINDOW):
+    """Score findings against a case key. Planted issues are matched first."""
+    planted = key.get("planted", [])
+    acceptable = key.get("acceptable", [])
+    n = len(findings)
+
+    matched, p_edges = _pair_findings(findings, planted, acceptable, window)
+    hits, underrated, overrated = _rate_matches(matched, findings, planted, acceptable)
+    duplicates, unlocated, noise = _classify_unmatched(
+        findings, matched, p_edges, acceptable, window
+    )
+    blocking = [
+        i
+        for i in range(n)
+        if findings[i].get("severity") in BLOCKING and i not in unlocated
+    ]
     noise_blocking = [i for i in noise if i in blocking]
     false_blocking = len(noise_blocking) + len(overrated)
     hit_set = set(hits)
@@ -480,6 +521,8 @@ def score(key, findings, window=WINDOW):
         "findings": n,
         "blocking": len(blocking),
         "noise": len(noise),
+        "duplicates": len(duplicates),
+        "unlocated": len(unlocated),
         "noise_blocking": len(noise_blocking),
         "overrated": sorted(overrated),
         "underrated": sorted(underrated),
@@ -488,6 +531,12 @@ def score(key, findings, window=WINDOW):
         "noise_text": [findings[i]["text"][:160] for i in noise_blocking],
         "clean": false_blocking == 0,
     }
+
+
+def _mean(values):
+    """statistics.mean, or None when there is nothing to average."""
+    values = list(values)
+    return statistics.mean(values) if values else None
 
 
 def summarize(runs):
@@ -503,21 +552,14 @@ def summarize(runs):
         out[name] = {
             "runs": len(rs),
             "failed_runs": len(rs) - len(scored),
-            "recall": statistics.mean(recalls) if recalls else None,
+            "recall": _mean(recalls),
             "recall_spread": (max(recalls) - min(recalls)) if len(recalls) > 1 else 0.0,
-            "precision": statistics.mean(precisions) if precisions else None,
-            "noise_blocking": statistics.mean(s["noise_blocking"] for s in scored)
-            if scored
-            else None,
-            "overrated": statistics.mean(len(s["overrated"]) for s in scored)
-            if scored
-            else None,
-            "findings": statistics.mean(s["findings"] for s in scored)
-            if scored
-            else None,
-            "clean_rate": (sum(1 for s in scored if s["clean"]) / len(scored))
-            if scored
-            else None,
+            "precision": _mean(precisions),
+            "noise_blocking": _mean(s["noise_blocking"] for s in scored),
+            "overrated": _mean(len(s["overrated"]) for s in scored),
+            "unlocated": _mean(s.get("unlocated", 0) for s in scored),
+            "findings": _mean(s["findings"] for s in scored),
+            "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
         }
     return out
 
@@ -694,6 +736,7 @@ def run_one(
                 argv,
                 cwd=repo,
                 input=stdin_text,
+                stdin=None if stdin_text is not None else subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -752,13 +795,13 @@ def _fmt(v, pct=True):
 
 def print_summary(summary, stream=sys.stdout):
     print(
-        f"{'case/pass':34} {'runs':>4} {'fail':>4} {'recall':>7} {'spread':>7} {'prec':>6} {'noise':>6} {'over':>5} {'clean':>6}",
+        f"{'case/pass':34} {'runs':>4} {'fail':>4} {'recall':>7} {'spread':>7} {'prec':>6} {'noise':>6} {'over':>5} {'unloc':>6} {'clean':>6}",
         file=stream,
     )
     for name, s in summary.items():
         print(
             f"{name:34} {s['runs']:>4} {s['failed_runs']:>4} {_fmt(s['recall']):>7} {_fmt(s['recall_spread']):>7} "
-            f"{_fmt(s['precision']):>6} {_fmt(s['noise_blocking'], False):>6} {_fmt(s['overrated'], False):>5} {_fmt(s['clean_rate']):>6}",
+            f"{_fmt(s['precision']):>6} {_fmt(s['noise_blocking'], False):>6} {_fmt(s['overrated'], False):>5} {_fmt(s['unlocated'], False):>6} {_fmt(s['clean_rate']):>6}",
             file=stream,
         )
 
