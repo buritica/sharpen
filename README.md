@@ -82,10 +82,10 @@ The same three plugins also install into the [pi coding agent](https://github.co
 
 ```sh
 # one install, all three plugins (a top-level package.json bundles them)
-pi install git:https://github.com/your-org/sharpen
+pi install git:https://github.com/buritica/sharpen
 
 # or per plugin, if you only want one (avoids the cross-plugin `audit` skill collision)
-pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc
+pi install git:https://github.com/buritica/sharpen --dir plugins/sdlc
 ```
 
 Under pi the gate confirmations are **replicated**, not dropped: when a hook denies (e.g. an ungated `gh pr create`), pi shows an interactive confirmation with the reason, and only an interactive human in the TUI can override. Headless (print/rpc) mode has no human to ask, so it fails closed and blocks. Each extension exports its own plugin root (`SDLC_PLUGIN_ROOT`, `GRUMPY_PLUGIN_ROOT`, `GUARDRAILS_PLUGIN_ROOT`), which the shared SKILL.md bodies read first, so they run unchanged. [`docs/hosts.md`](docs/hosts.md) has what every host supports.

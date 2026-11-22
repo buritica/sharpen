@@ -108,9 +108,10 @@ def receipt_path(worktree_root, branch, skill, gate=None):
     """Where the grumpy pass for `skill` leaves its receipt for `branch`.
 
     Same directory the passes already write their reports to
-    (`<worktree>/.claude/grumpy/<branch>/`), which `/sdlc:init` and this
-    repo already gitignore, so receipts never reach git. For a fix gate, the
-    stage-specific receipt wins when it exists."""
+    (`<worktree>/.claude/grumpy/<branch>/`). `receipt.py` drops a
+    `.gitignore` holding `*` into `.claude/grumpy/`, and `/sdlc:init` lists it
+    in the repo's `.gitignore` too, so receipts never reach git. For a fix
+    gate, the stage-specific receipt wins when it exists."""
     name = RECEIPT_NAME_FOR_SKILL.get(skill)
     if not name or not worktree_root:
         return None

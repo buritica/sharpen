@@ -106,6 +106,15 @@ Portable state uses `.sharpen/` for new shared data:
 `/grumpy:simplify` policy config), unlike `data/`, which is gitignored
 per-run state.
 
+Artifact folders ignore themselves, so keeping them out of git needs no host
+support and no `/sdlc:init`: whatever creates `.sharpen/data/`,
+`.claude/sdlc/`, `.claude/grumpy/` or `.claude/worktrees/` also writes a
+`.gitignore` holding `*` inside it (the stdlib writers through sdlc's
+`artifact_dirs.py` and grumpy's `receipt.py`, and one shell line beside each
+command's `mkdir -p`). `.sharpen/` itself never gets one, because it holds
+the committed `simplify.json`. `/sdlc:init` still lists the same folders in
+the repo's own `.gitignore` as a second layer.
+
 The gate store and capability-manifest adapter now resolve shared data in this order: an explicit environment override, `.sharpen/data/`, then existing `.claude/data/` as a compatibility fallback. Existing installs therefore keep reading and writing active state until `.sharpen/data/` exists; fresh state starts in the neutral root.
 
 `.claude/sdlc/` and `.claude/grumpy/` remain adapter-local scratch/artifact locations and are not moved by this step. A full migration must still read the old locations, write neutral locations atomically, and preserve a documented rollback path.

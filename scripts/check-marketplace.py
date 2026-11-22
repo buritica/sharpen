@@ -425,15 +425,33 @@ def check_pi_manifests(plugin_dir, name, version):
             )
 
 
-def check_top_level_pi_bundle():
+# The plugin whose version the top-level pi bundle carries. marketplace.json
+# has no version of its own, and the bundle is sdlc plus what sdlc composes
+# with, so it moves with sdlc (as it did when #49 created it).
+BUNDLE_TRACKS = "sdlc"
+
+
+def check_top_level_pi_bundle(listed=None):
     """The top-level package.json is pi's analog of marketplace.json: one
     `pi install` pulls in all three plugins. Its skills/extensions entries
     must resolve to real SKILL.md dirs / files (minus `!` exclusions), and
-    its version must track the marketplace's own listing."""
+    its version must equal the marketplace's listed version of
+    `BUNDLE_TRACKS` (when that plugin is listed)."""
     pkg = load_json(os.path.join(ROOT, "package.json"))
     if not pkg or "pi" not in pkg:
         err("top-level package.json has no `pi` manifest")
         return
+    tracked = (listed or {}).get(BUNDLE_TRACKS)
+    if tracked is not None and pkg.get("version") != tracked.get("version"):
+        err(
+            "top-level package.json: version drift (bundle='{}', "
+            "marketplace {}='{}'); the pi bundle moves with {}".format(
+                pkg.get("version"),
+                BUNDLE_TRACKS,
+                tracked.get("version"),
+                BUNDLE_TRACKS,
+            )
+        )
     for entry in pkg["pi"].get("skills", []):
         if entry.startswith("!"):
             continue
@@ -540,7 +558,7 @@ def main():
         check_plugin_roots(plugin_dir, name)
         check_pi_manifests(plugin_dir, name, pv)
 
-    check_top_level_pi_bundle()
+    check_top_level_pi_bundle(listed)
     check_hosts_matrix()
 
     # Plugin dirs on disk but not in the marketplace listing.

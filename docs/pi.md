@@ -17,18 +17,19 @@ repo's "pure stdlib" constraint holds — the adapters use only Node's built-in
 
 ```sh
 # the whole marketplace as one pi package
-pi install git:https://github.com/your-org/sharpen
+pi install git:https://github.com/buritica/sharpen
 
 # or one plugin at a time (needed for grumpy's `audit` skill — see below)
-pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc
-pi install git:https://github.com/your-org/sharpen --dir plugins/grumpy
-pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc-guardrails
+pi install git:https://github.com/buritica/sharpen --dir plugins/sdlc
+pi install git:https://github.com/buritica/sharpen --dir plugins/grumpy
+pi install git:https://github.com/buritica/sharpen --dir plugins/sdlc-guardrails
 ```
 
 Each plugin has its own `package.json` with a `pi` manifest (skills +
 extensions); the top-level `package.json` is pi's analog of the
 `.claude-plugin/marketplace.json` listing, bundling all three for a single
-install. `scripts/check-marketplace.py` keeps both registries consistent.
+install. The bundle's version is sdlc's version, so it moves whenever sdlc does.
+`scripts/check-marketplace.py` keeps both registries consistent, versions included.
 
 ## Event mapping
 

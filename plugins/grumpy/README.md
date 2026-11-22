@@ -156,8 +156,10 @@ compliant` means nothing is over target at head.
 
 ### Config: `.sharpen/simplify.json`
 
-An optional file committed at the repo root. `.sharpen/data/` is gitignored
-per-run state; `.sharpen/` itself is the neutral, committable root. An
+An optional file committed at the repo root. `.sharpen/data/` is per-run
+state that ignores itself (sharpen writes a `.gitignore` holding `*` inside
+it); `.sharpen/` itself is the neutral, committable root, so never ignore it
+as a whole. An
 absent file means the defaults above apply unchanged.
 
 - `thresholds` and `tolerance` merge per metric — set only the ones you want

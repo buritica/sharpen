@@ -1,9 +1,56 @@
-# sdlc UPDATE — v4.17.0
+# sdlc UPDATE — v4.18.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
+
+## New in 4.18.0 — artifact folders keep themselves out of git
+
+Gate state lives in `.sharpen/data/` (since the neutral-root move), but `/sdlc:init`'s
+ignore block still listed only the `.claude/` folders, so a repo initialised by an earlier
+version can have its gate state untracked and one `git add -A` away from a commit. And a
+repo that never ran init (the auto-init hook arms a cycle on the first commit anyway, and
+grumpy runs without sdlc) had nothing ignored at all.
+
+- Every folder sharpen writes inside a repo now **ignores itself** when it is created:
+  `.sharpen/data/`, `.claude/sdlc/`, `.claude/grumpy/` and `.claude/worktrees/` each get
+  a `.gitignore` holding `*`. This works on every host, needs no init, and an existing
+  folder gets the file on its next write. `.sharpen/` itself never gets one, because the
+  committed `.sharpen/simplify.json` lives there.
+- `/sdlc:init`'s ignore block adds `.sharpen/data/`, checks coverage with
+  `git check-ignore` instead of by eye, and never adds a blanket `.sharpen/`.
+- The top-level pi bundle's version now moves with sdlc, and `check-marketplace.py`
+  enforces it (it had drifted to 4.12.1). The pi install URLs point at
+  `github.com/buritica/sharpen` instead of a placeholder.
+
+**What an existing repo needs to do:** nothing required; the next gate write adds
+`.sharpen/data/.gitignore`. To make the repo's own `.gitignore` say so too, re-run
+`/sdlc:init` (it appends only the missing `.sharpen/data/` line) or add it by hand. If
+`git status` already shows `.sharpen/data/` as untracked, it clears on the next write.
+A repo whose live gate state is still in the legacy `.claude/data/` gets no self-ignore
+there (sharpen shares that folder and never marks it); keep its `.gitignore` line.
+A repo that already *committed* any of these folders has to untrack them once: an
+ignore file never untracks anything, so a tracked `gates.json` or `review.md` keeps
+showing as modified, and a grumpy receipt refuses a dirty tree. Run
+`git rm -r --cached .sharpen/data .claude/sdlc .claude/grumpy` (whichever exist) and
+commit that.
+Also dropped from this repo's own `.gitignore`: `.pr-body.md`, which nothing writes any more.
+
+Two side effects of the folders now being *ignored* rather than merely untracked:
+
+- `git clean -fdX` (a common `make clean`) now removes gate state and grumpy receipts in a
+  repo that never ran init, as it already did in repos that did. A cycle cleaned that way
+  loses its recorded gates; re-run the chain.
+- A team that commits plans under `.claude/sdlc/` keeps the ones already tracked, but new
+  ones are skipped by `git add -A`. Deleting `.claude/sdlc/.gitignore` doesn't last (the
+  next command puts it back); replace its contents with `!*` instead, or `git add -f`.
+- A plain `git worktree remove` (what `/sdlc:ship` runs) used to refuse a worktree
+  holding untracked plans and reports. Now that they're ignored, it succeeds and deletes
+  them with the worktree. Copy anything worth keeping out of `.claude/sdlc/<branch>/` or
+  `.claude/grumpy/<branch>/` before shipping.
+
+Update grumpy alongside (2.12.0+) so its report folder ignores itself too.
 
 ## New in 4.17.0 — a finished chain stops re-running (sharpen#37)
 

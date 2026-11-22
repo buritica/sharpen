@@ -151,12 +151,17 @@ Keep them cheap and changed-files-scoped.
   config + `lint`/`format` scripts, then run it once and show the user the scope
   of changes. If one already exists, leave it.
 - Copy `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/editorconfig` → `.editorconfig` if absent.
-- **Ignore the agent scratch directories.** These commands write per-branch
-  artifacts and gate state under `.claude/`; none of it belongs in git. Append
-  whichever are missing from `.gitignore` (create it if absent):
+- **Ignore the agent scratch directories.** These commands write gate state
+  under `.sharpen/data/` and per-branch artifacts under `.claude/`; none of it
+  belongs in git. Each of those folders already ignores itself when sharpen
+  creates it (a `.gitignore` holding `*` inside it), so this block is the
+  second layer: it keeps the repo's own `.gitignore` honest about what lives
+  there, and covers folders created before that. Append whichever are missing
+  from `.gitignore` (create it if absent):
 
   ```
   # Agent scratch — gate state, plans, specs, review reports
+  .sharpen/data/
   .claude/data/
   .claude/sdlc/
   .claude/grumpy/
@@ -167,11 +172,23 @@ Keep them cheap and changed-files-scoped.
   starts a comment only at the beginning of a line, so `.claude/data/  # state`
   is a literal pattern that matches nothing and silently ignores nothing.
 
-  First check for an entry that already covers these (a blanket `.claude/`, or
-  the individual lines) and skip what's present — appending on every run leaves
-  a file full of duplicates. If the repo deliberately *tracks* `.claude/` for
-  shared commands or `settings.json`, add only the four lines above, never a
-  blanket ignore.
+  First check what is already covered and skip it — appending on every run
+  leaves a file full of duplicates. Ask git rather than reading by eye, one
+  probe per line of the block: `git check-ignore -v .sharpen/data/probe` prints
+  the rule that matched as `<source>:<line>:<pattern>`. The line is already
+  covered only when that source is a repo-level file (`.gitignore`, a parent
+  folder's `.gitignore`, `.git/info/exclude`), a blanket `.claude/` included.
+  A match whose source is the folder's own `.gitignore` (for example
+  `.sharpen/data/.gitignore:2:*`, or `.claude/sdlc/.gitignore:1:*`; the
+  line number depends on which writer made it) is sharpen's self-ignore, not the repo
+  saying so: append the line anyway, unless the repo's `.gitignore` already
+  has a rule naming that folder's contents (`.claude/sdlc/*`, `.claude/sdlc/**`),
+  which git reports from the deeper self-ignore file instead. Probe one path
+  at a time; with several paths git only tells you about the ones that matched. If the repo deliberately *tracks* `.claude/`
+  for shared commands or `settings.json`, add only the lines above, never a
+  blanket ignore. **Never ignore `.sharpen/` as a whole**: it holds the
+  committed `.sharpen/simplify.json` (grumpy's simplify policy), and a
+  blanket entry silently drops it from the next commit.
 
   **If you replace an existing agent-scratch ignore entry with these**, delete the
   directory it covered in the same step, after telling the user what is in it.

@@ -34,6 +34,7 @@ import subprocess
 import tempfile
 
 import gate_convergence as gc
+from artifact_dirs import ensure_self_ignored
 
 CONFIG_KEY = "sdlcBase"
 BASE_FILE = "base.json"
@@ -205,6 +206,7 @@ def write_base_file(branch, base, cwd=None):
     tmp = None
     try:
         os.makedirs(directory, exist_ok=True)
+        ensure_self_ignored(os.path.join(root, ".claude", "sdlc"))
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".base.", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump(base, f, indent=2)

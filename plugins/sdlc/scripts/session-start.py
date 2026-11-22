@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 
 import gate_store as gs
 import hosts
+from artifact_dirs import ensure_self_ignored
 
 CAPABILITY_BY_SKILL = {
     "simplify": ("grumpy", "simplify"),
@@ -192,6 +193,7 @@ def write_manifest(path, manifest):
     # file if json.dump raises before os.replace runs.
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
+    ensure_self_ignored(directory)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix="capabilities-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
