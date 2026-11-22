@@ -16,12 +16,11 @@
  *
  * Exports `GUARDRAILS_PLUGIN_ROOT` into the process env so the guard
  * SKILL.md's `_guardrails_config.py` calls resolve under pi's bash tool. This
- * is a DEDICATED var, not `CLAUDE_PLUGIN_ROOT`: the sdlc plugin's extension
- * sets that shared var to the sdlc root, and if this extension clobbered it
- * every sdlc skill's `$CLAUDE_PLUGIN_ROOT/scripts/...` reference would break
- * when both load together (the top-level bundle). The guard skill resolves
- * `PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` so it still
- * works under Claude Code/Codex, which set `CLAUDE_PLUGIN_ROOT` per-plugin.
+ * is a DEDICATED var, not `CLAUDE_PLUGIN_ROOT`: pi runs every plugin in one
+ * process, so a shared value would be wrong for all but one of them. The
+ * guard skill resolves `PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`;
+ * on Claude Code the braced inner name is filled in when the skill loads.
+ * See docs/hosts.md.
  *
  * Node stdlib only.
  */

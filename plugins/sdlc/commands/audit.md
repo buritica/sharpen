@@ -6,8 +6,10 @@ allowed-tools: ["Bash", "Read", "Grep", "Glob"]
 
 # /sdlc:audit
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Audit **this** repo's CI pipeline and enforcement posture against the
-language-agnostic patterns in `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`. This
+language-agnostic patterns in `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/spec.md`. This
 command is **read-only** — it reports drift; it does not fix anything. To apply
 fixes, run `/sdlc:init` when offered at the end.
 
@@ -29,7 +31,7 @@ Before inspecting the repo, read the reference patterns so every finding maps to
 a specific rule:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/templates/spec.md
+${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/spec.md
 ```
 
 Hold the patterns in context; each finding below cites its pattern number.

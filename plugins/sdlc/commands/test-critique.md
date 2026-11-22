@@ -6,6 +6,8 @@ allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
 
 # /sdlc:test-critique
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Review the quality of tests with the same skepticism a grumpy principal engineer
 applies to production code. Green tests that don't actually verify behavior are
 worse than no tests — they create false confidence. This command finds the
@@ -30,7 +32,7 @@ From `$ARGUMENTS`:
 ## 1. Detect the stack and test file conventions
 
 Read manifests in `$WT`. Use the same detection logic as the other `/sdlc:test-*`
-commands. Consult `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the
+commands. Consult `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the
 full reference.
 
 Test file patterns by stack:

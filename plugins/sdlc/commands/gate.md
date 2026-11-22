@@ -17,7 +17,7 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 The route lives in the shared store until it is replaced or dropped. It is dropped when this session next runs `--init` for its **own** branch, or explicitly:
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --unroute
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --unroute
 ```
 
 Run `--unroute` when you finish gating `$WT` and keep working in this session — otherwise a later `/grumpy:review` here still records against `$WT`'s branch. `--status` prints `Driven from: <path>` whenever a route is active; check it if a gate lands somewhere unexpected. A worktree drives at most one branch, but two sessions may drive the same target and both record there.
@@ -46,8 +46,8 @@ python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --ve
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify all        # sweep every receipt on disk
 ```
 
-Claude Code substitutes the braced `${CLAUDE_PLUGIN_ROOT}` in this text but does
-not export it to the agent's shell, so keep the braces. A host that exports
+Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT` name in this text but does
+not export it to the agent's shell, so keep the braces (see <https://github.com/buritica/sharpen/blob/main/docs/hosts.md>). A host that exports
 `SDLC_PLUGIN_ROOT` wins. If the path still comes out empty, use the installed
 sdlc plugin's path instead. Run it from the worktree being gated (`cd "$WT"` first when
 `--worktree` is set); routing set with `--route-from` applies exactly as it does to the
@@ -164,7 +164,7 @@ is the reliable workaround.
 
 Before initializing the gate cycle, detect which optional capabilities are available and announce the mode.
 
-**Skill detection — do NOT probe the filesystem.** Detect by **command availability**: `/grumpy:simplify`, `/grumpy:review`, `/grumpy:fix`, and `/grumpy:imagine` are listed in your available skills/commands for this session if and only if they are installed. Check that list directly — do not run `ls "$CLAUDE_PLUGIN_ROOT/../grumpy/..."`, since `$CLAUDE_PLUGIN_ROOT` is empty in the skill-execution context and that probe always fails.
+**Skill detection — do NOT probe the filesystem.** Detect by **command availability**: `/grumpy:simplify`, `/grumpy:review`, `/grumpy:fix`, and `/grumpy:imagine` are listed in your available skills/commands for this session if and only if they are installed. Check that list directly — do not probe `<sdlc root>/../grumpy/...`: the plugin cache is version-nested, so that path never exists and the probe always fails.
 
 Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only when `/grumpy:simplify` runs, and a manual `--record simplify` is refused by the store. All four skills ship together with the `grumpy` plugin — but check **gate 2 separately from gates 3–6**, not as one bundle. `/grumpy:simplify` was added later than `/grumpy:review`/`/grumpy:imagine`/`/grumpy:fix`, so a `grumpy` install one version behind has the trio but not yet the fourth skill; treating all four as a single yes/no would downgrade gates 3–6 to the weaker fallback too, on an install where they'd work fine.
 
@@ -183,7 +183,7 @@ If the repo has an `AGENTS.md` with a managed SDLC block, check it before
 initializing — one command, no toolchain needed:
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/agents_md.py" --root "${WT:-.}" --check
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/agents_md.py" --root "${WT:-.}" --check
 ```
 
 `stale` means the block was rendered by an older sdlc than the one enforcing
@@ -202,7 +202,7 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 # --route-from only when --worktree was passed; harmless-but-pointless otherwise
 # (routing a worktree to its own branch is a no-op).
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --init <tier> --branch "$BRANCH" --route-from "$PWD"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --init <tier> --branch "$BRANCH" --route-from "$PWD"
 ```
 
 Replace `<tier>` with `tiny`, `small-medium`, or `significant`. Drop `--route-from "$PWD"` when you are gating the current worktree.
@@ -214,7 +214,7 @@ After each gate passes (manual recording is only for the bash-verifiable gates �
 ```bash
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --record <gate-name> --branch "$BRANCH"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --record <gate-name> --branch "$BRANCH"
 ```
 
 ### Reset (after post-gate code changes)
@@ -226,7 +226,7 @@ Re-run `--init` with the same tier — it clears all timestamps (the route survi
 ```bash
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --init <tier> --branch "$BRANCH" --route-from "$PWD"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --init <tier> --branch "$BRANCH" --route-from "$PWD"
 ```
 
 ### Check status
@@ -234,7 +234,7 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --init <tier> --branch "$BR
 ```bash
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --status --branch "$BRANCH"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --status --branch "$BRANCH"
 ```
 
 ## Gate chain
@@ -370,7 +370,7 @@ Run each gate in order. After each gate passes:
 
    ```bash
    python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify <simplify|review|fix|imagine>
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --oneline --branch "$BRANCH"
+   python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --oneline --branch "$BRANCH"
    ```
 
    A non-zero `--verify` names the reason (no receipt yet, receipt for a commit no longer on the branch, receipt from before this cycle). Fix that before moving on — discovering it at `gh pr create` costs a full re-run of the chain. The hooks stay quiet when there is **no cycle for this branch at all**, the normal opt-out; an explicit `--verify` still says so.

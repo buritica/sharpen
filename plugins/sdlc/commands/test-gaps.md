@@ -6,6 +6,8 @@ allowed-tools: ["Bash", "Read", "Grep", "Glob", "TaskCreate", "TaskUpdate"]
 
 # /sdlc:test-gaps
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Find changed source files that have no covering tests. This is not about
 coverage percentage — it is about identifying code that was added or modified in
 the current branch but has no test file that exercises it at all. A 100% green
@@ -23,7 +25,7 @@ From `$ARGUMENTS`:
 ## 1. Detect the stack
 
 Read manifests in `$WT` to determine the language(s) and test file conventions.
-Consult `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the full
+Consult `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the full
 reference. Do not hardcode assumptions — test-file naming varies by stack:
 
 | Stack | Source extensions | Test file conventions |

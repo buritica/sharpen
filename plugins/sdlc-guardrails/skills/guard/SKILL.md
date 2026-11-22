@@ -23,15 +23,14 @@ and run the helper, then report its output verbatim to the user:
 | `default-on`              | Protect every repo by default; `off` on a specific repo then records an exception for it |
 | `default-off`             | Default to no protection (the shipped default)               |
 
-Resolve this plugin's root first. Under Claude Code/Codex, the harness sets
-`CLAUDE_PLUGIN_ROOT` to this plugin's own directory. Under pi, this plugin's
-extension sets a dedicated `GUARDRAILS_PLUGIN_ROOT` (it must NOT clobber the
-shared `CLAUDE_PLUGIN_ROOT`, which the sdlc plugin's skills rely on when both
-load together) — so resolve `PLUGIN_ROOT` with the dedicated var first, falling
-back to `CLAUDE_PLUGIN_ROOT`:
+Resolve this plugin's root first. Under pi, this plugin's extension exports
+`GUARDRAILS_PLUGIN_ROOT`. Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT`
+name below with this plugin's directory when it loads this command (it does
+not export it to your shell, so the unbraced spelling would be empty). See
+<https://github.com/buritica/sharpen/blob/main/docs/hosts.md> for every host:
 
 ```bash
-PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"
 ```
 
 Then run exactly one of:

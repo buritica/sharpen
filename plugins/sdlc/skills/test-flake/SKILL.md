@@ -5,6 +5,8 @@ description: "Rerun the test suite N times locally to surface intermittent failu
 
 # /sdlc:test-flake
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Hunt for intermittent (flaky) tests by running the suite multiple times and
 collecting failures that are not 100% reproducible. A test that fails in some
 runs but not others is a flake — it erodes trust in CI and masks real regressions.
@@ -42,7 +44,7 @@ go.mod                                   → go test ./... (shell loop)
 Makefile with "test" target             → make test   (shell loop)
 ```
 
-Read `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the full
+Read `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the full
 toolchain reference, including how to detect the package manager from the
 lockfile. For stacks not listed there, use WebSearch/WebFetch to confirm the
 current idiomatic test runner before proceeding.

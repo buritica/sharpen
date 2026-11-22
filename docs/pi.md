@@ -34,7 +34,7 @@ install. `scripts/check-marketplace.py` keeps both registries consistent.
 
 | Claude hook | pi event | adapter action |
 |---|---|---|
-| `SessionStart` | `session_start` | run `claude-session-start.py` (writes the capability manifest) |
+| `SessionStart` | `session_start` | run `session-start.py` (writes `capabilities.pi.json`; the extension exports `SHARPEN_HOST=pi`) |
 | `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` then `block-direct-gate-record.py`; block on non-zero exit |
 | `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
 | `PreToolUse` Bash (guardrails) | `tool_call` (bash) | run `hooks/_block-main-commits.py`; block on non-zero exit |
@@ -66,13 +66,19 @@ with empty model output — the deny reason lives in the block result, so a
 headless consumer that doesn't render it sees a silent end-of-turn. That is
 the fail-closed posture working as designed, not a bug.
 
-## `$CLAUDE_PLUGIN_ROOT` and the shared SKILL.md bodies
+## Plugin roots in the shared SKILL.md bodies
 
-The cross-host `SKILL.md` files reference `$CLAUDE_PLUGIN_ROOT/scripts/...`.
-pi sets no equivalent env var, so each extension sets
-`process.env.CLAUDE_PLUGIN_ROOT` (and `CLAUDE_PLUGIN_SCRIPTS`) to its plugin
-root at load. pi's bash tool spawns shells inheriting `process.env`, so the
-existing skill bodies run verbatim — no edits to the shared files.
+Every plugin path in a `SKILL.md` is spelled
+`${<PLUGIN>_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`, with `SDLC`, `GRUMPY` or
+`GUARDRAILS` as the prefix. pi has no text substitution and runs every plugin in one
+process, so each extension exports its own variable (`SDLC_PLUGIN_ROOT`,
+`GRUMPY_PLUGIN_ROOT`, `GUARDRAILS_PLUGIN_ROOT`) at load, and none of them sets
+the shared `CLAUDE_PLUGIN_ROOT`: one shared value would point every plugin at
+whichever extension loaded last. pi's bash tool spawns shells inheriting
+`process.env`, so the skill bodies run verbatim. The sdlc extension also
+exports `SHARPEN_HOST=pi` for host detection. `scripts/check-marketplace.py`
+rejects any plugin path that isn't spelled this way. See
+[`hosts.md`](hosts.md) for how each host resolves it.
 
 ## Known pi limitations
 
@@ -82,8 +88,7 @@ existing skill bodies run verbatim — no edits to the shared files.
   <pass>` after each pass, and the extension's `agent_end` sweep records any
   receipt whose `--verify` was skipped (including a review receipt a later
   fix commit has moved past). grumpy's own extension exports
-  `GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py`; `CLAUDE_PLUGIN_ROOT`
-  is sdlc's under pi. `--attest` remains the reason-required
+  `GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py`. `--attest` remains the reason-required
   fallback for a pass that genuinely couldn't leave a receipt.
 - **Flat skill names → the `audit` collision.** pi skills are flat-named, so
   sdlc's `audit` and grumpy's `audit` cannot coexist in one pi package. The

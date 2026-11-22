@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Claude SessionStart capability adapter."""
+"""Tests for the SessionStart capability adapter (every host)."""
 
 import contextlib
 import glob
@@ -17,12 +17,14 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
-SCRIPT = os.path.join(SCRIPTS, "claude-session-start.py")
+SCRIPT = os.path.join(SCRIPTS, "session-start.py")
 sys.path.insert(0, SCRIPTS)
 
-spec = importlib.util.spec_from_file_location("claude_session_start", SCRIPT)
+spec = importlib.util.spec_from_file_location("session_start", SCRIPT)
 session_start = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session_start)
+
+import capabilities  # noqa: E402 (needs SCRIPTS on sys.path first)
 
 
 def git(repo, *args):
@@ -51,7 +53,7 @@ class DetectCapabilitiesTest(unittest.TestCase):
         result = session_start.detect_capabilities(path_exists=lambda _path: False)
         self.assertEqual(result, ["lint", "plan", "ship", "test", "typecheck"])
 
-    def test_detected_grumpy_skills_add_review_imagine_and_fix(self):
+    def test_detected_grumpy_skills_add_simplify_review_imagine_and_fix(self):
         result = session_start.detect_capabilities(path_exists=lambda _path: True)
         self.assertEqual(
             result,
@@ -62,17 +64,38 @@ class DetectCapabilitiesTest(unittest.TestCase):
                 "plan",
                 "review",
                 "ship",
+                "simplify",
                 "test",
                 "typecheck",
             ],
         )
 
     def test_manifest_is_valid_v1_shape(self):
-        manifest = session_start.build_manifest(["typecheck", "test"])
+        manifest = session_start.build_manifest(
+            ["typecheck", "test"], host="claude-code"
+        )
         self.assertEqual(manifest["protocol_version"], "1")
         self.assertEqual(manifest["provider"], {"name": "claude-code"})
         self.assertEqual(manifest["capabilities"], ["test", "typecheck"])
-        self.assertEqual(manifest["x-source"], "claude-session-start")
+        self.assertEqual(manifest["x-source"], "session-start")
+        self.assertEqual(manifest["x-recording"], "automatic")
+        self.assertIs(manifest["x-receipts"], True)
+        capabilities.validate_manifest(manifest)
+
+    def test_unknown_host_is_declared_as_unknown_with_manual_recording(self):
+        # Honest blank over a guessed name: the default is not "claude-code".
+        manifest = session_start.build_manifest(["test"])
+        self.assertEqual(manifest["provider"], {"name": "unknown"})
+        self.assertEqual(manifest["x-recording"], "manual")
+
+    def test_receipts_declared_only_when_grumpy_ships_the_writer(self):
+        self.assertTrue(session_start.detect_receipts(path_exists=lambda p: True))
+        self.assertFalse(session_start.detect_receipts(path_exists=lambda p: False))
+        seen = []
+        session_start.detect_receipts(path_exists=lambda p: seen.append(p) or False)
+        self.assertTrue(
+            all(p.endswith(os.path.join("scripts", "receipt.py")) for p in seen)
+        )
 
 
 class RealLayoutDetectionTest(unittest.TestCase):
@@ -140,6 +163,39 @@ class RealLayoutDetectionTest(unittest.TestCase):
             result = session_start.detect_capabilities(plugin_root=sdlc_root)
         self.assertIn("fix", result)
         self.assertNotIn("review", result)
+
+    def test_exported_grumpy_plugin_root_is_a_candidate(self):
+        # pi's grumpy extension exports GRUMPY_PLUGIN_ROOT into the shared
+        # process env; it locates grumpy however the cache is laid out.
+        sdlc_root = os.path.join(self.tmpdir, "pi", "sdlc")
+        grumpy_root = os.path.join(self.tmpdir, "pi-elsewhere", "grumpy")
+        os.makedirs(sdlc_root, exist_ok=True)
+        _touch(grumpy_root, "skills", "simplify", "SKILL.md")
+        _touch(grumpy_root, "scripts", "receipt.py")
+        with mock.patch.dict(os.environ, {"GRUMPY_PLUGIN_ROOT": grumpy_root}):
+            result = session_start.detect_capabilities(plugin_root=sdlc_root)
+            receipts = session_start.detect_receipts(plugin_root=sdlc_root)
+        self.assertIn("simplify", result)
+        self.assertTrue(receipts)
+
+    def test_grumpy_without_receipt_writer_declares_no_receipts(self):
+        # grumpy older than 2.9.0: skills present, no scripts/receipt.py.
+        sdlc_root = os.path.join(self.tmpdir, "cache", "sharpen", "sdlc", "4.15.0")
+        os.makedirs(sdlc_root, exist_ok=True)
+        _touch(
+            self.tmpdir,
+            "cache",
+            "sharpen",
+            "grumpy",
+            "2.8.0",
+            "skills",
+            "review",
+            "SKILL.md",
+        )
+        self.assertIn(
+            "review", session_start.detect_capabilities(plugin_root=sdlc_root)
+        )
+        self.assertFalse(session_start.detect_receipts(plugin_root=sdlc_root))
 
     def test_debug_env_var_reports_which_candidate_matched(self):
         # The observability gap that made this bug take a live debugging
@@ -237,13 +293,18 @@ class SessionStartCliTest(unittest.TestCase):
         self.repo = make_repo()
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
         self.manifest_path = os.path.join(
-            self.repo, ".sharpen", "data", "capabilities.claude.json"
+            self.repo, ".sharpen", "data", "capabilities.claude-code.json"
         )
 
-    def clean_env(self):
+    def clean_env(self, **overrides):
+        # Pin the host: this test suite may itself run under Claude Code
+        # (CLAUDECODE=1) or pi (SHARPEN_HOST=pi).
         env = dict(os.environ)
-        env.pop("SDLC_CAPABILITIES_PATH", None)
-        return env
+        for key in ("SDLC_CAPABILITIES_PATH", "SHARPEN_HOST", "CLAUDECODE"):
+            env.pop(key, None)
+        env["CLAUDECODE"] = "1"
+        env.update(overrides)
+        return {k: v for k, v in env.items() if v is not None}
 
     def run_adapter(self, env=None):
         return subprocess.run(
@@ -290,7 +351,7 @@ class SessionStartCliTest(unittest.TestCase):
         # neutral file appears.
         legacy_dir = os.path.join(self.repo, ".claude", "data")
         os.makedirs(legacy_dir)
-        legacy_path = os.path.join(legacy_dir, "capabilities.claude.json")
+        legacy_path = os.path.join(legacy_dir, "capabilities.claude-code.json")
         legacy_content_after_first_phase = self.assert_manifest_overwritten(legacy_path)
         self.assertFalse(os.path.exists(self.manifest_path))
 
@@ -301,6 +362,25 @@ class SessionStartCliTest(unittest.TestCase):
             legacy_content_after_first_phase,
             "legacy manifest should be untouched once the neutral path takes over",
         )
+
+    def test_host_comes_from_the_adapter_and_names_the_file(self):
+        cases = [
+            ({"SHARPEN_HOST": "pi"}, "pi", "automatic"),
+            ({"CLAUDECODE": None}, "unknown", "manual"),
+        ]
+        for overrides, host, recording in cases:
+            with self.subTest(host=host):
+                result = self.run_adapter(env=self.clean_env(**overrides))
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                path = os.path.join(
+                    self.repo, ".sharpen", "data", f"capabilities.{host}.json"
+                )
+                manifest = self.read_manifest(path)
+                self.assertEqual(manifest["provider"]["name"], host)
+                self.assertEqual(manifest["x-recording"], recording)
+        # Neither run wrote Claude Code's file: hosts no longer overwrite
+        # each other's declaration.
+        self.assertFalse(os.path.exists(self.manifest_path))
 
     def test_unwritable_manifest_path_is_non_blocking_but_visible(self):
         blocker = os.path.join(self.repo, "blocker")
@@ -317,7 +397,7 @@ class SessionStartCliTest(unittest.TestCase):
 
 
 class HookRegistrationTest(unittest.TestCase):
-    def test_hooks_json_registers_claude_session_start_adapter(self):
+    def test_hooks_json_registers_session_start_adapter(self):
         with open(
             os.path.join(HERE, "..", "hooks", "hooks.json"), encoding="utf-8"
         ) as f:
@@ -329,7 +409,7 @@ class HookRegistrationTest(unittest.TestCase):
             for hook in group.get("hooks", [])
         ]
         self.assertIn(
-            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/claude-session-start.py"',
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py"',
             commands,
         )
 

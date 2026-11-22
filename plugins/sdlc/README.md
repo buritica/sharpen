@@ -91,7 +91,9 @@ Docs-only changes (no executable files, any size): test + lint + typecheck, all 
 
 ### Portable adapters
 
-Non-Claude hosts can use the same gate evidence with a v1 capability manifest. The manifest declares a non-empty subset of `plan`, `review`, `imagine`, `fix`, `test`, `lint`, `typecheck`, and `ship`; the adapter resolves the highest supported profile (`baseline`, `review`, or `adversarial`). Supply `x-host-command-map` for any capability whose command is host-specific:
+Every native host (Claude Code, Codex, pi) runs the session-start adapter, `scripts/session-start.py`, which writes `.sharpen/data/capabilities.<host>.json`. It names the host honestly (`SHARPEN_HOST`, else Claude Code's `CLAUDECODE=1`, else `unknown`), lists the grumpy passes it found, and records whether this host sweeps receipts on its own (`x-recording`) and whether the installed grumpy writes receipts at all (`x-receipts`). Auto-init reads it to tell you how gates 2 to 6 record here; with a grumpy that predates receipts it arms an event-only cycle on Claude Code only, and everywhere else says to upgrade grumpy. A profile is recorded on the cycle for diagnostics only; the tier alone decides which gates are required. [`docs/hosts.md`](../../docs/hosts.md) is the per-host support matrix.
+
+Non-Claude hosts can use the same gate evidence with a v1 capability manifest. The manifest declares a non-empty subset of `plan`, `simplify`, `review`, `imagine`, `fix`, `test`, `lint`, `typecheck`, and `ship`; the adapter resolves the highest supported profile (`baseline`, `review`, or `adversarial`). Supply `x-host-command-map` for any capability whose command is host-specific:
 
 ```json
 {
@@ -151,7 +153,7 @@ symlinked `CLAUDE.md` or `AGENTS.md` is refused rather than written through.
 docs): Codex reads this plugin's own `hooks/hooks.json` directly, with no
 translation layer needed. `${CLAUDE_PLUGIN_ROOT}` resolves in the hook
 command string exactly as it does under Claude Code; `SessionStart` runs
-`claude-session-start.py`; a `PreToolUse` hook genuinely denies — confirmed
+`session-start.py` (then named `claude-session-start.py`); a `PreToolUse` hook genuinely denies — confirmed
 by watching `enforce-sdlc-gates.py` block a real `gh pr create` on an
 incomplete gate cycle, full multi-line reason and all, on stdout AND stderr,
 with no schema-validation fallout from the Claude-shaped JSON envelope; and
@@ -177,6 +179,13 @@ records the gate from it on any host. Claude Code's `Stop` hook and pi's
 yourself after each pass. See `gate.md`'s "How skill gates record: receipts
 (every host)" section for the exact commands, the staleness rule, and the
 `SDLC_GATE_EVIDENCE=events` opt-out.
+
+**Still unverified on Codex** (see [`docs/hosts.md`](../../docs/hosts.md),
+"Verifying Codex", for the exact checks): whether Codex fills in
+`${CLAUDE_PLUGIN_ROOT}` inside skill text the way it does in hook commands,
+whether its `Stop` hook fires, and which environment variable identifies it.
+Until the last is known, a Codex session declares its host as `unknown` and
+auto-init tells it to run `--verify` after each pass.
 
 Command prose was the other porting axis: `commands/*.md` files originally
 named Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill tool`),
@@ -205,7 +214,7 @@ generated body still references `$ARGUMENTS` Claude-command-style — there is
 no cross-host argument-passing convention yet, so a SKILL.md consumer sees
 the same placeholder a Claude Code user would.
 
-This closes a real, previously-dormant gap: `claude-session-start.py`'s
+This closes a real, previously-dormant gap: the session-start adapter's
 capability detection (see "Portable adapters" above) has always checked for
 `plugins/grumpy/skills/{review,imagine,fix}/SKILL.md` to declare those
 capabilities in the v1 manifest, but until these files existed that check
@@ -259,7 +268,7 @@ existing script, and maps its exit code / stderr back to a pi decision:
 
 | Claude hook | pi event | adapter action |
 |---|---|---|
-| `SessionStart` | `session_start` | run `claude-session-start.py` |
+| `SessionStart` | `session_start` | run `session-start.py` (the extension exports `SHARPEN_HOST=pi` first) |
 | `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` + `block-direct-gate-record.py`; block on non-zero exit |
 | `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
 | `Stop` | `agent_end` | run `sweep-skill-receipts.py`; surface its notice |
@@ -271,10 +280,11 @@ and only an interactive human in the TUI can override. Headless (print/rpc/json)
 mode has no human to ask, so it **fails closed** — the tool call is blocked with
 `terminate: true`, and the model can never self-bypass.
 
-`$CLAUDE_PLUGIN_ROOT` (and `CLAUDE_PLUGIN_SCRIPTS`) are injected into
-`process.env` at extension load; pi's bash tool spawns shells inheriting
-`process.env`, so the shared SKILL.md bodies run verbatim — no edits to the
-generated files.
+`SDLC_PLUGIN_ROOT` and `SHARPEN_HOST=pi` are exported into `process.env` at
+extension load; pi's bash tool spawns shells inheriting `process.env`, so the
+shared SKILL.md bodies, which spell every path
+`${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`, run verbatim. No extension sets
+the shared `CLAUDE_PLUGIN_ROOT` (see [`docs/hosts.md`](../../docs/hosts.md)).
 
 Install as a pi package (`pi install git:...sharpen`, or `--dir plugins/sdlc` for
 this plugin alone). The pi manifest is `package.json`'s `pi` key; the top-level
@@ -285,8 +295,7 @@ script the extension references still exists.
 **No `Skill` tool, and gates 2–6 still record**: each grumpy pass writes a
 receipt, the gate chain runs `record-gate.py --verify <pass>`, and the
 `agent_end` sweep catches a skipped one. grumpy's own pi extension exports
-`GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py` (sdlc's extension owns
-`CLAUDE_PLUGIN_ROOT`). `--attest` stays the last resort. See [`docs/pi.md`](../../docs/pi.md) for
+`GRUMPY_PLUGIN_ROOT` so the passes find `receipt.py`. `--attest` stays the last resort. See [`docs/pi.md`](../../docs/pi.md) for
 the full contract and the flat-name `audit` skill collision in the top-level
 bundle.
 

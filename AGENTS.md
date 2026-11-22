@@ -104,6 +104,13 @@ need one `--write-all-in` run the first time it rebases past this point.
   instead, the way `/sdlc:gate` detects `grumpy`.
 - Each plugin's `hooks/hooks.json` is auto-loaded; do **not** also declare a `hooks` key in
   `plugin.json` (double-load error).
+- In command and skill text, spell every plugin path with the plugin's own variable first:
+  `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`, `${GRUMPY_PLUGIN_ROOT:-...}`,
+  `${GUARDRAILS_PLUGIN_ROOT:-...}`. Claude Code fills in only the **braced** shared name and
+  never exports it to the agent's shell, and pi sets only the per-plugin names.
+  `scripts/check-marketplace.py` fails on anything else. See `docs/hosts.md`, which is also
+  the host support matrix (regenerate its table with
+  `python3 plugins/sdlc/scripts/hosts.py --write docs/hosts.md` after changing `HOSTS`).
 
 ## pi (coding agent) support
 

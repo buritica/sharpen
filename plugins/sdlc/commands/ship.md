@@ -74,7 +74,7 @@ Closes #XXX
 <one line per marker this branch added: [Serious|Questionable] file:line — ceiling/trigger — #issue or "not filed" (carry the severity tag straight from fix.md's own report when it exists; the grep fallback can't recover severity, so mark those lines "severity unknown — fix report missing" instead of guessing)>
 <omit this whole section when the branch added no markers>
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+<your host's attribution line, if it adds one to PRs; omit otherwise>
 EOF
 )"
 ```

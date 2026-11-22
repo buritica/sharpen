@@ -10,12 +10,24 @@ but unknown capability names are rejected to avoid falsely promising support.
 import json
 
 KNOWN_CAPABILITIES = frozenset(
-    {"plan", "review", "imagine", "fix", "test", "lint", "typecheck", "ship"}
+    {
+        "plan",
+        "simplify",
+        "review",
+        "imagine",
+        "fix",
+        "test",
+        "lint",
+        "typecheck",
+        "ship",
+    }
 )
 
 # Order is both precedence for implicit resolution and the stable reporting
-# order for missing requirements. `claude-enforced` is intentionally absent:
-# it describes a host adapter/enforcement mode, not portable core evidence.
+# order for missing requirements. A profile is a declaration recorded on the
+# cycle for diagnostics; the tier alone decides which gates a cycle requires
+# (gate_store.required_gates), and auto-init never arms a lighter tier because
+# a profile is incomplete. See docs/portable-core.md, "Capability profiles".
 PROFILE_REQUIREMENTS = {
     "baseline": ("test", "lint", "typecheck"),
     "review": ("test", "lint", "typecheck", "review"),
