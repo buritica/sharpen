@@ -1,0 +1,498 @@
+"""Every way a tool call can open a pull request, as one host-neutral answer.
+
+The PR gate used to recognize exactly one thing: a Bash call whose argv was
+`gh pr create`. Everything else (the `gh pr new` alias, `gh api` POSTs, glab,
+hub, GitLab push options, a GitHub/GitLab MCP tool, Claude Code's Monitor tool,
+any pi tool but bash) went through as "not a PR", and so did a `gh pr create`
+whose `--head` the shell had to expand. This module is the single place that
+answers "does this tool call open a PR, and for which branch in which
+checkout?" so every host adapter (Claude Code and Codex via hooks.json, pi via
+its extension) asks the same question and the gate policy stays in
+enforce-sdlc-gates.py.
+
+    pr_opens(tool_name, tool_input) -> [PrOpen, ...]
+
+What it deliberately does not try to see: opaque scripts (`make pr`,
+`./open-pr.sh`, `python -c ...`), user-defined gh aliases, `curl` against the
+REST API, and shell spellings the lexer can't read (`g"h"`, `$GH`). Guessing at
+those fails toward allow anyway. They are what the git pre-push floor
+(pre-push.py) is for.
+
+Pure stdlib. @fires-on nothing (library)
+"""
+
+# Python 3.9 (Xcode CLT's /usr/bin/python3) evaluates a dataclass's
+# `str | None` annotation at class creation and raises; enforce imports this
+# module at load, so without this the PR gate dies on every tool call there.
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+
+import gate_store as gs
+import shell_parse as sp
+
+# Tools whose input is a shell command string. `Bash` covers Claude Code and
+# Codex (Codex reports both its shell and `exec_command` as `Bash`); `Monitor`
+# is Claude Code's background-watch tool, which runs a shell `command` outside
+# the Bash matcher; `bash` is pi's tool name.
+SHELL_TOOLS = {"Bash", "Monitor", "bash"}
+
+# MCP PR-creation tools, matched by suffix so the server's name doesn't matter:
+# Claude Code and Codex name them `mcp__<server>__<tool>`, pi's MCP extension
+# `mcp_<server>_<tool>`. GitHub's server calls it create_pull_request, GitLab's
+# create_merge_request.
+_MCP_PR_TOOL = re.compile(r"(?:^|_)create_(?:pull|merge)_request$")
+
+# Shell commands that open a PR on their own (argv chains for shell_parse).
+_GH_CREATE = ("gh pr create", "gh pr new")  # `new` is gh's built-in alias
+
+# gh pr create flags that consume the following token. Needed so the scan below
+# can tell a flag from a value: `--title "-Hotfix: ..."` must not be read as a
+# head branch. Over-listing is harmless here (a missed flag only costs us the
+# `-H` clustered form); under-listing is what creates a bypass.
+GH_VALUE_FLAGS = {
+    "--title",
+    "-t",
+    "--body",
+    "-b",
+    "--body-file",
+    "-F",
+    "--base",
+    "-B",
+    "--head",
+    "-H",
+    "--label",
+    "-l",
+    "--assignee",
+    "-a",
+    "--reviewer",
+    "-r",
+    "--milestone",
+    "-m",
+    "--project",
+    "-p",
+    "--template",
+    "-T",
+    "--repo",
+    "-R",
+}
+
+# gh api flags that send a request body, which makes gh default to POST.
+_GH_API_FIELD_FLAGS = {"-f", "--raw-field", "-F", "--field", "--input"}
+_GH_API_VALUE_FLAGS = _GH_API_FIELD_FLAGS | {
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "--hostname",
+    "--cache",
+    "-p",
+    "--preview",
+}
+_PULLS_PATH = re.compile(r"^/?repos/([^/]+)/([^/]+)/pulls/?$")
+
+
+@dataclass
+class PrOpen:
+    """One attempted PR open.
+
+    head: the branch the PR is for, normalized to how the gate store keys it,
+        or None to mean "the branch checked out in `workdir`".
+    workdir: the checkout to judge it against, or None for this process's cwd.
+    names_workdir: the call asked for a directory that could not be resolved.
+    no_checkout: the call named a repo that has no local checkout in reach.
+    notes: caveats about how head/workdir were reached, for the verdict.
+    label: how to name this path in a message ("gh pr create", "MCP ...").
+    """
+
+    label: str
+    head: str | None
+    workdir: str | None
+    names_workdir: bool = False
+    notes: list = field(default_factory=list)
+    no_checkout: bool = False
+
+
+def pr_opens(tool_name, tool_input):
+    """Every PR this tool call would open (usually zero or one)."""
+    if not isinstance(tool_input, dict):
+        return []
+    if tool_name in SHELL_TOOLS:
+        command = tool_input.get("command")
+        return shell_pr_opens(command) if isinstance(command, str) else []
+    if isinstance(tool_name, str) and _MCP_PR_TOOL.search(tool_name):
+        return [_mcp_pr_open(tool_name, tool_input)]
+    return []
+
+
+# --- shell ---------------------------------------------------------------
+
+
+def shell_pr_opens(command):
+    found = []
+    for name in _GH_CREATE:
+        for inv in sp.invocations(command, name):
+            found.append(_gh_create(name, inv))
+    for inv in sp.invocations(command, "gh api"):
+        pr = _gh_api(inv)
+        if pr:
+            found.append(pr)
+    for inv in sp.invocations(command, "glab mr create"):
+        head = sp.flag_value(inv.argv, "--source-branch", "-s")
+        # glab's -R takes OWNER/REPO, GROUP/NAMESPACE/REPO or a URL, which is
+        # what _hint_segments reads, so it passes through unchanged.
+        repo = sp.flag_value(inv.argv, "--repo", "-R")
+        found.append(_shell_open("glab mr create", head, inv, repo))
+    # hub has no repo flag: it always opens against the cwd's remote.
+    for inv in sp.invocations(command, "hub pull-request"):
+        head = sp.flag_value(inv.argv, "--head", "-h")
+        found.append(_shell_open("hub pull-request", head, inv))
+    for inv in sp.invocations(command, "git push"):
+        pr = _git_push_mr(inv)
+        if pr:
+            found.append(pr)
+    return found
+
+
+def _shell_open(label, raw_head, inv, repo=None):
+    head, notes = normalize_head(raw_head)
+    workdir, found, more = resolve_checkout(inv.workdir, repo, head)
+    return PrOpen(
+        label=label,
+        head=head,
+        workdir=workdir,
+        names_workdir=inv.names_workdir,
+        notes=notes + more,
+        no_checkout=not found,
+    )
+
+
+def _gh_create(name, inv):
+    repo = sp.flag_value(inv.argv, "--repo", "-R")
+    if repo:
+        # gh reads -R as [HOST/]OWNER/REPO or a URL, never a nested path, so
+        # OWNER/REPO is the last two segments of whatever was given.
+        segs = _hint_segments(repo)
+        repo = "/".join(segs[-2:]) if len(segs) >= 2 else repo
+    return _shell_open(name, extract_head_flag(inv.argv), inv, repo)
+
+
+def extract_head_flag(argv):
+    """The raw head branch from `--head`/`-H`, in every spelling gh accepts.
+
+    Parsed positionally rather than via sp.flag_value because gh (pflag) also
+    accepts the clustered `-Hbranch`, and recognizing that requires knowing
+    which tokens are flags. A naive scan reads `--title "-Hotfix: crash"` as a
+    head branch. normalize_head() turns the result into a store key."""
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("--head", "-H") and i + 1 < len(argv):
+            return argv[i + 1]
+        if tok.startswith("--head=") or tok.startswith("-H="):
+            return tok.split("=", 1)[1]
+        # Clustered `-Hbranch`, but only in a flag position — never a value.
+        if tok.startswith("-H") and len(tok) > 2 and not tok.startswith("--"):
+            return tok[2:]
+        i += 2 if tok in GH_VALUE_FLAGS else 1
+    return None
+
+
+def _gh_api(inv):
+    """`gh api` that creates a PR: a POST to repos/<o>/<r>/pulls, or a graphql
+    createPullRequest mutation."""
+    argv = inv.argv
+    positionals, fields, method = [], {}, None
+    i = 2  # past `gh api`
+    while i < len(argv):
+        tok = argv[i]
+        flag, eq, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
+        if flag in _GH_API_VALUE_FLAGS:
+            value = inline if eq else (argv[i + 1] if i + 1 < len(argv) else "")
+            i += 1 if eq else 2
+            if flag in ("-X", "--method"):
+                method = value.upper()
+            elif flag in _GH_API_FIELD_FLAGS:
+                key, _, val = value.partition("=")
+                fields[key] = val
+            continue
+        if not tok.startswith("-"):
+            positionals.append(tok)
+        i += 1
+    if not positionals:
+        return None
+    endpoint = positionals[0]
+    if method is None:
+        method = "POST" if fields else "GET"
+    if endpoint == "graphql":
+        query = fields.get("query", "")
+        if "createPullRequest" not in query:
+            return None
+        m = re.search(r'headRefName\s*:\s*\\?"([^"\\]+)', query)
+        return _shell_open("gh api graphql createPullRequest", m and m.group(1), inv)
+    m = _PULLS_PATH.match(endpoint)
+    if not m or method != "POST":
+        return None
+    owner, name = m.groups()
+    # gh fills `{owner}`/`{repo}` and the legacy `:owner`/`:repo` from the
+    # cwd's repo, so either spelling means "the checkout in the workdir".
+    placeholder = "{" in owner + name or owner[:1] == ":" or name[:1] == ":"
+    repo = None if placeholder else f"{owner}/{name}"
+    return _shell_open("gh api .../pulls", fields.get("head"), inv, repo)
+
+
+_MR_PUSH_OPTIONS = ("merge_request.create", "mr.create")
+
+
+def _git_push_mr(inv):
+    """`git push -o merge_request.create`: GitLab opens an MR on receive."""
+    argv = inv.argv
+    opts, positionals = [], []
+    i = 2
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-o", "--push-option") and i + 1 < len(argv):
+            opts.append(argv[i + 1])
+            i += 2
+            continue
+        if tok.startswith("--push-option="):
+            opts.append(tok.split("=", 1)[1])
+        elif tok.startswith("-o") and len(tok) > 2:
+            opts.append(tok[2:])
+        elif not tok.startswith("-"):
+            positionals.append(tok)
+        i += 1
+    if not any(o.split("=", 1)[0] in _MR_PUSH_OPTIONS for o in opts):
+        return None
+    head = None
+    if len(positionals) >= 2:
+        head = positionals[1].lstrip("+").split(":", 1)[0]
+    return _shell_open("git push -o merge_request.create", head, inv)
+
+
+# --- MCP -----------------------------------------------------------------
+
+
+# Where each MCP server puts the PR's source branch: GitHub `head`, GitLab
+# `source_branch`, Bitbucket-style `sourceBranch`, Azure DevOps
+# `sourceRefName` (`refs/heads/x`), and the GraphQL/other spellings.
+# normalize_head strips `refs/heads/` and `owner:`.
+MCP_HEAD_FIELDS = (
+    "head",
+    "source_branch",
+    "sourceBranch",
+    "sourceRefName",
+    "headRefName",
+    "head_branch",
+)
+
+
+def _mcp_pr_open(tool_name, tool_input):
+    owner, repo = tool_input.get("owner"), tool_input.get("repo")
+    hint = f"{owner}/{repo}" if owner and repo else tool_input.get("project_id")
+    raw = next(
+        (
+            v
+            for v in (tool_input.get(k) for k in MCP_HEAD_FIELDS)
+            if isinstance(v, str) and v
+        ),
+        None,
+    )
+    head, notes = normalize_head(raw)
+    if raw is None:
+        notes.append(
+            f"{tool_name} named no head field this gate recognizes "
+            f"({', '.join(MCP_HEAD_FIELDS)}), so it judged the branch checked "
+            "out in the working directory instead."
+        )
+    workdir, found, more = resolve_checkout(
+        None, hint if isinstance(hint, str) else None, head
+    )
+    return PrOpen(
+        label=f"MCP {tool_name}",
+        head=head,
+        workdir=workdir,
+        notes=notes + more,
+        no_checkout=not found,
+    )
+
+
+# --- shared --------------------------------------------------------------
+
+
+def normalize_head(head):
+    """A raw head value -> (store key or None, notes).
+
+    None means "use the branch checked out in the workdir". That is the right
+    answer for no head at all, for `HEAD`/`@`, and for anything the shell would
+    have expanded (`"$(git branch --show-current)"`, `$BRANCH`, xargs' `{}`):
+    taken literally, those never match a stored branch and read as "no cycle,
+    allow", a one-flag bypass of the gate."""
+    if not head:
+        return None, []
+    if head in ("HEAD", "@"):
+        return None, []
+    if any(c in head for c in "$`{}*?"):
+        return None, [
+            f"The PR's head ({head!r}) is expanded by the shell, so the gate "
+            "judged the branch checked out in the working directory instead."
+        ]
+    # `--head owner:branch` (a fork) and `refs/heads/branch` aren't how the
+    # store is keyed. Owner first: `owner:refs/heads/branch` is legal too.
+    if ":" in head:
+        head = head.split(":", 1)[1]
+    if head.startswith("refs/heads/"):
+        head = head[len("refs/heads/") :]
+    # A degenerate `owner:` normalizes to "", i.e. "use the workdir branch".
+    # gh rejects that input anyway, so it lets no real command through.
+    return head or None, []
+
+
+def resolve_checkout(workdir, repo_hint, head=None):
+    """The local checkout a PR for `repo_hint` should be judged against ->
+    (dir or None, found, notes). `found` is False only when a repo was named,
+    the workdir (or cwd) is not a checkout, and no checkout of it is in reach.
+
+    The session's cwd is not always a checkout: a cloud session with several
+    repos sits in their parent directory, and an MCP call carries no path at
+    all. Judged from there, the store lookup misses and every PR reads as "no
+    cycle, allow". So, in order:
+
+    1. the given workdir (or cwd) when it is a checkout whose remotes match the
+       hint, or there is no hint;
+    2. that checkout anyway when the PR's branch (`head`, or the branch it has
+       checked out) has a gate cycle in ITS store. This is the fork flow: from
+       a gated fork checkout, `-R upstream/repo` names a repo the fork's
+       remotes don't carry, and a sibling clone of the upstream must not win
+       (its checked-out branch has no cycle, which would read as allow);
+    3. the first checkout directly under it (or beside it) whose remote
+       matches;
+    4. the workdir's checkout when it is one, with a note.
+
+    A hint that matches nothing (a fork without an `upstream` remote, a mirror
+    or local-path remote, no remote at all) must not turn into "allow" from
+    inside a gated checkout."""
+    base = workdir or os.getcwd()
+    top = _git_out(base, "rev-parse", "--show-toplevel")
+    if not repo_hint:
+        if not top:
+            children = _child_checkouts(base)
+            if len(children) == 1:
+                return children[0], True, []
+        return workdir, True, []
+    if top and _remote_matches(top, repo_hint):
+        return workdir, True, []
+    if top and _has_cycle(top, head):
+        return (
+            workdir,
+            True,
+            [
+                f"No remote of {top} is {repo_hint}, but it has a gate cycle for "
+                "this PR's branch, so the gate judged the checkout at "
+                f"{top} (a fork's PR to its upstream)."
+            ],
+        )
+    for child in _child_checkouts(top or base):
+        if _remote_matches(child, repo_hint):
+            return child, True, []
+    if top:
+        return (
+            workdir,
+            True,
+            [
+                f"No checkout whose remote is {repo_hint} was found, so the gate "
+                f"judged the checkout at {top} instead."
+            ],
+        )
+    return (
+        workdir,
+        False,
+        [
+            f"No local checkout of {repo_hint} was found from {base}, so "
+            "there was no gate cycle to check."
+        ],
+    )
+
+
+def _has_cycle(checkout, head):
+    """Whether the PR's branch (`head`, else the one checked out) has a gate
+    cycle in `checkout`'s store. An unreadable store counts as yes: the
+    enforcer then reads it and fails closed, rather than this lookup quietly
+    sending the PR to a checkout with no cycle."""
+    branch = head or gs.detect_branch(cwd=checkout)
+    if not branch:
+        return False
+    try:
+        return bool(gs.load_store(gs.default_store_path(cwd=checkout)).get(branch))
+    except gs.StoreCorruptError:
+        return True
+    except Exception:
+        return False
+
+
+# A ceiling on directory entries scanned for checkouts, so a ~/code with
+# hundreds of repos can't spend the hook's 10 s timeout spawning `git remote`
+# (a timed-out PreToolUse hook fails open).
+MAX_SCAN = 200
+
+
+def _child_checkouts(base):
+    """Git checkouts one level below `base` (and `base`'s siblings when `base`
+    is itself a checkout, which is the multi-repo session's layout), from at
+    most MAX_SCAN directory entries."""
+    root = base
+    if os.path.exists(os.path.join(base, ".git")):
+        root = os.path.dirname(base)
+    try:
+        names = sorted(os.listdir(root))[:MAX_SCAN]
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        path = os.path.join(root, name)
+        if path != base and os.path.exists(os.path.join(path, ".git")):
+            found.append(path)
+    return found
+
+
+def _remote_matches(checkout, repo_hint):
+    """Whether any remote of `checkout` is the repo `repo_hint` names.
+
+    Compared by path suffix, so a remote's host or proxy prefix doesn't matter
+    and a GitLab nested group (`group/sub/proj`) matches as a whole: the hint's
+    N segments (N >= 2) must equal the remote path's last N."""
+    out = _git_out(checkout, "remote", "-v") or ""
+    return any(
+        len(parts) >= 2 and _spec_matches(parts[1], repo_hint)
+        for parts in (line.split() for line in out.splitlines())
+    )
+
+
+def _spec_matches(remote_url, repo_hint):
+    want = _hint_segments(repo_hint)
+    have = _hint_segments(remote_url)
+    return len(want) >= 2 and len(have) >= len(want) and have[-len(want) :] == want
+
+
+def _hint_segments(spec):
+    """The lowercased path segments of a repo spelling, minus scheme, host and
+    `.git`: https and ssh URLs, scp-style `git@host:o/n`, a proxy path ending
+    in `/o/n`, or a bare `o/n` / `group/sub/n`."""
+    path = re.sub(r"^[a-z+]+://[^/]+/", "", spec.strip(), flags=re.I)
+    path = re.sub(r"^[^/@]+@[^:/]+:", "", path)
+    path = path.rstrip("/").removesuffix(".git")
+    return [s.lower() for s in path.split("/") if s]
+
+
+def _git_out(cwd, *args):
+    try:
+        return gs._git(*args, cwd=cwd)
+    except (OSError, subprocess.CalledProcessError):
+        return None

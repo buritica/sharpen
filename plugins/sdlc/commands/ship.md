@@ -14,14 +14,12 @@ Before opening, verify:
 
 1. **All gates passed.** If you ran `/sdlc:gate`, confirm all gates completed successfully. If not, run it first.
 2. **No uncommitted changes.** Run `git status` — everything should be committed.
-3. **Branch is up to date.** If the branch is old:
-   ```bash
-   git fetch origin main
-   git rebase origin/main
-   ```
-   A rebase moves HEAD, so on a receipt-backed cycle `gh pr create` will then
-   block the review gates as stale. Rebase before running `/sdlc:gate`; if you
-   rebase after, re-run the chain (and resolve any conflicts first).
+3. **No rebase here.** Ship never rebases or commits after the gate chain. On a
+   receipt-backed cycle any new commit, a clean rebase included, makes the review
+   gates stale and the PR hook (and the pre-push floor) will name them. Bring the
+   branch up to date *before* `/sdlc:gate` (`git fetch origin main && git rebase
+   origin/main`). If main moves while the PR is open, let the PR's merge handle it;
+   a real conflict is a code change, so it re-runs the chain.
 
 ## Open the PR
 
@@ -97,7 +95,7 @@ PR #<number> — YYYY-MM-DD
 <diff stats from `git diff --stat origin/main...HEAD` — e.g. "+342/-28 across 6 files">
 ```
 
-If the PR closes an issue, add `Closes #XXX` on the next line. Commit the updated plan.md and push.
+If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.claude/sdlc/`, so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).
 
 ## Merge
 

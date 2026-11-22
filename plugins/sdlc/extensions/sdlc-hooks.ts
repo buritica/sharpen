@@ -11,6 +11,8 @@
  * Event mapping (see docs/pi.md for the full contract):
  *   SessionStart     -> pi `session_start`          -> session-start.py
  *   PreToolUse Bash  -> pi `tool_call` (bash)       -> enforce-sdlc-gates.py
+ *   PreToolUse MCP   -> pi `tool_call` (*create_pull_request,
+ *                       *create_merge_request)     -> enforce-sdlc-gates.py
  *                                                    -> block-direct-gate-record.py
  *   PostToolUse Bash -> pi `tool_result` (bash)     -> auto-init-gate-cycle.py
  *   Stop             -> pi `agent_end`              -> sweep-skill-receipts.py
@@ -77,24 +79,36 @@ async function gateConfirmation(
   return { block: true, reason: clean, terminate: true };
 }
 
+// Same suffix rule as pr_paths._MCP_PR_TOOL (python stays the source of truth).
+const MCP_PR_TOOL = /(?:^|_)create_(?:pull|merge)_request$/;
+
 export default function (pi: ExtensionAPI) {
   // SessionStart: write the capability manifest the gate store reads.
   pi.on("session_start", async (_event, ctx) => {
     await runHook("session-start.py", {}, ctx.cwd);
   });
 
-  // PreToolUse Bash: block `gh pr create` until gates pass, and block direct
+  // PreToolUse: block every PR path (see pr_paths.py) until gates pass, and block direct
   // `record-gate.py --record` for skill-gated gates.
   pi.on("tool_call", async (event, ctx) => {
-    if (!isToolCallEventType("bash", event)) return;
+    // An MCP PR tool that pi sees as its own tool (an MCP extension that
+    // registers each server tool directly, e.g. pi-mcp-extension's
+    // `mcp_<server>_create_pull_request` in direct mode) goes through the same
+    // script under its own name; pr_paths.py decides whether it is a PR. pi
+    // ships no MCP of its own, and an adapter that routes every call through
+    // one proxy tool hides the real tool name from this filter: the git
+    // pre-push floor covers that case. Name-only filter here so python isn't
+    // spawned on every tool call.
+    const bash = isToolCallEventType("bash", event) ? event : null;
+    if (!bash && !MCP_PR_TOOL.test(event.toolName)) return;
     const payload = {
       hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: event.input.command },
+      tool_name: bash ? "Bash" : event.toolName,
+      tool_input: bash ? { command: bash.input.command } : event.input,
       cwd: ctx.cwd,
     };
 
-    // enforce-sdlc-gates.py: block ungated `gh pr create`.
+    // enforce-sdlc-gates.py: block an ungated PR on any path.
     const enforce = await runHook("enforce-sdlc-gates.py", payload, ctx.cwd);
     if (enforce.exitCode !== 0) {
       return gateConfirmation(
@@ -107,8 +121,7 @@ export default function (pi: ExtensionAPI) {
 
     // block-direct-gate-record.py: block manual stamping of skill-gated gates.
     // Mirror its own cheap pre-filter so we don't spawn python on every Bash call.
-    const command = event.input.command;
-    if (/record-gate|auto-record-skill-gate/.test(command)) {
+    if (bash && /record-gate|auto-record-skill-gate/.test(bash.input.command)) {
       const direct = await runHook("block-direct-gate-record.py", payload, ctx.cwd);
       if (direct.exitCode !== 0) {
         return gateConfirmation(

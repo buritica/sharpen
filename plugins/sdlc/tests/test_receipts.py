@@ -532,6 +532,46 @@ class EnforceStalenessTest(ReceiptTestBase):
         self.assertEqual(self.pr_create().returncode, 0)
 
 
+class OtherPrPathsStalenessTest(ReceiptTestBase):
+    """Every PR path sits behind the same missing + stale check, not just
+    `gh pr create` (area 2). Staleness is gate_receipts' rule, not re-derived."""
+
+    def enforce(self, tool, tool_input):
+        return self.hook(
+            ENFORCE, {"tool_name": tool, "tool_input": tool_input, "cwd": self.repo}
+        )
+
+    def test_mcp_pr_after_a_later_commit_is_stale(self):
+        # The MCP call names a repo, and the hook judges the checkout whose
+        # remote matches it, so this checkout needs that remote.
+        git(self.repo, "remote", "add", "origin", "https://github.com/o/r.git")
+        self.run_chain()
+        args = {"owner": "o", "repo": "r", "head": BRANCH, "base": "main"}
+        self.assertEqual(
+            self.enforce("mcp__github__create_pull_request", args).returncode, 0
+        )
+        self.commit("after review")
+        r = self.enforce("mcp__github__create_pull_request", args)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("stale", r.stderr)
+
+    def test_gh_pr_new_alias_after_a_later_commit_is_stale(self):
+        self.run_chain()
+        self.commit("after review")
+        r = self.enforce("Bash", {"command": "gh pr new --fill"})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("stale", r.stderr)
+
+    def test_pre_push_warns_on_stale_gates_for_the_pushed_commit(self):
+        self.run_chain()
+        self.commit("after review")
+        sha = git(self.repo, "rev-parse", "HEAD")
+        line = f"refs/heads/{BRANCH} {sha} refs/heads/{BRANCH} {'0' * 40}\n"
+        r = self.run_py(os.path.join(SCRIPTS, "pre-push.py"), stdin=line)
+        self.assertEqual(r.returncode, 0)  # warn is the default
+        self.assertIn("stale", r.stderr.lower())
+
+
 class ReceiptWriterTest(ReceiptTestBase):
     def test_receipt_shape(self):
         self.receipt("review")

@@ -51,7 +51,9 @@ parts of it that are easy to get wrong here:
 
 - **Instruction vs enforcement are different layers.** This file reminds the agent to run
   `/sdlc:gate`; it cannot block anything. The `sdlc` plugin's `enforce-sdlc-gates` hook is
-  what blocks `gh pr create` when gates are incomplete.
+  what blocks opening a PR (any path in `pr_paths.py`, including MCP tools) when gates are
+  incomplete. The git pre-push hook `/sdlc:gate` installs is the floor under it for paths
+  no tool hook sees.
 - **Enforcement is opt-out per branch.** `auto-init-gate-cycle` arms a `small-medium`
   cycle on the first `git commit` to any non-default branch. Manual `/sdlc:gate --init
   tiny` *before* that commit takes precedence, because auto-init no-ops when a cycle
@@ -170,7 +172,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.14.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.16.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
@@ -183,7 +185,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 
 ### Gates
 - Tiers: **tiny** (≤3 lines, no behavior change), **small-medium** (any code change — the default), **significant** (new behavior, new integration, >3 files or >200 lines). A docs-only diff (no executable files) uses the `tiny` cycle; its tests/lint/typecheck gates are vacuously satisfied — say that you classified it docs-only.
-- The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
+- The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks opening a PR (`gh pr create`, `gh api`, `glab`, `hub`, MCP PR tools) until every gate is recorded; `/sdlc:gate` also installs a git pre-push hook that warns when a pushed branch isn't ready. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - Gates 2–6 are `/grumpy:simplify`, then `/grumpy:review` → `/grumpy:fix` → `/grumpy:imagine` → `/grumpy:fix`. Run the skills; reviewing the diff in your head records nothing.
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.
 - Each pass leaves a receipt; `record-gate.py --verify <pass>` records the gate from it (the Claude Code and pi hooks also sweep receipts at turn end). Commit before the pass. A commit after the last review gate makes the chain stale and blocks the PR, so rebase before `/sdlc:gate`, not after.

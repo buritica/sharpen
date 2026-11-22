@@ -27,12 +27,17 @@ nothing is being asked: not a commit at all, `main`/`master` (gating them is
 meaningless), detached HEAD (routine mid-rebase, and the work lands on a branch
 that has its own cycle), a cycle already present, and the overlay opt-out.
 
+Arming a cycle also installs (or refreshes) sdlc's git pre-push floor via
+install-pre-push.py, so the default path gets it without /sdlc:gate. It is
+named in the arming message only on a first install, and never fails the hook.
+
 No third-party dependencies. Requires gate_store.py, hook_out.py and
 shell_parse.py in the same directory.
 @fires-on Bash tool (PostToolUse)
 """
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -286,6 +291,33 @@ def _recording_note(host, manifest):
                 "if the change qualifies."
             )
     return note
+
+
+def _install_pre_push(workdir):
+    """Install or refresh sdlc's git pre-push floor whenever a cycle is armed,
+    so the default path (auto-armed, /sdlc:gate never run) gets it too. The
+    installer is idempotent. Returns a sentence for the arming message on a
+    first install only, else "". Never fails the hook: the cycle is the thing
+    that matters here, and the floor is an extra."""
+    try:
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "install-pre-push.py"
+        )
+        spec = importlib.util.spec_from_file_location("install_pre_push", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        top = _git_output(["rev-parse", "--show-toplevel"], cwd=workdir) or "."
+        status, _ = mod.install(top)
+    except (Exception, SystemExit) as e:  # SystemExit: its git() on failure
+        ho.notify("auto-init", f"pre-push hook not installed: {e}", surface=False)
+        return ""
+    if status != "installed":
+        return ""
+    return (
+        " It also installed sdlc's git pre-push hook, which warns when a pushed "
+        "branch's gates aren't done (`git config sharpen.prePush block` makes it "
+        "refuse; delete .git/hooks/pre-push to remove it)."
+    )
 
 
 def _is_docs_path(path):
@@ -551,6 +583,7 @@ def main():
         # once per branch, since `result` is None when a cycle already exists.
         # Non-blocking — the commit already ran.
         profile_note = f" using portable profile {profile}" if profile else ""
+        push_note = _install_pre_push(workdir)
         if tier == "tiny":
             # _pick_tier already confirmed every changed file is docs/text/
             # assets — gates 2-6 don't apply, so there's nothing to ask the
@@ -559,7 +592,7 @@ def main():
                 f'It armed a tiny gate cycle for "{branch}"{profile_note} — every file '
                 "changed so far looks like docs/text/assets, so the grumpy "
                 "review gates don't apply. Run `/sdlc:gate --init "
-                "small-medium` (or `significant`) if that changes."
+                "small-medium` (or `significant`) if that changes." + push_note
             )
         else:
             detail = (
@@ -572,6 +605,7 @@ def main():
                     "the change qualifies."
                 )
                 + evidence_note
+                + push_note
             )
         return ho.notify("auto-init", f"{COMMIT_OK}. {detail}")
     return 0

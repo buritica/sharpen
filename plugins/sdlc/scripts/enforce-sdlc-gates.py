@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: block `gh pr create` when SDLC gates are incomplete.
+PreToolUse hook: block opening a PR when SDLC gates are incomplete.
 
-Reads the shared (per-repo, branch-keyed) JSON gate store, takes the branch from
-the command's --head flag (or, failing that, its working directory), and blocks
-if any required gate for the tier is missing. Because the store is shared across
-worktrees, a cycle recorded in one checkout is seen here even when the PR is
-created from another. Opt-in: no cycle for the branch -> allow.
+Every path pr_paths.pr_opens() recognizes is gated: `gh pr create`/`gh pr new`,
+a `gh api` POST to .../pulls or a createPullRequest mutation, `glab mr create`,
+`hub pull-request`, `git push -o merge_request.create`, and MCP
+create_pull_request/create_merge_request tools, from Bash, Monitor or pi's
+bash. For each one it reads the shared (per-repo, branch-keyed) JSON gate
+store of the checkout pr_paths resolved (the workdir, or the checkout whose
+remote matches a `-R`/owner/project hint), takes the branch from the call's
+head (`--head`, `--source-branch`, `head=`, the MCP `head`/`source_branch`;
+`HEAD`, `@` or a shell-expanded value mean the workdir's checked-out branch),
+and blocks if any required gate for the tier is missing or stale. Because the
+store is shared across worktrees, a cycle recorded in one checkout is seen here
+even when the PR is created from another. Opt-in: no cycle for the branch, or a
+named repo with no checkout in reach from a non-checkout cwd -> allow, with a
+note.
 
 KNOWN BLIND SPOT, not a bug to be fixed here: `--head owner:branch` (a PR from a
-fork) strips to the bare branch name for the store lookup (extract_head_flag),
+fork) strips to the bare branch name for the store lookup (pr_paths.normalize_head),
 but that name almost never has a cycle in THIS checkout's store — the fork
 contributor's own commits ran against their own clone, if any hooks ran at all.
 That reads as "no cycle -> allow" and the PR goes out ungated. This is
@@ -22,7 +31,7 @@ fix to how this hook reads --head.
 Denials go out as the documented PreToolUse payload *and* exit 2; caveats that
 accompany an allow can only reach the user. See hook_out for why.
 
-Pure stdlib — runs without bun. @fires-on Bash tool, @blocking
+Pure stdlib — runs without bun. @fires-on Bash, Monitor and MCP PR tools, @blocking
 """
 
 import json
@@ -32,26 +41,7 @@ import sys
 import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
-import shell_parse as sp
-
-
-PR_CREATE = "gh pr create"
-
-
-def pr_creates(command):
-    """EVERY `gh pr create` invocation in `command`, each with its own workdir.
-
-    Detection is argv-based (see shell_parse): it sees through the wrapped
-    forms agents routinely emit — `bash -c "gh pr create"`, `eval`, subshells,
-    env prefixes — which a regex over the raw string read as unrelated
-    commands, so the gate simply stopped applying. `echo "gh pr create"` is
-    still not a PR.
-
-    All of them, not just the first: one command can open two PRs, and
-    `gh pr create --head done/branch && gh pr create --head ungated/branch`
-    would otherwise be judged entirely on the first — including its workdir,
-    so the second would be checked against the first one's repo."""
-    return sp.invocations(command, PR_CREATE)
+import pr_paths as pp
 
 
 def is_crew_actor():
@@ -60,85 +50,12 @@ def is_crew_actor():
     return os.environ.get("SDLC_ACTOR", "").strip().lower() == "crew"
 
 
-# gh pr create flags that consume the following token. Needed so the scan below
-# can tell a flag from a value: `--title "-Hotfix: ..."` must not be read as a
-# head branch. Over-listing is harmless here (a missed flag only costs us the
-# `-H` clustered form); under-listing is what creates a bypass.
-GH_VALUE_FLAGS = {
-    "--title",
-    "-t",
-    "--body",
-    "-b",
-    "--body-file",
-    "-F",
-    "--base",
-    "-B",
-    "--head",
-    "-H",
-    "--label",
-    "-l",
-    "--assignee",
-    "-a",
-    "--reviewer",
-    "-r",
-    "--milestone",
-    "-m",
-    "--project",
-    "-p",
-    "--template",
-    "-T",
-    "--repo",
-    "-R",
-}
-
-
-def extract_head_flag(argv):
-    """The head branch from `--head`/`-H`, in every spelling gh accepts.
-
-    Parsed positionally rather than via sp.flag_value because gh (pflag) also
-    accepts the clustered `-Hbranch`, and recognizing that requires knowing
-    which tokens are flags. A naive scan reads `--title "-Hotfix: crash"` as a
-    head branch, whose unknown name then looks like "no cycle -> allow" — a
-    gate bypass triggered by a plausible PR title."""
-    head = None
-    i = 0
-    while i < len(argv):
-        tok = argv[i]
-        if tok in ("--head", "-H") and i + 1 < len(argv):
-            head = argv[i + 1]
-            break
-        if tok.startswith("--head=") or tok.startswith("-H="):
-            head = tok.split("=", 1)[1]
-            break
-        # Clustered `-Hbranch`, but only in a flag position — never a value.
-        if tok.startswith("-H") and len(tok) > 2 and not tok.startswith("--"):
-            head = tok[2:]
-            break
-        i += 2 if tok in GH_VALUE_FLAGS else 1
-    if not head:
-        return head
-    # Normalize the forms gh accepts that aren't how the store is keyed:
-    # `--head owner:branch` for a fork, and a full `refs/heads/branch`. Left
-    # raw, both miss the branch's cycle and read as "no cycle -> allow" — a
-    # one-flag bypass of the whole gate, which is not something to leave open
-    # while removing escape hatches elsewhere. Owner first, then the ref
-    # prefix: `owner:refs/heads/branch` is a legal combination of the two, and
-    # stripping in the other order leaves the prefix behind.
-    if ":" in head:
-        head = head.split(":", 1)[1]
-    if head.startswith("refs/heads/"):
-        head = head[len("refs/heads/") :]
-    # A degenerate `--head owner:` normalizes to "", which the caller's `or`
-    # treats as "no --head given" and resolves from the cwd instead. That is a
-    # silent substitution, but gh rejects the input anyway, so there is no real
-    # command it lets through — noted rather than special-cased.
-    return head
-
-
 def check_gates(tool, tool_input):
     """Returns (allowed, error_string, state_dict, notes) for the whole command.
 
-    Denies if ANY `gh pr create` in it is ungated — first refusal wins, so a
+    `tool` is any host tool name: a shell tool (Bash, Monitor, pi's bash) or an
+    MCP PR tool. pr_paths decides whether the call opens a PR at all; this
+    module only judges the gates. Denies if ANY PR it opens is ungated — first refusal wins, so a
     gated PR chained behind a clean one can't ride through.
 
     state_dict is populated on incomplete-gates denials and is what crew
@@ -151,28 +68,30 @@ def check_gates(tool, tool_input):
     to a user-facing `systemMessage` when the verdict is an allow. Deduped:
     two `gh pr create`s behind the same unresolvable `cd` are one caveat,
     not the same sentence printed twice."""
-    if tool != "Bash":
-        return True, None, None, []
-    command = tool_input.get("command", "")
     notes = []
-    for inv in pr_creates(command):
-        allowed, error, state, inv_notes = _check_one(inv)
+    for pr in pp.pr_opens(tool, tool_input or {}):
+        allowed, error, state, inv_notes = _check_one(pr)
         notes.extend(n for n in inv_notes if n not in notes)
         if not allowed:
             return allowed, error, state, notes
     return True, None, None, notes
 
 
-def _check_one(inv):
-    """One `gh pr create` invocation → (allowed, error, state, notes), the same
-    4-tuple check_gates returns and documents."""
+def _check_one(pr):
+    """One attempted PR open (a pr_paths.PrOpen) → (allowed, error, state,
+    notes), the same 4-tuple check_gates returns and documents."""
     # The workdir comes from this invocation (its own -C, or the last `cd`
     # before it in an enclosing scope) — not from a substring scan of the whole
     # string, which would follow a `cd` quoted inside the PR body, and not from
     # the first invocation, which would judge a second PR against the wrong repo.
-    argv, workdir = inv.argv, inv.workdir
-    notes = []
-    if workdir is None and inv.names_workdir:
+    workdir = pr.workdir
+    notes = list(pr.notes)
+    if pr.no_checkout:
+        # An MCP call (or `-R owner/repo`) for a repo with no local checkout
+        # in reach: there is no store to read, so no cycle. Opt-in allows,
+        # but says so rather than looking like a check that passed.
+        return True, None, None, notes
+    if workdir is None and pr.names_workdir:
         # The command asked for a directory we couldn't resolve (`cd $VAR`,
         # `cd ~/x` that doesn't exist). We fall back to our own cwd, which may
         # be a different repo — so the caveat has to travel with the verdict
@@ -183,13 +102,14 @@ def _check_one(inv):
             "instead, so this verdict may be about a different repo."
         )
     path = gs.default_store_path(cwd=workdir)
-    branch = extract_head_flag(argv) or gs.detect_branch(cwd=workdir)
+    branch = pr.head or gs.detect_branch(cwd=workdir)
     if not branch:
         return (
             False,
             (
                 "Could not detect branch for gate validation.\n\n"
-                "Run from a git worktree, or pass --head <branch> to gh pr create."
+                f"Run from a git worktree, or name the head branch in the "
+                f"{pr.label} call."
             ),
             None,
             notes,
@@ -212,7 +132,15 @@ def _check_one(inv):
         )
     bd = data.get(branch)
     if not bd:
-        return True, None, None, notes  # opt-in: no cycle -> allow
+        # Opt-in: no cycle -> allow. A branch pushed only through an MCP tool
+        # never had a local commit for auto-init to arm, so say so there.
+        if pr.label.startswith("MCP "):
+            notes.append(
+                f'No gate cycle for "{branch}" in {path}, so this PR was not '
+                "gated. A branch pushed only through an MCP tool never arms one; "
+                "run /sdlc:gate --init <tier> in its checkout to opt it in."
+            )
+        return True, None, None, notes
 
     missing = gs.missing_gates(bd)
     if not missing:

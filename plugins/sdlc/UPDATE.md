@@ -1,48 +1,69 @@
-# sdlc UPDATE — v4.15.0
+# sdlc UPDATE — v4.16.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.15.0 — each host declares itself, and plugin paths resolve everywhere
+## New in 4.16.0 — every way to open a PR is gated, plus a git pre-push floor
 
-- **Plugin paths in skill text work on Claude Code again.** Claude Code fills in only the
-  braced `${CLAUDE_PLUGIN_ROOT}` in a plugin's command text and does not export it to the
-  agent's shell, so the unbraced `$CLAUDE_PLUGIN_ROOT` calls in `/sdlc:gate` pointed at
-  `/scripts/...`. Every plugin path is now spelled with the plugin's own variable first,
-  `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`, and `scripts/check-marketplace.py` enforces it.
-- **pi stops sharing one plugin root.** The pi extension used to set `CLAUDE_PLUGIN_ROOT` to
-  sdlc's directory for the whole process, so grumpy's simplify and fix looked in the wrong
-  plugin. It now exports `SDLC_PLUGIN_ROOT` and `SHARPEN_HOST=pi`, and no extension sets the
-  shared name.
-- **The capability manifest names the real host.** `scripts/claude-session-start.py` is now
-  `scripts/session-start.py`. It writes `.sharpen/data/capabilities.<host>.json`, with the
-  host from `SHARPEN_HOST`, else Claude Code's `CLAUDECODE=1`, else `unknown` (Codex reports
-  `unknown` until a signal is verified). It also records `x-recording` (does this host sweep
-  receipts by itself) and `x-receipts` (does the installed grumpy write them), and lists
-  `simplify` as a capability.
-- **Auto-init says how gates record on this host.** The arming message tells a Claude Code
-  or pi session that receipts record at the end of the turn, and anyone else to run
-  `record-gate.py --verify <pass>` after each pass. It names the detected host and prints
-  the absolute path of `record-gate.py`. It names any grumpy pass the manifest lacks, except
-  `simplify` in a pre-4.15 manifest, which predates that capability. With a grumpy older than 2.9.0 on Claude Code, it arms an event-only cycle
-  (Claude Code's `Skill` event can stamp it) instead of a receipt-backed one that could
-  never complete. Other hosts have no such event, so they keep the receipt-backed cycle and
-  are told gates 2-6 can't record until grumpy is upgraded to 2.9.0+ (`--attest` per gate
-  as a last resort).
-- **Profiles don't change tiers, and the docs now say so.** `docs/portable-core.md` claimed
-  a host must not auto-arm a profile it can't complete; the code never did that, and with
-  receipts it shouldn't. The `claude-enforced` profile, which the code never had, is gone
-  from the docs.
-- **A host support matrix**, [`docs/hosts.md`](https://github.com/buritica/sharpen/blob/main/docs/hosts.md), generated from
-  `scripts/hosts.py`, says what Claude Code, Codex, pi and the instructions-only hosts
-  (Gemini, Cursor, Copilot, `npx skills add`) each do (sharpen#46).
+The PR gate used to recognize one thing: a Bash call that ran `gh pr create`. Now one
+shared detector (`scripts/pr_paths.py`) feeds the same missing-and-stale check from:
 
-**What an existing repo needs to do:** nothing. A Claude Code session started before the
-upgrade still has its old `capabilities.claude.json` read until the next session writes
-`capabilities.claude-code.json`; both live under the gitignored `.sharpen/data/`. Upgrade
-grumpy (2.10.0) and sdlc-guardrails (1.4.5) alongside sdlc.
+- `gh pr create` and its built-in alias `gh pr new`; `gh api` POSTs to
+  `repos/<o>/<r>/pulls` and the graphql `createPullRequest` mutation; `glab mr create`;
+  `hub pull-request`; `git push -o merge_request.create`.
+- Claude Code's `Monitor` tool, which runs shell commands outside the `Bash` matcher.
+- MCP `create_pull_request` / `create_merge_request` tools on Claude Code and Codex (a
+  second `PreToolUse` matcher in `hooks/hooks.json`) and on pi (the `tool_call` handler
+  now passes those tools through, not only bash).
+
+Three bypasses inside the old path are closed: `gh pr new`, a head the shell expands
+(`--head "$(git branch --show-current)"`, `$B`, xargs' `{}`), and `--head HEAD`/`@`. Each
+used to read as an unknown branch, so "no cycle, allow". They now resolve to the branch
+checked out in the working directory. When the session's cwd isn't the PR's checkout (an
+MCP call, `gh pr create -R owner/repo`, a cloud session sitting above several repos), the
+hook finds the checkout whose remote matches instead of missing the store. If no remote
+matches and the cwd is itself a checkout, that checkout is judged, so a `-R` spelling
+never turns into "allow" from inside a gated repo. A checkout whose own store has a cycle
+for the PR's branch is always the one judged, so from a gated fork, `-R upstream/repo` can't
+be redirected to a sibling clone of the upstream. MCP tools are read for the head under
+`head`, `source_branch`, `sourceBranch`, `sourceRefName` (Azure DevOps, `refs/heads/x`),
+`headRefName` or `head_branch`; one that names none of them is judged on the cwd's branch,
+with a note saying so. An MCP PR for
+a branch with no cycle is still allowed, as before, but now says so: a branch pushed only
+through MCP never had a local commit to arm one.
+
+**The git pre-push floor.** `scripts/install-pre-push.py` runs on every `/sdlc:gate`, and
+auto-init runs it whenever it arms a cycle on a first commit (the arming message says so
+the first time). It
+puts a small path-free shim in the repo's common hooks dir (every worktree gets it) and
+records the plugin's scripts dir in `git config sharpen.sdlcScripts`. On each push it runs
+the same check for every pushed branch that has a cycle. This catches what no tool hook
+sees: `make pr`, scripts, gh aliases, `curl`, and a push followed by the web UI. It reaches
+an instructions-only host (Gemini, Cursor, Copilot) only when the sdlc scripts are already
+installed on that machine and the shim is in that repo, for example by a Claude Code, Codex
+or pi session: `npx skills add` ships no scripts, so it can't install the floor itself. A
+`git push origin HEAD` (how `/sdlc:ship` pushes) is checked against the checked-out branch. It **warns by default**. `git config sharpen.prePush block` makes it refuse
+the push, with `SDLC_ALLOW_PUSH=1 git push` as the one-shot escape. `off` silences it. A
+corrupt gate store or an error in the script lets the push through with a message, even in
+block mode. It never overwrites another hook. If husky or `core.hooksPath` own your hooks,
+it prints one line to add to theirs. That line exits 0 on a machine without sdlc configured,
+also under `sh -e` (husky v9) or `set -e`, so it is safe in a committed `.githooks/`; with a
+stale `sharpen.sdlcScripts` it prints one "skipped" line. For lefthook, which regenerates its
+hook files, it prints a `lefthook.yml` command with `use_stdin: true` instead. The shim also
+lets the push through, with a message, when `python3` isn't on the hook's PATH.
+
+**`/sdlc:ship` no longer commits after the chain.** The up-to-date check now says to
+rebase before `/sdlc:gate`, and the post-PR step that committed `plan.md` (a gitignored
+file) is gone, since any commit after the chain makes the review gates stale.
+
+**What an existing repo needs to do:** nothing for the tool hooks. They arrive with the
+plugin update. The pre-push shim is installed the next time a cycle is armed or
+`/sdlc:gate` runs, or right away with `python3 <sdlc>/scripts/install-pre-push.py`. After a
+plugin update, `install-pre-push.py --check` reports a shim pointing at an old cache dir as
+`stale`; the next `/sdlc:gate` refreshes it. Delete
+`.git/hooks/pre-push` to remove it.
 
 ## What a repo gets
 

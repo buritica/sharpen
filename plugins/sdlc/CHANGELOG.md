@@ -5,6 +5,45 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.15.0 — each host declares itself, and plugin paths resolve everywhere
+
+- **Plugin paths in skill text work on Claude Code again.** Claude Code fills in only the
+  braced `${CLAUDE_PLUGIN_ROOT}` in a plugin's command text and does not export it to the
+  agent's shell, so the unbraced `$CLAUDE_PLUGIN_ROOT` calls in `/sdlc:gate` pointed at
+  `/scripts/...`. Every plugin path is now spelled with the plugin's own variable first,
+  `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`, and `scripts/check-marketplace.py` enforces it.
+- **pi stops sharing one plugin root.** The pi extension used to set `CLAUDE_PLUGIN_ROOT` to
+  sdlc's directory for the whole process, so grumpy's simplify and fix looked in the wrong
+  plugin. It now exports `SDLC_PLUGIN_ROOT` and `SHARPEN_HOST=pi`, and no extension sets the
+  shared name.
+- **The capability manifest names the real host.** `scripts/claude-session-start.py` is now
+  `scripts/session-start.py`. It writes `.sharpen/data/capabilities.<host>.json`, with the
+  host from `SHARPEN_HOST`, else Claude Code's `CLAUDECODE=1`, else `unknown` (Codex reports
+  `unknown` until a signal is verified). It also records `x-recording` (does this host sweep
+  receipts by itself) and `x-receipts` (does the installed grumpy write them), and lists
+  `simplify` as a capability.
+- **Auto-init says how gates record on this host.** The arming message tells a Claude Code
+  or pi session that receipts record at the end of the turn, and anyone else to run
+  `record-gate.py --verify <pass>` after each pass. It names the detected host and prints
+  the absolute path of `record-gate.py`. It names any grumpy pass the manifest lacks, except
+  `simplify` in a pre-4.15 manifest, which predates that capability. With a grumpy older than 2.9.0 on Claude Code, it arms an event-only cycle
+  (Claude Code's `Skill` event can stamp it) instead of a receipt-backed one that could
+  never complete. Other hosts have no such event, so they keep the receipt-backed cycle and
+  are told gates 2-6 can't record until grumpy is upgraded to 2.9.0+ (`--attest` per gate
+  as a last resort).
+- **Profiles don't change tiers, and the docs now say so.** `docs/portable-core.md` claimed
+  a host must not auto-arm a profile it can't complete; the code never did that, and with
+  receipts it shouldn't. The `claude-enforced` profile, which the code never had, is gone
+  from the docs.
+- **A host support matrix**, [`docs/hosts.md`](https://github.com/buritica/sharpen/blob/main/docs/hosts.md), generated from
+  `scripts/hosts.py`, says what Claude Code, Codex, pi and the instructions-only hosts
+  (Gemini, Cursor, Copilot, `npx skills add`) each do (sharpen#46).
+
+**What an existing repo needs to do:** nothing. A Claude Code session started before the
+upgrade still has its old `capabilities.claude.json` read until the next session writes
+`capabilities.claude-code.json`; both live under the gitignored `.sharpen/data/`. Upgrade
+grumpy (2.10.0) and sdlc-guardrails (1.4.5) alongside sdlc.
+
 ## 4.14.0 — skill gates record from receipts, on every host
 
 Gates 2 through 6 (`simplify` and the grumpy passes) used to be stamped by a `PostToolUse`

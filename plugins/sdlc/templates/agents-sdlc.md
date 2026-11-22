@@ -10,7 +10,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 
 ### Gates
 - Tiers: {tiers_line}. A docs-only diff (no executable files) uses the `tiny` cycle; its tests/lint/typecheck gates are vacuously satisfied — say that you classified it docs-only.
-- The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
+- The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks opening a PR (`gh pr create`, `gh api`, `glab`, `hub`, MCP PR tools) until every gate is recorded; `/sdlc:gate` also installs a git pre-push hook that warns when a pushed branch isn't ready. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - {grumpy_line}
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.
 - Each pass leaves a receipt; `record-gate.py --verify <pass>` records the gate from it (the Claude Code and pi hooks also sweep receipts at turn end). Commit before the pass. A commit after the last review gate makes the chain stale and blocks the PR, so rebase before `/sdlc:gate`, not after.
