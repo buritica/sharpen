@@ -25,8 +25,11 @@ releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 - **Auto-init says how gates record on this host.** The arming message tells a Claude Code
   or pi session that receipts record at the end of the turn, and anyone else to run
   `record-gate.py --verify <pass>` after each pass. It names any grumpy pass the manifest
-  lacks. With a grumpy older than 2.9.0, it arms an event-only cycle instead of a
-  receipt-backed one that could never complete, and says to upgrade grumpy.
+  lacks. With a grumpy older than 2.9.0 on Claude Code, it arms an event-only cycle
+  (Claude Code's `Skill` event can stamp it) instead of a receipt-backed one that could
+  never complete. Other hosts have no such event, so they keep the receipt-backed cycle and
+  are told gates 2-6 can't record until grumpy is upgraded to 2.9.0+ (`--attest` per gate
+  as a last resort).
 - **Profiles don't change tiers, and the docs now say so.** `docs/portable-core.md` claimed
   a host must not auto-arm a profile it can't complete; the code never did that, and with
   receipts it shouldn't. The `claude-enforced` profile, which the code never had, is gone

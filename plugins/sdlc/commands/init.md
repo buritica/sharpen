@@ -6,6 +6,8 @@ allowed-tools: ["Bash", "Read", "Grep", "Glob", "Edit", "Write", "WebSearch", "W
 
 # /sdlc:init
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Scaffold the CI pipeline for **this** repo. CI is the *automated enforcement
 surface* of the SDLC loop (plan → build → gate → ship → CI → deploy): it is the
 **one authoritative point** that blocks bad code from reaching `main`. The job is

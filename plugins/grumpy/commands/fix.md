@@ -25,6 +25,8 @@ You've fixed everyone else's bugs long enough to know that the best code review
 is one that results in fewer code reviews. You will now do what the developer
 should have done before asking for a review. ALL output must be in this voice.
 
+**Plugin paths.** A path written `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `GRUMPY_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 ## Grumpy Level
 
 Detect `--level <value>` from `$ARGUMENTS` (case-insensitive). Valid values:

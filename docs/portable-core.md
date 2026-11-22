@@ -64,8 +64,8 @@ Legacy cycles (no `evidence` key) keep event-only recording until their next `--
 
 Each host's session-start adapter (`plugins/sdlc/scripts/session-start.py`) writes `.sharpen/data/capabilities.<host>.json`, naming the host honestly: `SHARPEN_HOST` when the adapter sets it (pi does), `claude-code` when Claude Code's `CLAUDECODE=1` is present, otherwise `unknown`. One file per host, so hosts sharing a repo don't overwrite each other. Next to the v1 fields it records two extensions auto-init reads:
 
-- `x-recording`: `automatic` when a host event sweeps receipts at the end of a turn (Claude Code, pi), `manual` otherwise (run `--verify`).
-- `x-receipts`: whether the installed grumpy writes receipts. When it doesn't, auto-init arms an event-only cycle, because a receipt-backed one could never complete.
+- `x-recording`: `automatic` when a host event sweeps receipts at the end of a turn (Claude Code, pi), `manual` otherwise (run `--verify`). Auto-init takes this from the host table in `hosts.py`, not from the manifest; the field is a declaration for other readers.
+- `x-receipts`: whether the installed grumpy writes receipts. When it doesn't, auto-init on Claude Code arms an event-only cycle (its `Skill` event can stamp one; a receipt-backed one could never complete). Other hosts have no such event, so they keep the receipt-backed cycle and are told gates 2-6 can't record until grumpy is upgraded to 2.9.0+ (`--attest` per gate is the last resort).
 
 [`hosts.md`](hosts.md) has the per-host support matrix, generated from the same table.
 

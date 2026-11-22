@@ -10,13 +10,16 @@ the portable resolver can consume. It does not initialize a cycle and does not
 weaken enforcement — it only makes the declaration available before the first
 auto-init.
 
-Beyond the v1 fields, the manifest carries two `x-` keys auto-init reads:
+Beyond the v1 fields, the manifest carries two `x-` keys:
   x-recording  "automatic" when a host event sweeps grumpy receipts at the end
-               of a turn (Claude Code, pi), else "manual" (run --verify).
+               of a turn (Claude Code, pi), else "manual" (run --verify). A
+               declaration only: auto-init reads the host table, not this.
   x-receipts   whether the installed grumpy writes receipts (ships
                scripts/receipt.py). An older grumpy can't complete a
-               receipt-backed cycle, so auto-init falls back to event-only
-               recording for it instead of arming a cycle that never finishes.
+               receipt-backed cycle. On Claude Code auto-init falls back to
+               event-only recording (its Skill event stamps it); other hosts
+               have no such event, so they keep the receipt cycle and are told
+               to upgrade grumpy to 2.9.0+.
 
 The file is `capabilities.<host>.json`, one per host, so two hosts in one repo
 don't overwrite each other. Path precedence mirrors gate_store.state_file_path():

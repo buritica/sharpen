@@ -5,6 +5,8 @@ description: "Wire 1Password-based secrets across three tiers (dev workstations,
 
 # /sdlc:secrets
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Set up secrets injection across three tiers with tier-scoped service accounts,
 so a leaked token can never reach a tier it wasn't granted. The injection itself
 relies on stable `op://` secret-reference syntax — works the same in every tier.

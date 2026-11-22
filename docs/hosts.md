@@ -62,10 +62,15 @@ the same repo no longer overwrite each other. Besides the v1 fields, the
 manifest records:
 
 - `x-recording`: `automatic` when a host event sweeps receipts, else `manual`.
+  A declaration for other readers: auto-init takes the recording mode from the
+  host table above, so the two can't disagree.
 - `x-receipts`: whether the installed grumpy writes receipts (grumpy 2.9.0 or
-  later ships `scripts/receipt.py`). With an older grumpy, auto-init arms an
-  event-only cycle instead of a receipt-backed one that could never complete,
-  and says to upgrade grumpy. `SDLC_GATE_EVIDENCE=events` still forces
+  later ships `scripts/receipt.py`). With an older grumpy on Claude Code,
+  auto-init arms an event-only cycle, which Claude Code's `Skill` event can
+  stamp, instead of a receipt-backed one that could never complete. No other
+  host has that event, so there the cycle stays receipt-backed and the arming
+  message says gates 2-6 can't record until grumpy is upgraded (or, as a last
+  resort, `--attest` per gate). `SDLC_GATE_EVIDENCE=events` still forces
   event-only cycles by hand.
 
 ## Plugin roots in skill text

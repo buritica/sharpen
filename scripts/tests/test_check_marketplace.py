@@ -504,6 +504,17 @@ class PluginRootSpellingTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 1, r.stdout.decode())
 
+    def test_own_variable_without_fallback_is_an_error(self):
+        # Empty on Claude Code and Codex: resolves to /scripts/x.py.
+        r = self._run_with("sdlc", 'python3 "$SDLC_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}", out)
+
+    def test_braced_own_variable_without_fallback_is_an_error(self):
+        r = self._run_with("sdlc", 'cat "${SDLC_PLUGIN_ROOT}/x"')
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
     def test_another_plugins_variable_is_an_error(self):
         r = self._run_with(
             "grumpy",

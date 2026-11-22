@@ -208,18 +208,37 @@ class AutoInitHostTest(unittest.TestCase):
         self.assertIn("lists no grumpy simplify, fix, imagine", out)
         self.assertIn("/sdlc:gate --init tiny", out)
 
-    def test_grumpy_without_receipts_gets_an_event_only_cycle(self):
+    def test_claude_code_grumpy_without_receipts_gets_an_event_only_cycle(self):
         # grumpy < 2.9.0: no pass writes a receipt, so a receipt-backed
-        # cycle could never complete.
+        # cycle could never complete. Claude Code's Skill event can stamp
+        # an event-only one.
+        self.write_manifest(
+            "capabilities.claude-code.json",
+            "claude-code",
+            BASE + SKILLS,
+            **{"x-receipts": False},
+        )
+        r, cycle = self.commit(CLAUDECODE="1")
+        out = r.stderr.decode()
+        self.assertEqual(cycle["tier"], "small-medium")
+        self.assertNotIn("evidence", cycle)
+        self.assertIn("predates receipts", out)
+        self.assertIn("event-only", out)
+        self.assertIn("2.9.0", out)
+
+    def test_pi_grumpy_without_receipts_keeps_receipts_and_says_upgrade(self):
+        # pi has no Skill tool, so an event-only cycle could never record
+        # either: keep the receipt cycle and say what to upgrade.
         self.write_manifest(
             "capabilities.pi.json", "pi", BASE + SKILLS, **{"x-receipts": False}
         )
         r, cycle = self.commit(SHARPEN_HOST="pi")
         out = r.stderr.decode()
         self.assertEqual(cycle["tier"], "small-medium")
-        self.assertNotIn("evidence", cycle)
+        self.assertEqual(cycle["evidence"], "receipts")
         self.assertIn("predates receipts", out)
-        self.assertIn("2.9.0", out)
+        self.assertIn("upgraded to 2.9.0", out)
+        self.assertNotIn("event-only", out)
 
     def test_no_receipts_without_grumpy_at_all_keeps_receipt_cycle(self):
         # Nothing records without grumpy either way; the message names it.

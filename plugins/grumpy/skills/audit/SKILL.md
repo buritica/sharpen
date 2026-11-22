@@ -18,6 +18,8 @@ plan. Its job is understanding and direction, not cheap execution. It names
 complexity where it exists; it does not flatten a hard refactor into a fake
 easy task to look productive.
 
+**Plugin paths.** A path written `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `GRUMPY_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 ## Grumpy Level
 
 Detect `--level <value>` from `$ARGUMENTS` (case-insensitive). Valid values:

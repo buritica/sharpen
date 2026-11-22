@@ -211,15 +211,19 @@ def _resolve_portable_profile(manifest):
     return decision["resolved_profile"], manifest["capabilities"]
 
 
-def _pick_evidence(manifest):
+def _pick_evidence(manifest, host):
     """`(evidence, note)` for a new cycle.
 
     Receipt-backed by default (or event-only when SDLC_GATE_EVIDENCE=events).
     The one automatic exception: the manifest says grumpy is installed but
-    predates receipts (`x-receipts: false`). Its passes write no receipt, so a
-    receipt-backed cycle could never complete; an event-only cycle can, and
-    the note says what to upgrade. A missing grumpy is NOT this case — nothing
-    records without it either way, and the arming message names it."""
+    predates receipts (`x-receipts: false`), and the host is Claude Code. Its
+    passes write no receipt, so a receipt-backed cycle could never complete;
+    an event-only cycle can there, because Claude Code's `PostToolUse` hook on
+    the `Skill` tool stamps it. No other host has that event (pi has no Skill
+    tool; Codex and `unknown` have no confirmed equivalent), so an event-only
+    cycle could not complete there either: those hosts keep the receipt cycle
+    and are told to upgrade grumpy. A missing grumpy is NOT this case —
+    nothing records without it either way, and the arming message names it."""
     evidence = rc.default_evidence()
     if (
         evidence == rc.EVIDENCE_RECEIPTS
@@ -227,10 +231,16 @@ def _pick_evidence(manifest):
         and manifest.get("x-receipts") is False
         and "review" in manifest["capabilities"]
     ):
-        return None, (
-            " The installed grumpy predates receipts, so this cycle records "
-            "gates 2-6 the old event-only way; upgrade grumpy to 2.9.0 or later "
-            "for receipt-backed gates."
+        if host == "claude-code":
+            return None, (
+                " The installed grumpy predates receipts, so this cycle records "
+                "gates 2-6 the old event-only way; upgrade grumpy to 2.9.0 or "
+                "later for receipt-backed gates."
+            )
+        return evidence, (
+            " The installed grumpy predates receipts, so gates 2-6 can't record "
+            "on this host until grumpy is upgraded to 2.9.0 or later "
+            "(`record-gate.py --attest` per gate is the last resort)."
         )
     return evidence, ""
 
@@ -239,8 +249,9 @@ def _recording_note(host, manifest):
     """One sentence on how gates 2-6 record on this host, plus any grumpy
     passes the manifest says are missing. Without a manifest, the host's
     default recording mode still applies; missing skills can't be known."""
-    mode = (manifest or {}).get("x-recording") or hosts.recording_mode(host)
-    if mode == hosts.RECORDING_AUTOMATIC:
+    # The manifest's `x-recording` is a declaration for other consumers; the
+    # host table is the one source here, so the two can't disagree.
+    if hosts.recording_mode(host) == hosts.RECORDING_AUTOMATIC:
         note = (
             "Each grumpy pass leaves a receipt, and this host records it at the "
             "end of the turn (`record-gate.py --verify <pass>` records it now)."
@@ -468,7 +479,7 @@ def main():
         tier, tier_reason = _pick_tier(workdir)
         manifest = _load_host_manifest(host, workdir)
         profile, capability_snapshot = _resolve_portable_profile(manifest)
-        evidence, evidence_note = _pick_evidence(manifest)
+        evidence, evidence_note = _pick_evidence(manifest, host)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.

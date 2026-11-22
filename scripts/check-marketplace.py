@@ -252,7 +252,13 @@ def plugin_root_problems(text, name):
             line = text.count("\n", 0, m.start()) + 1
             problems.append((line, "plugin path must be spelled " + want))
     for m in OWN_ROOT_REF.finditer(text):
-        if m.group(1) not in (prefix, "CLAUDE"):
+        if m.group(1) == prefix:
+            # The own variable alone (`$SDLC_PLUGIN_ROOT/...`, `${SDLC_PLUGIN_ROOT}`)
+            # is empty on Claude Code and Codex: only the full fallback form works.
+            if not text.startswith(want, m.start()):
+                line = text.count("\n", 0, m.start()) + 1
+                problems.append((line, "plugin path must be spelled " + want))
+        elif m.group(1) != "CLAUDE":
             line = text.count("\n", 0, m.start()) + 1
             problems.append(
                 (
@@ -262,7 +268,8 @@ def plugin_root_problems(text, name):
                     ),
                 )
             )
-    return problems
+    # A malformed fallback trips both loops on the same spot; report it once.
+    return sorted(set(problems))
 
 
 def check_plugin_roots(plugin_dir, name):

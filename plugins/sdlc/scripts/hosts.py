@@ -94,6 +94,7 @@ HOSTS = {
 }
 
 
+# ponytail: an inherited SHARPEN_HOST/CLAUDECODE misnames a nested host (Claude started from pi, Codex from Claude). Revisit when docs/hosts.md 'Verifying Codex' check 3 confirms a Codex env signal: check it before CLAUDECODE.
 def detect_host(env=None):
     """Name the running host: explicit `SHARPEN_HOST`, else Claude Code's
     `CLAUDECODE=1`, else `unknown`. A malformed explicit value is `unknown`
