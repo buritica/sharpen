@@ -1,9 +1,38 @@
-# sdlc UPDATE — v4.18.0
+# sdlc UPDATE — v4.19.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
+
+## New in 4.19.0 — the gate runs the commands AGENTS.md declares
+
+`/sdlc:init` (step 10) writes the repo's test, lint, format and typecheck commands into
+the AGENTS.md managed block, but `/sdlc:gate` ignored them and re-detected from its own
+table. On a repo whose real runner isn't the obvious one (this repo runs
+`python3 scripts/run-tests.py`; the table said `pytest`), the gate ran something other
+than what the repo says it runs.
+
+- `/sdlc:gate` now reads the block first, through the new `scripts/declared_commands.py`
+  (prints the declared commands as JSON; "not configured" reads back as null).
+- **AGENTS.md wins** when it and the detection table disagree. The table only fills a
+  command the block leaves null, or all of them in a repo with no block.
+- The gate names the source of each command in its mode line, e.g.
+  `Commands: AGENTS.md (test, lint); detected (typecheck)`.
+- A block stamped by an older sdlc is still read (it is still the repo's declaration).
+- A declared command whose program isn't installed (`command -v` can't find it) is
+  reported as a wrong declaration: the gate runs the detected command for that run and
+  suggests re-running `/sdlc:init` step 10. A declared command that starts and then
+  fails fails the gate, whatever its exit code. Declared commands run from the repo root.
+- Monorepo entries (`web: bun test`) run per area, split at the first colon; `format` is never run by a gate;
+  shellcheck still runs alongside a declared `lint` that doesn't include it.
+- A line edited inside the markers past parsing (`make test (needs docker)`, an item
+  without backticks, `- Test:`, a duplicate entry) is reported as unreadable and falls
+  back to detection, instead of failing silently.
+
+**What an existing repo needs to do:** nothing. A repo without the block behaves exactly
+as before. A repo with one now runs what it declares; if a declared command is wrong or
+out of date, fix it by re-running `/sdlc:init` step 10, not by editing inside the markers.
 
 ## New in 4.18.0 — artifact folders keep themselves out of git
 
@@ -51,49 +80,6 @@ Two side effects of the folders now being *ignored* rather than merely untracked
   `.claude/grumpy/<branch>/` before shipping.
 
 Update grumpy alongside (2.12.0+) so its report folder ignores itself too.
-
-## New in 4.17.0 — a finished chain stops re-running (sharpen#37)
-
-A two-line fix once took 13 gate rounds. Five changes cut the rounds that review nothing new:
-
-- **The chain is done when every gate shows recorded.** `gate.md` used to list "fixes from
-  review/imagine" as changes that reset the chain, though those fixes are gates 4 and 6
-  of it. It now says plainly: don't re-run review to check gate 4's or gate 6's own fixes.
-- **`record-gate.py --carry`.** When a commit after the last review gate makes the chain
-  stale, `--carry` checks whether it could have changed what the review saw. It carries
-  the review gates over a clean rebase (the branch's own changed lines are unchanged; context a lower
-  layer rewrote around them doesn't count),
-  release bookkeeping (version fields and release notes renumbered while restacking), a
-  change to trailing whitespace or blank lines only, safe docs (READMEs, changelogs, prose under `docs/`, images,
-  never a command, skill, template, hook or other file an agent executes), or a small
-  comment, docstring or wording fix with `--reason` (at most 30 changed lines, no new files). A carry
-  is recorded as a carry and shown in `--status`, and it re-opens tests, lint and
-  typecheck. Anything else still needs a reset. `/sdlc:ship`'s rebase note now points
-  at it.
-- **A review base for stacked branches.** The chain resolves the base your branch's
-  review covers: `record-gate.py --set-base <branch>` (a branch name, never `HEAD` or the
-  branch itself; `--set-base auto` unpins it), else the open PR's base (via `gh`),
-  else the branch's local upstream parent, else main. `--carry`, the round counter and
-  `--status` use it, and grumpy 2.11+ passes read it from `.claude/sdlc/<branch>/base.json`,
-  so a stacked branch no longer reviews (or edits) the layers below it. With an older
-  grumpy the passes still diff against the default branch. `--carry` takes the reviewed
-  patch against the base it was reviewed on, so a parent that moved between review and
-  restack is not read as the branch's own change (`--carry --reviewed-base <ref>` names
-  that base for a cycle armed before 4.17).
-- **One fix run earns one fix gate.** A fix receipt that earned one fix gate can't earn
-  the other; grumpy 2.11+ writes `fix-review.json` and `fix-imagine.json` separately.
-- **An advisory round counter.** Each `--init` that replaces a cycle with earned skill
-  gates is a new round. From round 2, `--init` and `--status` say which round it is and
-  how much the branch grew since round 1; from round 3 they suggest shipping and filing
-  the rest, or splitting. It never blocks. `--init <tier> --new-rounds` starts the count
-  over (a reused branch name, say).
-
-**What an existing repo needs to do:** re-run `/sdlc:init` to refresh the managed
-`AGENTS.md` block, which now carries the completion rule and `--carry`. Nothing else: the
-store gains a `rounds` key on the next `--init` (or auto-init) and a `carries` key on
-the first `--carry`, and older cycles read fine. Only 4.17.0 and later read carries: restart sessions,
-update pi, and run `/sdlc:gate` once to refresh the pre-push hook, or an older copy will
-still call a carried chain stale.
 
 ## What a repo gets
 

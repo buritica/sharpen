@@ -351,7 +351,9 @@ read it directly, and Claude Code reads it through a one-line `CLAUDE.md`
 that says `@AGENTS.md`. Do not hand-write the block; the plugin's script
 renders it from `templates/agents-sdlc.md` and upserts it between
 `<!-- sdlc:begin -->` / `<!-- sdlc:end -->` markers, so a re-run replaces
-exactly its own block and nothing a human wrote:
+exactly its own block and nothing a human wrote. `/sdlc:gate` reads the
+`### Commands` lines back (`declared_commands.py`) and runs them ahead of its
+own detection, so pass the commands CI actually runs:
 
 ```bash
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/agents_md.py" --root . \
