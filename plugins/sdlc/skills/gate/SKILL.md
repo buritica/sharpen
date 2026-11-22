@@ -419,7 +419,7 @@ For **Docs-only** (no executable files in the diff, any size): use the `tiny` cy
 Declared commands come first: `/sdlc:init` writes the repo's own into the AGENTS.md block.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/declared_commands.py" --root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/declared_commands.py" --root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"
 ```
 
 `test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A list of two or more names each area before a colon (`web: bun test`): run each part after the colon in that area; one entry is a plain command (`npm run test:unit`). Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`) and name any `unreadable` line. A declared command that is not found (exit 127) is a wrong declaration, not a failing gate: say so, run the detected one for this run, and suggest `/sdlc:init` step 10 (never edit inside the markers). If the script fails, say so and use the tables. Otherwise detect from config files:
