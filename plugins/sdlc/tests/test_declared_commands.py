@@ -77,6 +77,27 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(commands["test"])
         self.assertEqual(unreadable, ["test"])
 
+    def _edit(self, old, new):
+        text = rendered(test_cmd=["web: bun test", "api: pytest"])
+        self.assertIn(old, text)
+        return dc.parse(text.replace(old, new))
+
+    def test_an_unbackticked_list_item_flags_the_whole_entry(self):
+        commands, unreadable = self._edit("  - `web: bun test`", "  - web: bun test")
+        self.assertIsNone(commands["test"])  # not just the half after it
+        self.assertEqual(unreadable, ["test"])
+
+    def test_a_differently_shaped_entry_is_reported(self):
+        for loose in ("- Test:", "* test:"):
+            commands, unreadable = self._edit("- test:", loose)
+            self.assertIsNone(commands["test"], loose)
+            self.assertEqual(unreadable, ["test"], loose)
+
+    def test_a_duplicate_entry_is_reported(self):
+        commands, unreadable = self._edit("- lint:", "- test: `make test`\n- lint:")
+        self.assertIsNone(commands["test"])
+        self.assertEqual(unreadable, ["test"])
+
     def test_not_configured_is_null_and_readable(self):
         commands, unreadable = dc.parse(rendered(test_cmd=["make test"]))
         self.assertIsNone(commands["typecheck"])
@@ -157,6 +178,8 @@ class GateUsesItTests(unittest.TestCase):
 
     def test_format_is_never_run_and_monorepo_areas_are_split(self):
         self.assertIn("never run `format`", self.section)
+        self.assertIn("one entry is a plain command", self.section)
+        self.assertIn("exit 127", self.section)
         self.assertIn("run each part after the colon in that area", self.section)
         self.assertIn("`unreadable`", self.section)
 

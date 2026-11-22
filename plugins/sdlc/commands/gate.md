@@ -423,7 +423,7 @@ Declared commands come first: `/sdlc:init` writes the repo's own into the AGENTS
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/declared_commands.py" --root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"
 ```
 
-`test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A monorepo list names each area before a colon (`web: bun test`): run each part after the colon in that area. Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`), name any `unreadable` line, and if `stale`, still use it but suggest `/sdlc:init` step 10. Otherwise detect from config files:
+`test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A list of two or more names each area before a colon (`web: bun test`): run each part after the colon in that area; one entry is a plain command (`npm run test:unit`). Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`) and name any `unreadable` line. A declared command that is not found (exit 127) is a wrong declaration, not a failing gate: say so, run the detected one for this run, and suggest `/sdlc:init` step 10 (never edit inside the markers). If the script fails, say so and use the tables. Otherwise detect from config files:
 
 **Test runner:**
 ```

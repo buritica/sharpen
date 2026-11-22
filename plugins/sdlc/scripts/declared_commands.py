@@ -40,6 +40,9 @@ import agents_md as am  # noqa: E402
 
 NAMES = ("test", "lint", "format", "typecheck")
 _ENTRY = re.compile(r"^- (%s):(.*)$" % "|".join(NAMES))
+# Anything that looks like an entry for one of NAMES but isn't init's exact
+# shape (`- Test:`, `* test:`): a hand edit, reported rather than skipped.
+_LOOSE_ENTRY = re.compile(r"^\s*[-*]\s*(%s)\s*:" % "|".join(NAMES), re.I)
 _NESTED = re.compile(r"^\s+- `(.+)`\s*$")
 
 
@@ -65,26 +68,45 @@ def parse(text):
     unreadable = []
     in_section = False
     current = None
+    seen = set()
+
+    def flag(name):
+        if name not in unreadable:
+            unreadable.append(name)
+
     for line in lines[span[0] + 1 : span[1]]:
         if line.startswith("### "):
             in_section = line.strip() == "### Commands"
             current = None
             continue
-        if not in_section:
+        if not in_section or not line.strip():
             continue
         entry = _ENTRY.match(line)
         if entry:
             current, rest = entry.group(1), entry.group(2).strip()
+            if current in seen:
+                flag(current)  # two `- test:` lines: which one is meant?
+            seen.add(current)
             value, readable = _unquote(rest)
             commands[current] = [value] if value else None
             if not readable:
-                unreadable.append(current)
+                flag(current)
+            continue
+        loose = _LOOSE_ENTRY.match(line)
+        if loose:
+            current = None
+            flag(loose.group(1).lower())
             continue
         nested = _NESTED.match(line)
         if nested and current:
             commands[current] = (commands[current] or []) + [nested.group(1)]
             continue
-        current = None
+        if current and line[:1].isspace():
+            flag(current)  # an indented item that isn't a backticked command
+            continue
+        current = None  # init's own prose lines (`- deploy:`, `- CI runs …`)
+    for name in unreadable:
+        commands[name] = None  # never run half of what a hand edit meant
     return commands, unreadable
 
 
