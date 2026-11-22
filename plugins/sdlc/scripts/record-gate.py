@@ -304,7 +304,11 @@ def _set_base(path, branch, ref):
         return 1
     head = rc.branch_head(branch)
     base = gb.snapshot(branch, head, use_host=True) if head else None
-    if base and isinstance(gs.load_store(path).get(branch), dict):
+    bd = gs.load_store(path).get(branch)
+    # Once a review gate is earned, the cycle keeps the base it was earned
+    # on: --carry needs it to take the reviewed patch, and moves it itself.
+    earned = isinstance(bd, dict) and rc.carry_source(bd) is not None
+    if base and isinstance(bd, dict) and not earned:
 
         def mutate(d):
             if isinstance(d.get(branch), dict):
@@ -316,10 +320,12 @@ def _set_base(path, branch, ref):
         _log(f"[gate] {gb.describe(base)}")
     else:
         _log("[gate] no base resolves for this branch")
-    _log(
-        "[gate] a different base changes what the review covers; if review "
-        "gates are already recorded, re-init before relying on them"
-    )
+    if earned:
+        _log(
+            "[gate] the recorded review gates stay on the base they were "
+            "earned on; --carry moves them onto this one when the branch's "
+            "own patch is unchanged, otherwise re-init"
+        )
     return 0
 
 
@@ -350,8 +356,11 @@ def _carry(path, branch, reason):
         return 0
     chain = rc.carry_chain(bd)
     spent = gc.manual_lines_spent(bd)
-    old_base = (bd.get(gc.BASE_KEY) or {}).get("commit")
     base = gb.snapshot(branch, head, use_host=True)
+    stored = (bd.get(gc.BASE_KEY) or {}).get("commit")
+    # The reviewed patch is taken against the base it was reviewed on, the
+    # current one against the base resolved now; only then are they compared.
+    old_base = gc.reviewed_base(old, stored, (base or {}).get("ref"))
     klass, why = gc.classify_carry(
         old,
         head,
@@ -361,6 +370,12 @@ def _carry(path, branch, reason):
         new_base=(base or {}).get("commit"),
     )
     if not klass:
+        if old_base and old_base != stored:
+            why += (
+                f" (the base {old[:12]} was reviewed on was not recorded; "
+                f"taken as {old_base[:12]}, where it forked from "
+                f"{(base or {}).get('ref')})"
+            )
         if why.startswith("git could not"):
             _log(f"[gate] cannot carry: {why}.")
         else:

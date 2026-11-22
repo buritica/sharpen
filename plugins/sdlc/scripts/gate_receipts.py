@@ -41,7 +41,7 @@ RECEIPT_NAME_FOR_SKILL = {
     "grumpy:imagine": "imagine",
     "grumpy:fix": "fix",
 }
-# Fix gate -> the stage-specific receipt grumpy 2.10+ writes for it
+# Fix gate -> the stage-specific receipt grumpy 2.11+ writes for it
 # (`receipt.py fix --stage review|imagine`). An older grumpy writes one
 # `fix.json` for both; that file is still read when no stage file exists.
 FIX_STAGE_RECEIPT = {

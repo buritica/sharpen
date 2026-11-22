@@ -20,11 +20,10 @@ Before opening, verify:
    origin/main`). If main moves while the PR is open, let the PR's merge handle it;
    a real conflict is a code change, so it re-runs the chain. If the branch was
    rebased after the chain anyway, `record-gate.py --carry` carries the review
-   gates when the branch's own patch is byte-for-byte unchanged, or differs only
-   in release bookkeeping such as a renumbered version (and re-opens tests, lint
-   and typecheck). A rebase that needed conflict resolution in the branch's own
-   hunks does not qualify, and neither does one that merely shifted context next
-   to them.
+   gates when the branch's own changed lines are unchanged (context that moved
+   around them doesn't count), or differ only in release bookkeeping such as a
+   renumbered version, and re-opens tests, lint and typecheck. A rebase that
+   needed conflict resolution in the branch's own lines does not qualify.
 
 ## Open the PR
 

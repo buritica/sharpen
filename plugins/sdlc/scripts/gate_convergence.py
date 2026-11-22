@@ -8,9 +8,11 @@ Two pieces, both host-neutral (stdlib + git):
   last skill gate (gate_receipts.stale_skill_gates). `classify_carry` names the
   commits that may carry the skill gates forward instead of a full reset:
 
-    rebase  the branch's own patch is byte-for-byte unchanged (`_branch_patch`;
-            a rebase over upstream edits next to the branch's hunks changes
-            the context lines, so it does not qualify)
+    rebase  HEAD is what git produces replaying the reviewed commits onto
+            the new base with no conflicts (`_clean_replay`), or the
+            branch's own changed lines are byte-for-byte unchanged, each side
+            taken against its own base (`_branch_patch`; context lines a
+            lower layer rewrote around the hunks don't count)
     format  only whitespace at line ends and blank lines changed (never
             indentation or whitespace inside a line)
     docs    every changed path, both sides of a rename included, is on the
@@ -216,10 +218,11 @@ def merge_base(rev, cwd=None):
 
 
 def _branch_patch(rev, cwd=None, base=None):
-    """The branch's whole diff at `rev`, without the parts a clean rebase
-    always changes (blob ids, hunk headers), or None. Compared
-    byte-for-byte, unlike `git patch-id`, which ignores whitespace and would
-    let a conflict resolution that re-indents a line pass as a rebase.
+    """The branch's own changed lines at `rev`, file by file and in order,
+    without the parts a restack changes around them (blob ids, hunk headers,
+    context lines), or None. Compared byte-for-byte, unlike `git patch-id`,
+    which ignores whitespace and would let a conflict resolution that
+    re-indents a line pass as a rebase.
     `base` is the review round's base commit (gate_base); without it, the
     merge-base with the default branch."""
     base = base or merge_base(rev, cwd)
@@ -230,13 +233,14 @@ def _branch_patch(rev, cwd=None, base=None):
         return None
     kept = []
     for line in diff.split(b"\n"):
-        if line.startswith(b"index "):
+        # Only the branch's own lines are compared: blob ids, hunk headers and
+        # context lines all come from outside the branch's hunks, so a lower
+        # layer rewriting text next to them (or above them) changes them while
+        # the branch's own change is the same. Hunk boundaries go too: a
+        # shorter gap between two hunks can merge them. The +/- lines stay in
+        # order, file by file, and the carry re-opens tests, lint and typecheck.
+        if line.startswith((b"index ", b"@@", b" ")):
             continue
-        if line.startswith(b"@@"):
-            # The whole header goes: its line numbers and the function name
-            # after it both come from outside the hunk, so an upstream edit
-            # above an untouched hunk changes them.
-            line = b"@@"
         kept.append(line)
     return b"\n".join(kept)
 
@@ -309,7 +313,7 @@ def _only_bookkeeping(old_patch, new_patch, new, cwd=None, new_base=None):
     if old_files is None or new_files is None:
         return False, "(the diff could not be parsed)"
     notes = []
-    for path in set(old_files) | set(new_files):
+    for path in sorted(set(old_files) | set(new_files)):
         o, n = old_files.get(path, b""), new_files.get(path, b"")
         if o == n:
             continue
@@ -343,6 +347,26 @@ def is_ancestor(old, new, cwd=None):
     is an error, not an answer)."""
     rc, _, _ = _git(["merge-base", "--is-ancestor", old, new], cwd=cwd)
     return {0: True, 1: False}.get(rc)
+
+
+def reviewed_base(old, stored=None, ref=None, cwd=None):
+    """The base commit `old` was reviewed on, or None. The cycle's stored
+    base wins when it is in `old`'s history. A cycle that has none (armed
+    before 4.17), or one a later `--set-base` moved, falls back to where
+    `old` forked from `ref` (the base it is restacked onto) by that ref's
+    reflog, as `git rebase` does, then to their plain merge-base. Without
+    this, the reviewed patch is taken against the default branch and a
+    lower layer that moved between review and restack reads as the branch's
+    own change."""
+    if stored and is_ancestor(stored, old, cwd) is True:
+        return stored
+    if not ref:
+        return None
+    for args in (["--fork-point", ref, old], [ref, old]):
+        out = _run(["merge-base", *args], cwd=cwd)
+        if out:
+            return out.decode(errors="replace").strip()
+    return None
 
 
 def _numstat(old, new, cwd=None):
@@ -436,6 +460,16 @@ def classify_carry(
     ancestor = is_ancestor(old, new, cwd)
     if ancestor is None:
         return None, _git_failure(f"tell whether {old[:12]} is in HEAD's history")
+    for base, head in ((old_base, old), (new_base, new)):
+        # A base at or past the head it measures (`--set-base HEAD`, the
+        # branch itself) makes the branch's patch empty on both sides, which
+        # would compare equal over any change at all.
+        if base and (base == head or is_ancestor(head, base, cwd) is not False):
+            return None, (
+                f"the review base {base[:12]} is not below {head[:12]}, so the "
+                "branch's own patch can't be measured; point --set-base at "
+                "the parent branch"
+            )
     bases = (old_base, new_base)
     if not ancestor:
         return _classify_rewrite(old, new, cwd, bases)

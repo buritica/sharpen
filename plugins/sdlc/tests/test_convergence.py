@@ -117,6 +117,84 @@ class StackTest(ReceiptTestBase):
         git(self.repo, "commit", "-q", "-a", "--amend", "--no-edit")
         self.assertEqual(self.carry().returncode, 1)
 
+    def rewrite_parent_and_restack(self):
+        """layer-b is rewritten after review (amended, not appended to), and
+        BRANCH is restacked onto it with its own patch unchanged."""
+        old_b = git(self.repo, "rev-parse", "layer-b").strip()
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.write("b.py", "B = 2\n" * 7)
+        git(self.repo, "commit", "-q", "-a", "--amend", "--no-edit")
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "rebase", "-q", "--onto", "layer-b", old_b)
+        return old_b
+
+    def test_parent_moved_between_review_and_restack_carries(self):
+        # sharpen#37, area 7's restack: re-running --set-base after the parent
+        # moved must not make the reviewed patch be taken against the new
+        # parent, which reads the parent's own change as the branch's.
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        old_b = self.rewrite_parent_and_restack()
+        self.assertEqual(self.cli("--set-base", "layer-b").returncode, 0)
+        self.assertEqual(self.bd()["base"]["commit"], old_b)
+        self.assert_carried(self.carry(), "rebase")
+        new_b = git(self.repo, "rev-parse", "layer-b").strip()
+        self.assertEqual(self.bd()["base"]["commit"], new_b)
+
+    def test_parent_moved_with_no_recorded_base_carries(self):
+        # A cycle armed before 4.17 has no base: the fork point from the
+        # parent's reflog stands in for it.
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        self.edit_store(lambda data: data[BRANCH].pop("base"))
+        self.rewrite_parent_and_restack()
+        self.assert_carried(self.carry(), "rebase")
+
+    def test_moved_parent_refusal_names_the_branch_s_own_file(self):
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        self.rewrite_parent_and_restack()
+        self.write("c.py", "C = 2\n" * 3)
+        git(self.repo, "commit", "-q", "-a", "--amend", "--no-edit")
+        r = self.carry()
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("b.py", r.stderr)
+
+    def test_parent_rewording_next_to_the_branch_s_hunk_carries(self):
+        # Area 3's restack: the layer below rewrote text right around this
+        # layer's hunk. Only the context lines differ, so the branch's own
+        # change is the same and carries; a merge keeps it on the patch path.
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.commit_file("shared.py", "".join(f"S{i} = {i}\n" for i in range(9)))
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "rebase", "-q", "layer-b")
+        self.cli("--set-base", "layer-b")
+        text = "".join(f"S{i} = {i}\n" for i in range(9)).replace("S4 = 4", "S4 = 40")
+        self.commit_file("shared.py", text, msg="top layer edits S4")
+        self.start()
+        self.run_chain()
+        git(self.repo, "checkout", "-q", "layer-b")
+        reworded = "".join(f"S{i} = {i}\n" for i in range(9)).replace(
+            "S2 = 2", "S2 = 20"
+        )
+        self.commit_file("shared.py", reworded, msg="parent rewords S2")
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "merge", "-q", "--no-edit", "layer-b")
+        self.assert_carried(self.carry(), "rebase")
+
+    def test_a_base_at_head_never_carries_a_code_change(self):
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        self.assertEqual(self.cli("--set-base", BRANCH).returncode, 0)
+        self.commit_file("c.py", "import os\nos.system('true')\n", msg="code")
+        r = self.carry()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("is not below", r.stderr)
+
     def test_set_base_rejects_an_unknown_ref(self):
         self.assertEqual(self.cli("--set-base", "nope").returncode, 1)
 

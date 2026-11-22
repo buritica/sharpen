@@ -7,14 +7,15 @@ releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
 ## New in 4.17.0 — a finished chain stops re-running (sharpen#37)
 
-A two-line fix once took 13 gate rounds. Three changes cut the rounds that review nothing new:
+A two-line fix once took 13 gate rounds. Five changes cut the rounds that review nothing new:
 
 - **The chain is done when gate 8 records.** `gate.md` used to list "fixes from
   review/imagine" as changes that reset the chain, though those fixes are gates 4 and 6
   of it. It now says plainly: don't re-run review to check gate 4's or gate 6's own fixes.
 - **`record-gate.py --carry`.** When a commit after the last review gate makes the chain
   stale, `--carry` checks whether it could have changed what the review saw. It carries
-  the review gates over a clean rebase (the branch's patch is byte-for-byte unchanged),
+  the review gates over a clean rebase (the branch's own changed lines are unchanged; context a lower
+  layer rewrote around them doesn't count),
   release bookkeeping (version fields and release notes renumbered while restacking), a
   change to trailing whitespace or blank lines only, safe docs (READMEs, changelogs, prose under `docs/`, images,
   never a command, skill, template, hook or other file an agent executes), or a small
@@ -25,10 +26,13 @@ A two-line fix once took 13 gate rounds. Three changes cut the rounds that revie
 - **A review base for stacked branches.** The chain resolves the base your branch's
   review covers: `record-gate.py --set-base <ref>`, else the open PR's base (via `gh`),
   else the branch's upstream parent, else main. `--carry`, the round counter and
-  `--status` use it, and grumpy 2.10+ passes read it from `.claude/sdlc/<branch>/base.json`,
-  so a stacked branch no longer reviews (or edits) the layers below it.
+  `--status` use it, and grumpy 2.11+ passes read it from `.claude/sdlc/<branch>/base.json`,
+  so a stacked branch no longer reviews (or edits) the layers below it. With an older
+  grumpy the passes still diff against the default branch. `--carry` takes the reviewed
+  patch against the base it was reviewed on, so a parent that moved between review and
+  restack is not read as the branch's own change.
 - **One fix run earns one fix gate.** A fix receipt that earned one fix gate can't earn
-  the other; grumpy 2.10+ writes `fix-review.json` and `fix-imagine.json` separately.
+  the other; grumpy 2.11+ writes `fix-review.json` and `fix-imagine.json` separately.
 - **An advisory round counter.** Each `--init` that replaces a cycle with earned skill
   gates is a new round. From round 2, `--init` and `--status` say which round it is and
   how much the branch grew since round 1; from round 3 they suggest shipping and filing
