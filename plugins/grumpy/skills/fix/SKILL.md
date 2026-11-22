@@ -49,10 +49,17 @@ First, check for persisted review artifacts on disk:
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
+LEGACY_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written before grumpy 2.15; read, never written
 ```
 
-Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
+<!-- ponytail: legacy reports are not age-checked against the cycle; compare their mtime to the cycle start if a fix summary ever names a legacy report older than the current gate cycle -->
+Look for each artifact **per file**: read `$ARTIFACT_DIR/<name>` when it
+exists, and `$LEGACY_DIR/<name>` only when the new copy of that same file is
+missing. Never pick one folder for all of them: after a mid-chain upgrade
+`$ARTIFACT_DIR` can exist (simplify wrote there) while `review.md` is still
+only in `$LEGACY_DIR`. Say in the summary which artifacts came from
+`$LEGACY_DIR`. Check for any persisted artifacts using the Read tool:
 `audit.md`, `review.md`, `imagine.md`, `architecture.md`, `edge-cases.md`,
 `product.md`, `security.md`, `cleanup.md`, `simplify.md` (unlike `cleanup.md`,
 which stops at a report and waits for the user to pick what to clean up,
@@ -193,7 +200,8 @@ two-line fix took 13 gate rounds (sharpen#37). So sort each finding first:
   flag, option, event, metric, alert, probe, endpoint or file; a guard for a
   gap that existed before the branch; a change to code the diff did not
   touch. Read the branch's plan if it exists
-  (`$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md`, its scope and approach) and the
+  (`$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md`, or the legacy
+  `$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md`; its scope and approach) and the
   diff: a remedy outside both is new capability.
 
 When unsure, it is a **fix**. A 🚨 Critical finding is never sorted as new
@@ -599,9 +607,16 @@ Save the fix report so `/sdlc:ship` can read it, the same pattern as
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
+# Carry a fix.md a grumpy before 2.15 wrote, so its Settled and Deferred
+# entries stay in the one file every later pass reads. A shell copy, not a
+# file-tool write, and only into the new folder.
+LEGACY_FIX="$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md"
+# -p keeps the old mtime, so receipt.py's leftover check (which also reads the
+# legacy receipts) refuses the copy unless this run appends its own section.
+[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || cp -p "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"
 ```
 
 Write (or append to, with a dated `### Fix — YYYY-MM-DD` header — this
@@ -706,7 +721,7 @@ stop here. The fix gate is earned by the run after that fix lands.
 
 Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
-the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+the same gitignored `.sharpen/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
 writer refuses uncommitted changes: commit the fixes, and `git stash` any
 uncertain or partial change Step 4 kept out of the commit (say so in the
@@ -715,7 +730,7 @@ it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 The receipt records the sha256 of `fix.md`, so it is refused unless this
-run saved that report under `.claude/grumpy/<branch>/` first. If the host
+run saved that report under `.sharpen/grumpy/<branch>/` first. If the host
 would not let you write there and you printed the report instead, no receipt
 is written and no gate can be earned from this run: say so plainly, and don't
 write the report somewhere else to get one.
@@ -735,15 +750,28 @@ if [ -f "$RECEIPT" ]; then
   # imagine ran after the last review and this run fixed its findings;
   # otherwise `review` (gate 4).
   # Decided from the review and imagine receipts' written_at (the order sdlc
-  # checks), not the reports' mtimes, which a re-save or copy changes.
-  A="$(git -C "$WT" rev-parse --show-toplevel)/.claude/grumpy/$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
+  # checks), not the reports' mtimes, which a re-save or copy changes. A
+  # receipt an older grumpy left under .claude/ still counts, newest copy wins.
+  T="$(git -C "$WT" rev-parse --show-toplevel)"
+  B="$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
+  # Same order as sdlc's: written_at, else the file's mtime; a receipt that
+  # can't be read is named on stderr instead of silently ignored.
   STAGE=$(python3 -c 'import json,os,sys
-def at(n):
+from datetime import datetime, timezone
+def age(p):
     try:
-        return json.load(open(os.path.join(sys.argv[1], n + ".json")))["written_at"]
-    except Exception:
-        return ""
-print("imagine" if at("imagine") > at("review") else "review")' "$A/receipts")
+        t = datetime.fromisoformat(json.load(open(p))["written_at"])
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"[grumpy] {p}: no readable written_at ({e}); using its mtime", file=sys.stderr)
+        return datetime.fromtimestamp(os.path.getmtime(p), timezone.utc)
+def at(n):
+    ps = [os.path.join(d, n + ".json") for d in sys.argv[1:]]
+    return max([age(p) for p in ps if os.path.exists(p)], default=None)
+r, i = at("review"), at("imagine")
+if r is None and i is None:
+    print("[grumpy] no review or imagine receipt found; writing the review stage", file=sys.stderr)
+print("imagine" if i and (r is None or i > r) else "review")' "$T/.sharpen/grumpy/$B/receipts" "$T/.claude/grumpy/$B/receipts")
   python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
   # If sdlc refuses the fix gate, its message names the receipt it read and
   # what that receipt predates or belongs to. Re-run the pass it names
@@ -789,6 +817,6 @@ fi
 
 ## Gotchas
 
-- Fix reads persisted artifacts under `.claude/grumpy/<branch>/` first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
+- Fix reads each persisted artifact from `.sharpen/grumpy/<branch>/`, or from the pre-2.15 `.claude/grumpy/<branch>/` when the new folder has no copy of that file (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
 - Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
 - Fix addresses Critical and Serious findings by dispatching a sub-agent, defers what Step 1b's eligibility table allows (never Critical, Serious only when judgment-tagged in a handful of aspects and only with an issue attached), and asks about whatever Optional findings are left. Nothing is silently dropped anymore — check `## Would file` in the persisted report if `--file-issues` wasn't passed.

@@ -132,12 +132,12 @@ Save the plan so it survives context compaction:
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/sdlc/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/sdlc/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/sdlc/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"  # the folder ignores itself, on any host
 ```
 
-If `$ARTIFACT_DIR/spec.md` exists (written by `/sdlc:spec`), include its Goals and User scenarios in the Approach section as acceptance criteria.
+If `$ARTIFACT_DIR/spec.md` exists (written by `/sdlc:spec`; an older sdlc wrote it to `$GIT_ROOT/.claude/sdlc/$BRANCH/spec.md`, so check there too), include its Goals and User scenarios in the Approach section as acceptance criteria.
 
 Write the tier classification, scope analysis, and approach (Steps 2–4 output) to `$ARTIFACT_DIR/plan.md` using the Write tool. Include a `## Progress` section and a `## Notes` section at the end — these are updated by other skills as work proceeds.
 
@@ -193,4 +193,4 @@ When resuming interrupted work, check `$ARTIFACT_DIR/plan.md` before re-planning
 - Never plan on main. The worktree must be created BEFORE any analysis, not after.
 - When resuming interrupted work, check `git status` + `git diff --stat` first. Zero commits does not mean zero progress — uncommitted files contain the work.
 - Tier under-classification is worse than over-classification. "No logic change" is the most common misclassification — new guards, cleanup handlers, and early returns are all logic changes.
-- The plan artifact at `.claude/sdlc/$BRANCH/plan.md` survives context compaction. Always check if one exists before re-planning.
+- The plan artifact at `.sharpen/sdlc/$BRANCH/plan.md` survives context compaction. Always check if one exists before re-planning, at the legacy `.claude/sdlc/$BRANCH/plan.md` too (plans written before sdlc 4.21); copy a legacy plan into the new folder (`cp -p`, never `mv`, so a rollback still finds it) rather than starting over.

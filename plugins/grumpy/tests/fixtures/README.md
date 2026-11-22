@@ -20,8 +20,8 @@ scratch repo: the fixture ships no pre-images, so build them from the diff's
 context lines (and write a small `src/notes/ingest.py` with the unlocked write
 the review describes), commit them on main, apply `sample.diff` on a branch and commit it, so `$SCOPE` holds only the
 diff's files and `ingest.py` is outside it; put the plan at
-`.claude/sdlc/<branch>/plan.md` and the review at
-`.claude/grumpy/<branch>/review.md`, and compare by hand. `ask` is the attended
+`.sharpen/sdlc/<branch>/plan.md` and the review at
+`.sharpen/grumpy/<branch>/review.md`, and compare by hand. `ask` is the attended
 answer; an unattended run fixes the lock here and lists it under Open
 questions. It has no scorer: the benchmark scores review and imagine reports, and fix's
 sorting output is a different shape. Whether a review raises missing capabilities as

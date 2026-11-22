@@ -29,11 +29,11 @@ class ReceiptTest(unittest.TestCase):
         git(self.repo, "config", "user.email", "t@t")
         git(self.repo, "config", "user.name", "t")
         with open(os.path.join(self.repo, ".gitignore"), "w") as f:
-            f.write(".claude/\n")
+            f.write(".sharpen/grumpy/\n")
         git(self.repo, "add", ".gitignore")
         git(self.repo, "commit", "-q", "-m", "init")
         git(self.repo, "checkout", "-q", "-b", BRANCH)
-        self.dir = os.path.join(self.repo, ".claude", "grumpy", BRANCH)
+        self.dir = os.path.join(self.repo, ".sharpen", "grumpy", BRANCH)
         os.makedirs(self.dir)
 
     def report(self):

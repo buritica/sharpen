@@ -255,11 +255,11 @@ base) into the judged output. Every output's `summary` records `verdict`,
 `confidence` counts (measured / estimated / unmeasured), and `excluded` —
 including agent findings on excluded paths, which are never judged. A
 `judge` with nothing to judge returns verdict `unmeasured`, not `compliant`.
-`.claude/**` and `.sharpen/data/**` are excluded by default so agent scratch
-and artifacts are never measured as source.
+`.claude/**`, `.sharpen/data/**`, `.sharpen/grumpy/**` and `.sharpen/sdlc/**` are
+excluded by default so agent scratch and artifacts are never measured as source.
 
-Artifacts land next to `simplify.md`'s other output: `.claude/grumpy/<branch>/simplify-loc.json`
-and `.claude/grumpy/<branch>/simplify-findings.json`.
+Artifacts land next to `simplify.md`'s other output: `.sharpen/grumpy/<branch>/simplify-loc.json`
+and `.sharpen/grumpy/<branch>/simplify-findings.json`.
 
 ## Deferring findings (`ponytail:` markers)
 
@@ -312,7 +312,8 @@ when the ponytail plugin is installed.
 
 `simplify`, `review`, `imagine` and `fix` diff against the base
 `scripts/diff_base.py` prints, not always main. sdlc 4.17.0+ resolves it for
-the whole gate chain and writes `.claude/sdlc/<branch>/base.json`
+the whole gate chain and writes `.sharpen/sdlc/<branch>/base.json` (`.claude/sdlc/`
+before sdlc 4.21, still read)
 (`record-gate.py --set-base <parent>` pins it); without that file grumpy
 applies the same order itself: `git config branch.<branch>.sdlcBase`, the open
 PR's base (via `gh`), the branch's local upstream parent, then the default branch.
@@ -424,8 +425,16 @@ install grumpy alone for its `audit` skill.
 Version-specific migration notes live in [`CHANGELOG.md`](CHANGELOG.md).
 
 `grumpy` composes with `sdlc` through a shared path contract
-(`.claude/grumpy/<branch>/` and `.claude/sdlc/<branch>/`): review and imagine read a plan
-`/sdlc:plan` writes, and sdlc's gate chain reads the reports written here. If you use both,
-upgrade them together — a skew leaves one side reading a directory the other never wrote.
+(`.sharpen/grumpy/<branch>/` and `.sharpen/sdlc/<branch>/`): review and imagine read a plan
+`/sdlc:plan` writes, and sdlc's gate chain reads the reports written here. Before grumpy
+2.15 and sdlc 4.21 both lived under `.claude/`, which headless Claude Code refuses to
+write. The old folders are still read: a receipt counts by whichever copy is newer, a
+plan or `fix.md` found only there is copied into `.sharpen/` before a pass appends to
+it, and other reports are read from there when the new copy is missing.
+
+**grumpy 2.15+ needs sdlc 4.21+, or gates 2–6 never record.** An older sdlc looks for
+receipts only under `.claude/grumpy/`, never sees the ones grumpy 2.15 writes to
+`.sharpen/grumpy/`, and doesn't say so. Upgrade both together. (sdlc 4.21 with an older
+grumpy is fine: it still reads `.claude/grumpy/`.)
 
 You won't enjoy the feedback. That's the point.

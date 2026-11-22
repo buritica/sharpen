@@ -24,9 +24,8 @@ python3 scripts/bench-grumpy.py score path/to/review.md --case billing-planted
 
 Each run copies a case into a temp git repo (`before/` committed on `main`, `after/`
 committed on `bench/<case>`), runs the pass there, and reads
-`.claude/grumpy/bench/<case>/<pass>.md`. If the pass printed its report but couldn't
-save it (headless Claude Code treats `.claude/` as a sensitive path), the printed
-report is scored and the run is marked `scored-from-output`. The report, the host's output and
+`.sharpen/grumpy/bench/<case>/<pass>.md`, and only there. If the pass printed its report but
+couldn't save it, the printed report is scored and the run is marked `scored-from-output`. The report, the host's output and
 `results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/` (`default` with no
 `--model`, `/` in a model id becomes `_`, and a second run in the same second gets a
 `-2` suffix), which is gitignored; `--out` picks another root and `--keep` leaves each
@@ -75,7 +74,7 @@ does the same on Claude Code. `--cmd` replaces the whole command line (`{model}`
 token after its flag, so both drop when no model is given), so a wrong flag can be fixed
 without a code change. Claude Code runs get `acceptEdits` plus an allowlist of what a
 review or imagine pass needs (git, python3, read-only file tools, file writes scoped to
-the report folder with `Edit(.claude/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
+the report folder with `Edit(.sharpen/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
 `workspace-write` sandbox inside the temp repo.
 
 ## Cost
@@ -144,7 +143,7 @@ refer to files in `after/`. File basenames must be unique within a case.
   settled. They are left out of recall, and a finding that raises one anyway makes the
   run unclean and counts against precision; `compare` flags a rise in such runs.
 - **artifacts**: `{"fix.md": "artifacts/fix.md"}` copies earlier pass output into the
-  case's `.claude/grumpy/<branch>/` folder before the pass runs.
+  case's `.sharpen/grumpy/<branch>/` folder before the pass runs.
 - **keywords**: a finding matches when it names the file, cites a line within 3 of the
   range (or no line at all), and contains one keyword at a word start, ignoring case
   (`log` matches "logging" and `factory` matches "FormatterFactory", but `log` doesn't

@@ -49,7 +49,7 @@ record_skill_completion(
 
 The event fields are a canonical skill ID, canonical invocation cwd, boolean success result, host name/version, and optional invocation ID. The shared recorder validates the event, resolves same- and cross-repo routes, preserves gate ordering and invalidation, and performs the authorized atomic store write. Adapter metadata is returned for diagnostics, not treated as stored authority.
 
-On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.claude/grumpy/<branch>/receipts/`) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
+On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.sharpen/grumpy/<branch>/receipts/`, or `.claude/grumpy/` for a receipt an older grumpy wrote) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
 
 - `record-gate.py --verify <pass>` is the host-neutral path. A gate chain runs it after each pass on any host that can run a shell.
 - Claude Code's `PostToolUse` `Skill` hook and `Stop` hook, and pi's `agent_end`, call the same recorder sooner. They are conveniences; the receipt is the evidence.
@@ -110,7 +110,7 @@ files under `.sharpen/`, unlike `data/`, which is gitignored per-run state.
 
 Artifact folders ignore themselves, so keeping them out of git needs no host
 support and no `/sdlc:init`: whatever creates `.sharpen/data/`,
-`.claude/sdlc/`, `.claude/grumpy/` or `.claude/worktrees/` also writes a
+`.sharpen/sdlc/`, `.sharpen/grumpy/` or `.claude/worktrees/` also writes a
 `.gitignore` holding `*` inside it (the stdlib writers through sdlc's
 `artifact_dirs.py` and grumpy's `receipt.py`, and one shell line beside each
 command's `mkdir -p`). `.sharpen/` itself never gets one, because it holds
@@ -119,7 +119,7 @@ the repo's own `.gitignore` as a second layer.
 
 The gate store and capability-manifest adapter now resolve shared data in this order: an explicit environment override, `.sharpen/data/`, then existing `.claude/data/` as a compatibility fallback. Existing installs therefore keep reading and writing active state until `.sharpen/data/` exists; fresh state starts in the neutral root.
 
-`.claude/sdlc/` and `.claude/grumpy/` remain adapter-local scratch/artifact locations and are not moved by this step. A full migration must still read the old locations, write neutral locations atomically, and preserve a documented rollback path.
+Per-branch plans, specs, reports and receipts moved the same way in sdlc 4.21 and grumpy 2.15: they are written to `.sharpen/sdlc/<branch>/` and `.sharpen/grumpy/<branch>/`, and nothing is written to the old `.claude/sdlc/` and `.claude/grumpy/` folders any more. How the old folders are still read: a receipt in both places counts by whichever copy is newer; a plan or a `fix.md` that only exists in the old folder is copied into the new one the first time a pass appends to it, so nothing is ever written under `.claude/`; every other file (reports, specs, `base.json`) is read from the new folder first and the old one only when the new copy is missing. The reason is a host one, not tidiness. Claude Code treats `.claude/` as its own configuration: its file tools put a write there through a safety check that no permission rule or classifier can approve, so a headless session refuses it and a pass that writes its report with the Write tool prints the report instead of saving it. No such rule was found in Codex or pi; that is unverified, and `docs/hosts.md` lists the checks that would settle it. The two plugins can't import each other, so each names the grumpy root on its own (`artifact_dirs.GRUMPY_ROOT` in sdlc, `GRUMPY_ROOT` in grumpy's `receipt.py`), and `plugins/sdlc/tests/test_artifact_root.py` fails if they drift. Rolling back means installing sdlc 4.20 and grumpy 2.14 together. They read only `.claude/`, so anything written after the upgrade (plans, `base.json`, reports, receipts) is invisible to them until it is copied back, in each worktree that holds work in progress (`/sdlc:plan` worktrees included): `mkdir -p .claude/sdlc .claude/grumpy && cp -pR .sharpen/sdlc/. .claude/sdlc/ && cp -pR .sharpen/grumpy/. .claude/grumpy/`. `-p` keeps the reports' mtimes, so grumpy 2.14 doesn't count a copied report as freshly saved. The copy is safe to repeat, and the `.gitignore` files it carries keep both folders out of git. `/sdlc:plan` worktrees still live under `.claude/worktrees/`, because `git worktree add` creates them from a shell, which the file-tool check doesn't cover.
 
 ## Enforcement model
 

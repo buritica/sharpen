@@ -69,8 +69,9 @@ BLOCKING = {"CRIT", "WARN"}
 # diff and the receipt, Write scoped to the report folder, read-only file
 # tools, Agent for per-aspect passes. (File rules are spelled Edit(...); they
 # cover Write too.) No unscoped Write or Edit: these passes
-# report, they don't change code. (Headless Claude Code still refuses writes
-# under .claude/ as a sensitive path; run_one then scores the printed report.)
+# report, they don't change code. (grumpy before 2.15 wrote under .claude/,
+# which headless Claude Code refuses as a sensitive path; run_one then scored
+# the printed report.)
 CLAUDE_TOOLS = ",".join(
     [
         "Bash(git:*)",
@@ -79,7 +80,7 @@ CLAUDE_TOOLS = ",".join(
         "Bash(ls:*)",
         "Bash(head:*)",
         "Read",
-        "Edit(.claude/grumpy/**)",
+        "Edit(.sharpen/grumpy/**)",
         "Glob",
         "Grep",
         "Agent",
@@ -234,9 +235,9 @@ def build_repo(case, dest, cases_dir=CASES_DIR):
     git("add", "-A")
     git("commit", "-q", "-m", key.get("description", case)[:72])
     # Prior pass output the case starts from (e.g. a fix report whose settled
-    # list review must honor) goes where grumpy reads it. .claude/ is ignored,
+    # list review must honor) goes where grumpy reads it. .sharpen/ is ignored,
     # so it leaves the worktree clean.
-    art_dir = os.path.join(dest, ".claude", "grumpy", *branch.split("/"))
+    art_dir = os.path.join(dest, ".sharpen", "grumpy", *branch.split("/"))
     for name, src in key.get("artifacts", {}).items():
         os.makedirs(art_dir, exist_ok=True)
         shutil.copyfile(os.path.join(base, src), os.path.join(art_dir, name))
@@ -695,8 +696,8 @@ def compare(
                 f"{name}: {cs['failed_runs']}/{cs['runs']} run(s) failed"
                 f" (baseline {bs['failed_runs']}/{bs['runs']}; statuses {cs.get('statuses', {})})"
             )
-        # A note, not a problem: whether a host may save under .claude/
-        # depends on its permission setup as much as on the prompt.
+        # A note, not a problem: whether a host may save the report depends
+        # on its permission setup as much as on the prompt.
         if _rate(cs, "from_output") > _rate(bs, "from_output"):
             notes.append(
                 f"{name}: {cs['from_output']}/{cs['runs']} run(s) printed the report"
@@ -753,7 +754,7 @@ def skill_prompt(pass_name, grumpy=GRUMPY):
     return (
         f"Run grumpy's {pass_name} pass on the current branch of this repository, non-interactively. "
         "Nobody is available to answer questions: make reasonable choices and finish. The arguments are empty. "
-        f"Follow the instructions below exactly, including writing the report to .claude/grumpy/<branch>/{pass_name}.md.\n\n"
+        f"Follow the instructions below exactly, including writing the report to .sharpen/grumpy/<branch>/{pass_name}.md.\n\n"
         + body.lstrip()
     )
 
@@ -834,7 +835,7 @@ def report_in_output(output, pass_name):
 
 def find_report(repo, branch, pass_name):
     expected = os.path.join(
-        repo, ".claude", "grumpy", *branch.split("/"), f"{pass_name}.md"
+        repo, ".sharpen", "grumpy", *branch.split("/"), f"{pass_name}.md"
     )
     # Only the branch's own folder: a report written anywhere else is a
     # contract miss, and a case can seed other files there via `artifacts`.
@@ -938,8 +939,8 @@ def run_one(
             findings = parse_report(text)
             result["status"] = "scored"
         elif report_in_output(stdout, pass_name):
-            # The host printed the report but couldn't save it (Claude Code
-            # treats .claude/ as a sensitive path in headless runs). Score what
+            # The host printed the report but couldn't save it (headless Claude
+            # Code refused writes under .claude/ before grumpy 2.15). Score what
             # it printed, and say so: the pass's own write step failed.
             with open(saved, "w", encoding="utf-8") as f:
                 f.write(stdout)

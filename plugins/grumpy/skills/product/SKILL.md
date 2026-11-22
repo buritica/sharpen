@@ -424,9 +424,9 @@ Save the full report so `/grumpy:fix` can find it even after context compaction:
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write the complete report (from `# Product Review:` through `## Verdict`) to `$ARTIFACT_DIR/product.md` using the Write tool.
