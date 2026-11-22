@@ -11,7 +11,8 @@ past release's behavior change stays discoverable without bloating the current R
 (schema: `schemas/grumpy-receipt.v1.schema.json`). sdlc 4.14.0+ records gates 2 through 6
 from these receipts instead of from the `Skill` tool event, so the gates now record on
 Codex, fx and pi as well as Claude Code. The receipt is evidence that the pass ran, not a
-security boundary. A detached HEAD is refused, because a gate is keyed by branch, and so
+security boundary. It also names the pass's report and its sha256: no saved report, no
+receipt, and sdlc refuses a receipt whose report is missing or changed. A detached HEAD is refused, because a gate is keyed by branch, and so
 is a dirty tree: commit the pass's edits first, or the commit that follows would make
 every gate stale. Under pi, a new one-line extension exports `GRUMPY_PLUGIN_ROOT` so the
 passes can find `receipt.py` (sdlc's extension owns `CLAUDE_PLUGIN_ROOT` there).

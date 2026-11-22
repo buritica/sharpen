@@ -648,6 +648,12 @@ it to get a receipt: report that no receipt was written. Skip
 it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
+The receipt records the sha256 of `simplify.md`, so it is refused unless this
+run saved that report under `.claude/grumpy/<branch>/` first. If the host
+would not let you write there and you printed the report instead, no receipt
+is written and no gate can be earned from this run: say so plainly, and don't
+write the report somewhere else to get one.
+
 ```bash
 # Shell state doesn't persist between calls: set WT to the --worktree path
 # again if one was given, or the receipt lands on the wrong branch.

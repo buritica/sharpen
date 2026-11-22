@@ -75,7 +75,20 @@ class ReceiptTestBase(unittest.TestCase):
     def cli(self, *args):
         return self.run_py(RECORD, *args)
 
-    def receipt(self, pass_name):
+    def report(self, pass_name, text=None):
+        """What the pass writes before its receipt: its report."""
+        branch = git(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
+        d = os.path.join(self.repo, ".claude", "grumpy", branch)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{pass_name}.md")
+        with open(path, "w") as f:
+            f.write(text or f"# {pass_name} report {time.time_ns()}\n")
+        return path
+
+    def receipt(self, pass_name, report=True):
+        if report:
+            self.report(pass_name)
+            time.sleep(0.01)
         r = self.run_py(GRUMPY_RECEIPT, pass_name, "--worktree", self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         # Receipts compare by timestamp against gate stamps; keep the next
@@ -181,6 +194,20 @@ class VerifyTest(ReceiptTestBase):
         r = self.verify("review")
         self.assertEqual(r.returncode, 1)
         self.assertIn("re-run the pass", r.stderr)
+
+    def test_receipt_whose_report_is_gone_is_refused(self):
+        self.receipt("review")
+        os.unlink(os.path.join(self.repo, ".claude", "grumpy", BRANCH, "review.md"))
+        r = self.verify("review")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("report this receipt names is missing", r.stderr)
+
+    def test_receipt_whose_report_changed_is_refused(self):
+        self.receipt("review")
+        self.report("review", text="# someone else's report\n")
+        r = self.verify("review")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("changed after the receipt", r.stderr)
 
     def test_already_recorded_verify_is_not_an_error(self):
         self.receipt("review")
@@ -509,8 +536,18 @@ class ReceiptWriterTest(ReceiptTestBase):
         with open(path) as f:
             receipt = json.load(f)
         self.assertEqual(
-            set(receipt), {"protocol_version", "skill", "branch", "head", "written_at"}
+            set(receipt),
+            {
+                "protocol_version",
+                "skill",
+                "branch",
+                "head",
+                "written_at",
+                "report",
+                "report_sha256",
+            },
         )
+        self.assertEqual(receipt["report"], "review.md")
         self.assertEqual(receipt["head"], git(self.repo, "rev-parse", "HEAD"))
 
     def test_detached_head_is_refused(self):
@@ -518,6 +555,29 @@ class ReceiptWriterTest(ReceiptTestBase):
         r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
         self.assertEqual(r.returncode, 1)
         self.assertIn("detached HEAD", r.stderr)
+
+    def test_no_report_no_receipt(self):
+        # Headless hosts that won't write under .claude/ print the report
+        # instead; that pass must not leave a receipt.
+        r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("report not written", r.stderr)
+        self.assertFalse(
+            os.path.exists(rc.receipt_path(self.repo, BRANCH, "grumpy:review"))
+        )
+
+    def test_empty_report_is_refused(self):
+        self.report("review", text="   \n")
+        r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("empty", r.stderr)
+
+    def test_report_left_from_the_last_run_is_refused(self):
+        self.receipt("review")
+        time.sleep(0.01)
+        r = self.run_py(GRUMPY_RECEIPT, "review", "--worktree", self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("predates the last receipt", r.stderr)
 
     def test_dirty_tree_is_refused(self):
         path = os.path.join(self.repo, "f.txt")

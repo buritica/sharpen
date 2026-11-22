@@ -5,7 +5,9 @@ Usage:
   receipt.py <simplify|review|imagine|fix> [--worktree <path>]
 
 Writes `<worktree>/.claude/grumpy/<branch>/receipts/<pass>.json`, next to the
-report the pass already wrote, naming the commit the pass ran against. The
+report the pass already wrote, naming the commit the pass ran against and the
+sha256 of that report. No report on disk (or one left from the last run), no
+receipt. The
 sdlc gate chain records a skill gate only from a receipt that names the
 branch's current HEAD (`record-gate.py --verify <pass>`), so a pass that was
 loaded but never finished earns nothing, on any host.
@@ -17,6 +19,7 @@ The format is `schemas/grumpy-receipt.v1.schema.json`. It is a record that the
 work ran, not a security boundary. Pure stdlib.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -25,12 +28,36 @@ import tempfile
 from datetime import datetime, timezone
 
 PASSES = ("simplify", "review", "imagine", "fix")
+# The report each pass writes next to its receipt, before the receipt.
+REPORT_FOR = {p: f"{p}.md" for p in PASSES}
 
 
 def _git(wt, *args):
     return subprocess.check_output(
         ["git", "-C", wt, *args], stderr=subprocess.DEVNULL, text=True
     ).strip()
+
+
+def _report_digest(report, previous_receipt):
+    """sha256 of the pass's report, or ValueError when there is no fresh one.
+
+    A receipt is evidence that the pass ran AND left its report. A pass that
+    couldn't save its report (a host that won't write under .claude/, say)
+    printed it instead, and must not earn a gate: there is nothing on disk
+    for the gate to point at. A report no newer than this pass's previous
+    receipt is a leftover from the last run, not this one."""
+    try:
+        with open(report, "rb") as f:
+            data = f.read()
+    except OSError:
+        raise ValueError(f"report not written ({report}): save it first") from None
+    if not data.strip():
+        raise ValueError(f"report is empty ({report})")
+    if os.path.exists(previous_receipt) and os.path.getmtime(
+        report
+    ) <= os.path.getmtime(previous_receipt):
+        raise ValueError(f"report predates the last receipt ({report}): save it again")
+    return hashlib.sha256(data).hexdigest()
 
 
 def write_receipt(pass_name, worktree="."):
@@ -50,7 +77,11 @@ def write_receipt(pass_name, worktree="."):
         raise ValueError("uncommitted changes: commit the pass's edits first")
     root = _git(worktree, "rev-parse", "--show-toplevel")
     head = _git(worktree, "rev-parse", "HEAD")
-    directory = os.path.join(root, ".claude", "grumpy", branch, "receipts")
+    artifacts = os.path.join(root, ".claude", "grumpy", branch)
+    directory = os.path.join(artifacts, "receipts")
+    path = os.path.join(directory, f"{pass_name}.json")
+    report = os.path.join(artifacts, REPORT_FOR[pass_name])
+    digest = _report_digest(report, path)
     os.makedirs(directory, exist_ok=True)
     receipt = {
         "protocol_version": "1",
@@ -58,8 +89,9 @@ def write_receipt(pass_name, worktree="."):
         "branch": branch,
         "head": head,
         "written_at": datetime.now(timezone.utc).isoformat(),
+        "report": REPORT_FOR[pass_name],
+        "report_sha256": digest,
     }
-    path = os.path.join(directory, f"{pass_name}.json")
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{pass_name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:

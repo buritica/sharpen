@@ -18,6 +18,7 @@ adds to a branch entry:
 `--init` replaces the whole entry, so a reset clears `evidence_heads` too.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -140,6 +141,24 @@ def _predecessor_written(path, gate, branch_data):
     return before, ts
 
 
+def _report_mismatch(path, receipt):
+    """None when the report the receipt names is still on disk with the same
+    sha256, else why not. The gate means "the pass ran and left evidence";
+    a receipt whose report is gone or was replaced points at nothing."""
+    name, digest = receipt.get("report"), receipt.get("report_sha256")
+    if not isinstance(name, str) or not isinstance(digest, str) or "/" in name:
+        return f"receipt at {path} names no report (grumpy 2.9.0+ records one)"
+    report = os.path.join(os.path.dirname(os.path.dirname(path)), name)
+    try:
+        with open(report, "rb") as f:
+            actual = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return f"the report this receipt names is missing ({report}), re-run the pass"
+    if actual != digest:
+        return f"{report} changed after the receipt was written, re-run the pass"
+    return None
+
+
 def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=()):
     """Return (receipt, None) when the receipt at `path` earns `gate`, else
     (None, reason).
@@ -168,6 +187,9 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     written = _parse_ts(receipt.get("written_at"))
     if written is None:
         return None, f"receipt at {path} has no valid written_at"
+    reason = _report_mismatch(path, receipt)
+    if reason:
+        return None, reason
     started = _parse_ts((branch_data or {}).get("created_at"))
     if started and written < started:
         return None, f"receipt at {path} predates this gate cycle"

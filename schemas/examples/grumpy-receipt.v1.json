@@ -3,5 +3,7 @@
   "skill": "review",
   "branch": "feature/refund-flow",
   "head": "8231716c4e2f0a9b3d5e7f1a2b4c6d8e0f1a3b5c",
-  "written_at": "2026-11-22T06:40:00+00:00"
+  "written_at": "2026-11-22T06:40:00+00:00",
+  "report": "review.md",
+  "report_sha256": "9f2c1e5a7b3d4f60812a9c0e4b6d8f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b2d"
 }
