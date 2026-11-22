@@ -147,6 +147,11 @@ throwaway repo, with sharpen installed in Codex:
 3. **Host signal.** Inside Codex, run
    `env | grep -iE '^(codex|openai)' | cut -d= -f1`. The variable names alone,
    no values, say what `detect_host()` can key on.
+4. **Model per role.** Codex can't choose a model per subagent, so grumpy's
+   passes run on the session's model, and the `codex` column of grumpy's
+   `models.yaml` only says which model to start the session on. Its ids are
+   unverified: run `python3 scripts/bench-grumpy.py run --host codex --model
+   <id>` for each and compare.
 
 When one is confirmed, update `HOSTS` in `hosts.py` (and `detect_host()` for
 the third), regenerate this page, and the `unverified` marks go with it.

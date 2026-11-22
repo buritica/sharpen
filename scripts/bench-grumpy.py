@@ -859,12 +859,22 @@ def run_one(
     keep,
     cases_dir=CASES_DIR,
     grumpy=GRUMPY,
+    analysis=None,
 ):
     key = load_key(case, cases_dir)
     repo = tempfile.mkdtemp(prefix=f"grumpy-bench-{case}-")
     result = {"case": case, "pass": pass_name, "label": label}
     try:
         branch = build_repo(case, repo, cases_dir)
+        if analysis:
+            # Review's passes follow models.yaml's `analysis` role, not the
+            # session's --model; pin it through the repo override the passes
+            # read. .sharpen/ is ignored in the fixture, so the tree stays clean.
+            os.makedirs(os.path.join(repo, ".sharpen"), exist_ok=True)
+            with open(
+                os.path.join(repo, ".sharpen", "models.yaml"), "w", encoding="utf-8"
+            ) as f:
+                f.write(f"roles:\n  analysis:\n    native: {analysis}\n")
         # GRUMPY_PLUGIN_ROOT is what pi sets; Claude Code fills the braced
         # name into the prompt itself and never exports CLAUDE_PLUGIN_ROOT, so
         # neither does the bench. The parent's own host markers are dropped so
@@ -1002,7 +1012,15 @@ def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
     print(f"[bench] {label} ...", file=sys.stderr, flush=True)
     try:
         r = run_one(
-            case, pass_name, argv, stdin_text, out_dir, label, args.timeout, args.keep
+            case,
+            pass_name,
+            argv,
+            stdin_text,
+            out_dir,
+            label,
+            args.timeout,
+            args.keep,
+            analysis=getattr(args, "analysis", None),
         )
     except Exception as e:  # one broken run must not discard the paid-for rest
         r = {"case": case, "pass": pass_name, "label": label, "status": "error"}
@@ -1047,6 +1065,7 @@ def cmd_run(args):
         "protocol_version": "1",
         "host": args.host,
         "model": args.model,
+        "analysis": args.analysis,
         "invoke": invoke,
         "cli_version": cli_version(binary),
         "flags_verified": profile["verified"] and not args.cmd,
@@ -1246,6 +1265,12 @@ def main(argv=None):
         "--cases", default=None, help="comma-separated case names (default: all)"
     )
     p.add_argument("--repeat", type=int, default=3, help="runs per case (default 3)")
+    p.add_argument(
+        "--analysis",
+        choices=["haiku", "sonnet", "opus"],
+        default=None,
+        help="pin models.yaml's analysis role (review's passes on Claude Code)",
+    )
     p.add_argument(
         "--timeout", type=int, default=1200, help="seconds per run (default 1200)"
     )
