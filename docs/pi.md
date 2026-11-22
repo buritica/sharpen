@@ -78,7 +78,7 @@ existing skill bodies run verbatim — no edits to the shared files.
 
 - **No `Skill` tool, and it doesn't matter.** Skill gates record from the
   receipt each grumpy pass writes as its last step, on every host. The gate
-  chain runs `python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify
+  chain runs `python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify
   <pass>` after each pass, and the extension's `agent_end` sweep records any
   receipt whose `--verify` was skipped (including a review receipt a later
   fix commit has moved past). grumpy's own extension exports

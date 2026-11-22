@@ -37,16 +37,17 @@ The recording path is the same on Claude Code, Codex, pi, fx or anything
 else that can run a shell: **after each grumpy pass, run `--verify` for it.**
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify simplify   # after /grumpy:simplify
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify review     # after /grumpy:review
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify fix        # after each /grumpy:fix
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify imagine    # after /grumpy:imagine
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify all        # sweep every receipt on disk
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify simplify   # after /grumpy:simplify
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify review     # after /grumpy:review
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify fix        # after each /grumpy:fix
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify imagine    # after /grumpy:imagine
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify all        # sweep every receipt on disk
 ```
 
-If `$CLAUDE_PLUGIN_ROOT` is empty in your shell (it is set for hook commands,
-not always for the agent's own shell), use the installed sdlc plugin's path
-instead. Run it from the worktree being gated (`cd "$WT"` first when
+Claude Code substitutes the braced `${CLAUDE_PLUGIN_ROOT}` in this text but does
+not export it to the agent's shell, so keep the braces. A host that exports
+`SDLC_PLUGIN_ROOT` wins. If the path still comes out empty, use the installed
+sdlc plugin's path instead. Run it from the worktree being gated (`cd "$WT"` first when
 `--worktree` is set); routing set with `--route-from` applies exactly as it does to the
 hooks. `--verify` exits non-zero with the reason when the receipt is missing,
 names a commit that is no longer on the branch, or predates the cycle (an
@@ -366,7 +367,7 @@ Run each gate in order. After each gate passes:
 2. **For gates 2–6** — run `--verify` for the pass that just finished, from the worktree being gated, and check that it recorded:
 
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify <simplify|review|fix|imagine>
+   python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify <simplify|review|fix|imagine>
    python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --oneline --branch "$BRANCH"
    ```
 
