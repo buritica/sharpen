@@ -72,7 +72,7 @@ Automatically detect what to review. No questions—just figure it out:
      # the pass on this branch's own layer.
      DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
      BASE=""
-     [ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+     if [ -f "$DIFF_BASE_PY" ]; then BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
      if [ -z "$BASE" ]; then
        BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
      fi
@@ -233,7 +233,9 @@ Each agent returns raw pipe-delimited lines, not prose — the persona voice and
 ### Settled findings (held back, never hidden)
 
 Before rendering, read the `## Settled` sections of
-`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it), if the
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it; set
+`GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
+`BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
 file exists. Each entry is
 `- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
 written by `/grumpy:fix` for a finding it already decided. Hold back a
@@ -308,10 +310,11 @@ then one line each, `- [file:line]: [finding] — settled as [decision]:
 [Overall assessment: ship it (grudgingly), fix and reship, ship it and file
 the rest, split it, or burn it down and start over. Say "ship it and file the
 rest" when nothing Critical remains and every remaining finding is new
-capability (outside what this branch set out to do) or a Questionable
-nit. Say "split it" when fixing the findings would add files outside the
-branch's plan or grow the diff past its original size; name the part to move
-to its own branch.]
+capability (as `/grumpy:fix` Step 1a sorts it: the remedy adds behavior the
+branch's plan and diff never set out to provide, for a problem the diff did
+not introduce) or a Questionable nit. Say "split it" when fixing the findings
+would add files outside the branch's plan or grow the diff past its original
+size; name the part to move to its own branch.]
 ```
 
 ## Step 5: Persist Review Output

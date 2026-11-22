@@ -152,7 +152,7 @@ WT="${WT:-.}"
 # the pass on this branch's own layer.
 DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
 BASE=""
-[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+if [ -f "$DIFF_BASE_PY" ]; then BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
 if [ -z "$BASE" ]; then
   BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
 fi
@@ -230,7 +230,7 @@ mkdir -p "$ARTIFACT_DIR"
 # the pass on this branch's own layer.
 DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
 BASE=""
-[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+if [ -f "$DIFF_BASE_PY" ]; then BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
 if [ -z "$BASE" ]; then
   BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
 fi

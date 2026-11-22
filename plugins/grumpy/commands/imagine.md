@@ -82,7 +82,7 @@ Automatically detect what to imagine. No questions:
      # the pass on this branch's own layer.
      DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
      BASE=""
-     [ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+     if [ -f "$DIFF_BASE_PY" ]; then BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; diffing against the default branch" >&2; else echo "[grumpy] diff_base.py not found; diffing against the default branch" >&2; fi
      if [ -z "$BASE" ]; then
        BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
      fi
@@ -495,7 +495,9 @@ untagged Serious bullet is treated as `fact` and must be fixed.
 ### Settled findings (held back, never hidden)
 
 Before rendering, read the `## Settled` sections of
-`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it), if the
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it; set
+`GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
+`BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
 file exists. Each entry is
 `- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
 written by `/grumpy:fix` for a finding it already decided. Hold back a
@@ -639,9 +641,9 @@ then one line each, `- [file:line]: [finding] — settled as [decision]:
 [Is this safe to ship? What's the blast radius if something goes wrong? Would
 you be able to debug it at 3am? End with one of: fix and reship, ship it and
 file the rest (nothing Critical remains, and every remaining finding is new
-capability or a Questionable nit), or split it (the fixes would add files
-outside the branch's plan or outgrow the original diff; name the part to
-move).]
+capability as `/grumpy:fix` Step 1a sorts it, or a Questionable nit), or split
+it (the fixes would add files outside the branch's plan or grow the diff past
+its original size; name the part to move).]
 ```
 
 ## Step 4: Persist Imagine Output
@@ -673,7 +675,7 @@ If `$PLAN` exists, append under `## Notes`:
 
 ```markdown
 ### Imagine — YYYY-MM-DD
-- **Verdict**: <safe to ship / fix first / ship it and file the rest / split it / high blast radius>
+- **Verdict**: <safe to ship / fix and reship / ship it and file the rest / split it / high blast radius>
 - **Bugs found**: <count, one-line each, or "none">
 - **Deploy risk**: <first-deploy concerns, or "clean">
 - **Edge cases**: <notable edges surfaced, or "none">

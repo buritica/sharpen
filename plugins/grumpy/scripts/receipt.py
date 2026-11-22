@@ -14,8 +14,8 @@ loaded but never finished earns nothing, on any host.
 
 `fix --stage review` (or `imagine`) names which review the fix run resolved
 and writes `fix-review.json` (or `fix-imagine.json`), so one fix run earns one
-fix gate (sdlc 4.17.0+). Without `--stage` it writes `fix.json`, which older
-sdlc reads.
+fix gate (sdlc 4.17.0+). It refreshes `fix.json` too, the name older sdlc
+reads; without `--stage` only `fix.json` is written.
 
 Run it as the pass's LAST step, after committing whatever the pass changed, so
 the receipt names the commit the work landed in. A dirty tree is refused.
@@ -112,17 +112,27 @@ def write_receipt(pass_name, worktree=".", stage=None):
     }
     if stage:
         receipt["stage"] = stage
+    # A stage receipt also refreshes fix.json, the one name sdlc before 4.17
+    # reads, so a newer grumpy with an older installed sdlc still records the
+    # fix gates. sdlc 4.17+ prefers the stage file.
+    if stage:
+        _write_json(directory, os.path.join(directory, "fix.json"), receipt)
+    _write_json(directory, path, receipt)
+    return path, receipt
+
+
+def _write_json(directory, path, data):
+    name = os.path.splitext(os.path.basename(path))[0]
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(receipt, f, indent=2)
+            json.dump(data, f, indent=2)
             f.write("\n")
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    return path, receipt
 
 
 def main(argv):

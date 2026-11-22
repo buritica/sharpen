@@ -20,10 +20,17 @@ Every gate pass (`simplify`, `review`, `imagine`, `fix`) now diffs against the b
 sdlc 4.17.0+), else `git config branch.<branch>.sdlcBase`, else the open PR's base, else
 the branch's upstream parent, else the default branch. On a stacked branch the passes
 review only its own layer, and `/grumpy:fix` refuses to edit an existing file outside that
-diff (it records such a finding as new capability instead). Each fix run now writes its
-own receipt (`receipt.py fix --stage review|imagine` -> `fix-review.json` /
-`fix-imagine.json`), so one run can't earn both fix gates. Nothing to migrate: without
-sdlc's base file the passes fall back to the default branch as before.
+diff (it records such a finding as new capability instead; a Critical there is asked
+about, and fixed here on an unattended run). Each fix run now writes its own receipt
+(`receipt.py fix --stage review|imagine` -> `fix-review.json` / `fix-imagine.json`), so
+one run can't earn both fix gates with sdlc 4.17.0+; it refreshes `fix.json` too, so an
+older installed sdlc still records the fix gates.
+
+What changes without sdlc 4.17: the passes no longer always diff against the default
+branch. With no base file they still try `branch.<branch>.sdlcBase`, the open PR's base
+and a local upstream branch first, so a branch whose PR targets another branch, or that
+tracks a local parent, now reviews only its own layer. A pass that can't run
+`diff_base.py` says so and falls back to the default branch.
 
 ## 2.10.0 — plugin paths resolve on every host
 

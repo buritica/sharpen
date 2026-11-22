@@ -193,6 +193,14 @@ class TestExpectAbsent(unittest.TestCase):
         )
         self.assertEqual(result["present"], ["fake-test-assertion"])
 
+    def test_a_repeated_id_counts_once(self):
+        result = eval_grumpy_findings.score(
+            GOLDEN,
+            [self.SWALLOW],
+            expect_absent=["fake-test-assertion", "fake-test-assertion"],
+        )
+        self.assertEqual(result["scored"], 1)
+
     def test_unknown_id_is_an_error(self):
         with self.assertRaises(ValueError):
             eval_grumpy_findings.score(GOLDEN, [], expect_absent=["nope"])

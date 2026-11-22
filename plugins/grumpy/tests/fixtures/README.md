@@ -45,7 +45,9 @@ one entry with no reason (for `unnecessary-factory`), and one that names a
 whole file (for `stale-misleading-comment`). Only the first may hold anything
 back. Run `/grumpy:review` (or imagine) on `sample.diff` in a scratch repo with
 this file at `.claude/grumpy/<branch>/fix.md`, save the findings the rendered
-report still lists as pipe lines, and score them:
+report still lists as pipe lines (leave out its "Settled findings held back"
+list: those are the held-back ones, and keeping them scores the run as
+PRESENT), and score them:
 
 ```sh
 python3 scripts/eval-grumpy-findings.py <rendered.txt> --expect-absent fake-test-assertion

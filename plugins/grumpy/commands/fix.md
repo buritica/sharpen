@@ -123,7 +123,8 @@ I can't fix code you haven't had me look at yet."
 If there are no Critical or Serious findings, respond: "Fine. Nothing's on fire.
 Either your code is actually decent, or I missed something."
 
-If Optional findings exist, skip to Step 5 to offer them. Otherwise respond:
+If Optional findings exist, compute the scope below, then skip to Step 5 to
+offer them (Step 5's fixes go through Step 1a and the scope rule too). Otherwise respond:
 "And there's nothing questionable either. Either this is genuinely good code, or
 you've somehow broken my ability to find problems. I'll choose to believe the
 former."
@@ -136,22 +137,44 @@ PR. Resolve the same base the review used and list the branch's files:
 
 ```bash
 DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
-BASE=""
-[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+BASE=""; SCOPE=""
+if [ -f "$DIFF_BASE_PY" ]; then
+  BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT") || echo "[grumpy] diff_base.py failed; falling back to the default branch" >&2
+else
+  echo "[grumpy] diff_base.py not found at $DIFF_BASE_PY; falling back to the default branch" >&2
+fi
 [ -z "$BASE" ] && BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-[ -n "$BASE" ] && SCOPE=$(git -C "$WT" diff --name-only "$BASE"...HEAD)
+if [ -z "$BASE" ]; then
+  for c in origin/main origin/master main master; do
+    git -C "$WT" rev-parse --verify -q "$c" >/dev/null && BASE="$c" && break
+  done
+fi
+[ -n "$BASE" ] && SCOPE=$(git -C "$WT" diff --name-only "$BASE"...HEAD) && echo "base: $BASE"
 ```
 
+Shell state does not persist between calls: run this block again in the same
+call as the Step 4 check below, and pass `$SCOPE`'s file list (not the
+variable) to the fixers.
+
 A finding whose fix would modify an existing file that is not in `$SCOPE` is
-never fixed here: sort it as **new capability** (Step 1a) with the reason
-"outside this branch's diff (base `<BASE>`)", so it lands in `## New
-capability` and `## Settled` for the branch that owns that file. Adding a new
-file (a test for this branch's code, say) is fine. Pass `$SCOPE` to every
-fixer sub-agent in Step 3 as the files it may modify, and before the Step 4
-commit check `git diff --name-only` against it: revert any change to an
-existing file outside it and say so in the summary. If `$BASE` didn't
-resolve, `$SCOPE` is empty: say so and treat every file in the review as in
-scope, as before.
+not fixed here: sort it as **new capability** (Step 1a) with the reason
+"outside this branch's diff (base `<BASE>`)". It lands in this branch's
+`## New capability` and `## Settled`, so this branch's reviews stop raising
+it. The branch that owns the file never reads that report: the owner hears
+about it only through the filed issue (`--file-issues`), or, without one,
+from the `## Would file` entry the person passes on. The exception is a 🚨
+Critical: it is never new capability (Step 1a), so ask the person whether to
+fix it here or in the branch that owns the file first; on an unattended run,
+fix it here. A Critical fixed here is exempt from the revert below, and the
+summary names its file as outside the diff.
+
+Adding a new file (a test for this branch's code, say) is fine. Pass the
+scope to every fixer sub-agent in Step 3 as the files it may modify, and
+before the Step 4 commit check `git diff --name-only` against it: revert any
+change to an existing file outside it (except an approved Critical) and say so
+in the summary. If no base resolved, or the diff against it failed, `$SCOPE`
+is empty: say so plainly and treat every file in the review as in scope, as
+before.
 
 ## Step 1a: Fix or New Capability
 
@@ -172,13 +195,13 @@ two-line fix took 13 gate rounds (sharpen#37). So sort each finding first:
   diff: a remedy outside both is new capability.
 
 When unsure, it is a **fix**. A 🚨 Critical finding is never sorted as new
-capability on your own judgment: if one looks like it, ask the person (with
-your host's question tool if it has one, otherwise in chat) whether to fix it
-here or file it, and wait for the answer. If no answer can come (an
-unattended run), treat it as a **fix** and list the question under the Step 4
-summary's Open questions block. Gates 4 and 6 still require every Critical finding
-to be resolved, and filing one as new capability counts only when the person
-chose that.
+capability: gates 4 and 6 require every Critical finding resolved, and review
+and imagine report a Critical every round, settled or not, so filing one would
+only bring it back. When a Critical looks like new capability (or sits in a
+file outside `$SCOPE`), ask the person (with your host's question tool if it
+has one, otherwise in chat) how to fix it: here, minimally, or in the branch
+that owns the code first. If no answer can come (an unattended run), fix it
+here and list the question under the Step 4 summary's Open questions block.
 
 A new-capability finding is **not built and leaves no marker in the code**,
 so it adds no commit and no review round. Instead:
@@ -189,7 +212,8 @@ so it adds no commit and no review round. Instead:
 2. **Enhancement, when `--file-issues` was passed and `gh` is available:**
    file it as an issue with the same dedupe, label and failure handling as
    Step 1c, using the title prefix `grumpy (new capability):`. A failed or
-   skipped filing leaves the report entry as the record; it never blocks.
+   skipped filing goes to `## Would file`, exactly as in Step 1c; it never
+   blocks.
 
 Step 1a runs first, so a finding that is new capability is recorded here
 and never reaches Step 1b's deferral table, even if it would be eligible
@@ -211,6 +235,9 @@ One line per finding, in exactly this shape:
 ```
 - <file:line> | <the finding's own text, first 120 characters> | <new-capability|deferred|declined> | <reason>
 ```
+
+The fields are split on ` | `: write any `|` inside the finding text or the
+reason as `/`.
 
 Trim the finding text at a word boundary and drop trailing spaces; review
 and imagine match on the problem it describes, not on exact text.
@@ -632,7 +659,9 @@ wait for the answer before going on):
 
 If yes, repeat Steps 2–4 for the Optional bucket. If no, add each declined
 finding to `## Settled` as `declined`, with what the person said as the
-reason ("the person chose not to fix it here" when they gave none).
+reason ("the person chose not to fix it here" when they gave none). Step 4b
+already saved `fix.md`: add these entries to that file, and save it again
+before Step 6, so the receipt covers the final report.
 
 ## Step 6: Leave a Receipt
 
@@ -662,10 +691,14 @@ WT="${WT:-.}"
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
-  # --stage names which review this run resolved: `review` when it fixed
-  # review.md's findings (gate 4), `imagine` when it fixed imagine.md's
-  # (gate 6). One run earns one fix gate.
-  python3 "$RECEIPT" fix --stage review --worktree "$WT"   # or: --stage imagine
+  # --stage names which review this run resolved, so one run earns one fix
+  # gate: `imagine` (gate 6) when imagine.md is newer than review.md, i.e.
+  # imagine ran after the last review and this run fixed its findings;
+  # otherwise `review` (gate 4).
+  A="$(git -C "$WT" rev-parse --show-toplevel)/.claude/grumpy/$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
+  STAGE=review
+  [ -f "$A/imagine.md" ] && [ "$A/imagine.md" -nt "$A/review.md" ] && STAGE=imagine
+  python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
 else
   echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
 fi

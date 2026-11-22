@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,9 @@ def git(repo, *args):
 class DiffBaseTest(unittest.TestCase):
     def setUp(self):
         self.repo = os.path.realpath(tempfile.mkdtemp())
+        self.bin = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.addCleanup(shutil.rmtree, self.bin, True)
         git(self.repo, "init", "-q", "-b", "main")
         git(self.repo, "config", "user.email", "t@t")
         git(self.repo, "config", "user.name", "t")
@@ -35,14 +39,31 @@ class DiffBaseTest(unittest.TestCase):
         git(self.repo, "add", rel)
         git(self.repo, "commit", "-q", "-m", rel)
 
-    def base(self):
-        env = dict(os.environ, PATH="/usr/bin:/bin")  # no gh: offline and stable
-        r = subprocess.run(
-            [sys.executable, SCRIPT, "--worktree", self.repo, "--why"],
+    def fake_gh(self, base_ref_name):
+        """A `gh` on PATH that answers `gh pr view` with an open PR."""
+        path = os.path.join(self.bin, "gh")
+        reply = json.dumps({"baseRefName": base_ref_name, "state": "OPEN"})
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\necho '{reply}'\n")
+        os.chmod(path, 0o755)
+
+    def run_script(self, *args):
+        # PATH starts with our own bin: a fake gh when a test wrote one, and
+        # otherwise a gh that always fails, so a real gh never runs.
+        if not os.path.exists(os.path.join(self.bin, "gh")):
+            with open(os.path.join(self.bin, "gh"), "w") as f:
+                f.write("#!/bin/sh\nexit 1\n")
+            os.chmod(os.path.join(self.bin, "gh"), 0o755)
+        env = dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin")
+        return subprocess.run(
+            [sys.executable, SCRIPT, *args],
             capture_output=True,
             text=True,
             env=env,
         )
+
+    def base(self):
+        r = self.run_script("--worktree", self.repo, "--why")
         self.assertEqual(r.returncode, 0, r.stderr)
         ref, why = r.stdout.splitlines()
         return ref, why
@@ -77,6 +98,23 @@ class DiffBaseTest(unittest.TestCase):
         with open(os.path.join(d, "base.json"), "w") as f:
             json.dump({"ref": "gone-branch"}, f)
         self.assertEqual(self.base()[0], "main")
+
+    def test_open_pr_base_beats_the_upstream(self):
+        self.fake_gh("layer-a")
+        git(self.repo, "branch", "--set-upstream-to=layer-b")
+        self.assertEqual(self.base(), ("layer-a", "the open PR's base branch"))
+
+    def test_the_branch_s_own_remote_copy_is_not_a_parent(self):
+        head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/origin/top", head)
+        git(self.repo, "config", "branch.top.remote", "origin")
+        git(self.repo, "config", "branch.top.merge", "refs/heads/top")
+        self.assertEqual(self.base(), ("main", "the default branch"))
+
+    def test_detached_head_and_a_missing_worktree_value_fail(self):
+        git(self.repo, "checkout", "-q", "--detach")
+        self.assertEqual(self.run_script("--worktree", self.repo).returncode, 1)
+        self.assertEqual(self.run_script("--worktree").returncode, 2)
 
 
 if __name__ == "__main__":

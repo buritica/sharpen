@@ -114,7 +114,7 @@ def score(golden, candidates, expect_absent=()):
         (hits if hit_indices else misses).append(gf["id"])
         matched_candidate_ids.update(hit_indices)
 
-    scored = len(golden["findings"]) - len(expect_absent)
+    scored = len(golden["findings"]) - len(set(expect_absent))
     return {
         "recall": len(hits) / scored if scored else 0.0,
         "scored": scored,

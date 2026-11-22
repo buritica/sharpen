@@ -78,7 +78,13 @@ def _from_pr(wt, branch):
 
 def _from_upstream(wt, branch):
     up = _git(wt, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
-    if not up or up == branch or up.split("/", 1)[-1] == branch:
+    if not up or up == branch:
+        return None
+    local = _git(wt, "config", "--get", f"branch.{branch}.remote") == "."
+    if not local and up.split("/", 1)[-1] == branch:
+        # A remote copy with the branch's own name is its pushed self, not a
+        # parent; a local upstream is always another branch. (Same rule as
+        # sdlc's gate_base._upstream.)
         return None
     return up if _exists(wt, up) else None
 
