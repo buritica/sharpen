@@ -29,8 +29,8 @@ and no host treats it specially.
   base on its own.
 - **`/sdlc:init` adds `.sharpen/sdlc/` and `.sharpen/grumpy/` to its ignore block.** Both
   folders also ignore themselves when created, so a repo that skips init stays clean.
-  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` is
-  committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
+  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` and
+  `.sharpen/models.yaml` are committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
   still hold old files there.
 - **A team that commits its plans** keeps the ones already tracked under `.claude/sdlc/`.
   New plans land in `.sharpen/sdlc/`, which ignores itself; put `!*` in

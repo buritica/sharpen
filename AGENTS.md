@@ -218,6 +218,6 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 
 ### Artifacts (gitignored)
 - `.sharpen/sdlc/<branch>/` — plan and spec. `.sharpen/grumpy/<branch>/` — review, imagine, simplify reports and pass receipts. `.claude/worktrees/` — `/sdlc:plan` worktrees. Older checkouts may still hold plans and reports under `.claude/sdlc/` and `.claude/grumpy/`; sharpen reads them there but no longer writes there.
-- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present, so never ignore `.sharpen/` as a whole.
+- `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` (the simplify policy) and `.sharpen/models.yaml` (grumpy model overrides) are the committed files under `.sharpen/`, when present, so never ignore `.sharpen/` as a whole.
 - Each of these folders ignores itself when sharpen creates it (a `.gitignore` holding `*` inside it); `/sdlc:init` also lists them in the repo's `.gitignore`.
 <!-- sdlc:end -->

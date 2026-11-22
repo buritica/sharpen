@@ -194,7 +194,8 @@ chain's floor, not an echo of CI.)
   at a time; with several paths git only tells you about the ones that matched. If the repo deliberately *tracks* `.claude/`
   for shared commands or `settings.json`, add only the lines above, never a
   blanket ignore. **Never ignore `.sharpen/` as a whole**: it holds the
-  committed `.sharpen/simplify.json` (grumpy's simplify policy), and a
+  committed `.sharpen/simplify.json` (grumpy's simplify policy) and
+  `.sharpen/models.yaml` (grumpy's model overrides), and a
   blanket entry silently drops it from the next commit.
 
   **If you replace an existing agent-scratch ignore entry with these**, delete the
