@@ -18,7 +18,9 @@ Before opening, verify:
    git fetch origin main
    git rebase origin/main
    ```
-   If rebase introduces conflicts, resolve them and re-run `/sdlc:gate`.
+   A rebase moves HEAD, so on a receipt-backed cycle `gh pr create` will then
+   block the review gates as stale. Rebase before running `/sdlc:gate`; if you
+   rebase after, re-run the chain (and resolve any conflicts first).
 
 ## Open the PR
 

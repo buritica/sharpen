@@ -153,7 +153,7 @@ def skill_gated_message(gate):
     return (
         f'BLOCKED: Gate "{gate}" is skill-gated and cannot be recorded manually.\n\n'
         f"Run the skill instead: {SKILL_FOR_GATE[gate]}\n"
-        "The gate will be auto-recorded after the skill completes.\n\n"
+        "It records from the receipt the pass leaves: record-gate.py --verify <pass>.\n\n"
         + gate_lists_hint()
         + (
             f"\n\nDon't have {SKILL_FOR_GATE[gate]}? Then this cycle cannot "
@@ -753,8 +753,9 @@ def record_gate(data, branch, gate, authorized=False):
     """
     Stamp `gate` as complete on `branch`.
 
-    `authorized=True` is the auto-record hook asserting it just watched the
-    skill run — the only legitimate way a skill-gated gate gets recorded. The
+    `authorized=True` is a recorder in skill_gate_completion asserting the
+    skill ran (a trusted Skill event, or a fresh receipt for `--verify` and
+    the end-of-turn sweep); --attest is the loud exception. The
     check lives here, in the mutator, so every caller is covered: the CLI, the
     hooks, an inline `python3 -c`. The PreToolUse hook reads the Bash command
     and so can only ever see the forms it parses; this sees the real call.
@@ -767,8 +768,8 @@ def record_gate(data, branch, gate, authorized=False):
     depth, not a live path today: the skill-gated check above already
     catches every unauthorized attempt at a mismatched gate first (every
     bash gate the CLI can record without authorization is required by every
-    tier), and the one `authorized=True` caller (auto-record-skill-gate.py)
-    already filters through `determine_gate`'s own `required_gates` check
+    tier), and the `authorized=True` recorder (skill_gate_completion) already
+    filters through `determine_gate`'s own `required_gates` check
     before ever getting here. Exists so the NEXT `authorized=True` caller
     that skips that filtering fails loudly instead of silently polluting
     `gates` with a key every reader (missing_gates, completed_gates,

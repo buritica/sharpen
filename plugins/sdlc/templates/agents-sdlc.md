@@ -13,6 +13,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - {grumpy_line}
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.
+- Each pass leaves a receipt; `record-gate.py --verify <pass>` records the gate from it (the Claude Code and pi hooks also sweep receipts at turn end). Commit before the pass. A commit after the last review gate makes the chain stale and blocks the PR, so rebase before `/sdlc:gate`, not after.
 
 ### Commands
 - test: {test_cmd}

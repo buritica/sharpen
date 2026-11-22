@@ -13,9 +13,12 @@
  *   PreToolUse Bash  -> pi `tool_call` (bash)       -> enforce-sdlc-gates.py
  *                                                    -> block-direct-gate-record.py
  *   PostToolUse Bash -> pi `tool_result` (bash)     -> auto-init-gate-cycle.py
+ *   Stop             -> pi `agent_end`              -> sweep-skill-receipts.py
  *   PostToolUse Skill -> no pi equivalent (no Skill tool). Skill-gated gates
- *                        record via the documented `record-gate.py --attest`
- *                        fallback the SKILL.md bodies already carry.
+ *                        record from grumpy receipts: the gate chain runs
+ *                        `record-gate.py --verify <skill>` after each pass,
+ *                        and the agent_end sweep records any receipt on HEAD
+ *                        or an ancestor of it.
  *
  * The gate confirmation: when a PreToolUse hook denies, Claude shows an
  * interactive modal with the reason and lets a human confirm. pi replicates
@@ -116,6 +119,18 @@ export default function (pi: ExtensionAPI) {
 
     if (enforce.systemMessage) ctx.ui.notify(enforce.systemMessage, "info");
     return;
+  });
+
+  // Stop (Claude) -> agent_end (pi): record skill gates whose grumpy receipts
+  // are already on disk, in case a pass's final `record-gate.py --verify` was
+  // skipped. Never blocks; a notice only when something recorded.
+  pi.on("agent_end", async (_event, ctx) => {
+    const out = await runHook(
+      "sweep-skill-receipts.py",
+      { hook_event_name: "Stop", host: "pi", cwd: ctx.cwd },
+      ctx.cwd,
+    );
+    if (out.systemMessage) ctx.ui.notify(out.systemMessage, "info");
   });
 
   // PostToolUse Bash: auto-init a gate cycle on the first commit to a branch.

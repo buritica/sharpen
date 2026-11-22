@@ -29,6 +29,7 @@ import json
 import os
 import sys
 
+import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
 import shell_parse as sp
@@ -215,7 +216,24 @@ def _check_one(inv):
 
     missing = gs.missing_gates(bd)
     if not missing:
-        return True, None, None, notes
+        stale = rc.stale_skill_gates(bd, rc.branch_head(branch, workdir))
+        if not stale:
+            return True, None, None, notes
+        state = {
+            "branch": branch,
+            "tier": bd.get("tier"),
+            "required": gs.required_gates(bd),
+            "completed": gs.completed_gates(bd),
+            "missing": [],
+            "stale": stale,
+        }
+        return (
+            False,
+            f'SDLC review gates are stale for branch "{branch}".\n\n'
+            + rc.stale_message(bd, branch, stale),
+            state,
+            notes,
+        )
 
     # Deliberately no escape hatch here: a missing gate blocks whatever the
     # diff contains. See test_gitignored_only_diff_still_blocks for the waiver

@@ -113,8 +113,9 @@ ported as pi TypeScript extensions (`extensions/*.ts`) that translate pi lifecyc
 Claude hook payloads the existing `scripts/*.py` read on stdin. **The gate logic stays in the
 python scripts — the TS adapter is a thin spawn-and-map layer, never a reimplementation** (Node
 stdlib only, mirroring the repo's pure-stdlib rule). See `docs/pi.md` for the event mapping, the
-interactive gate-confirmation replication, and the pi-only gaps (no `Skill` tool → `--attest`
-fallback; flat skill names → the sdlc/grumpy `audit` collision).
+interactive gate-confirmation replication, and the pi-only gaps (no `Skill` tool, so skill
+gates record from grumpy receipts via `--verify` and the `agent_end` sweep; flat skill names →
+the sdlc/grumpy `audit` collision).
 
 When a hook script changes, the pi extension needs no change (it only names the script); when a
 plugin's version bumps, `package.json` must bump too. `scripts/check-marketplace.py` enforces the
@@ -162,7 +163,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.13.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.14.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
@@ -178,6 +179,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - The `sdlc` hook arms a small-medium cycle on the first commit to a branch and blocks `gh pr create` until every gate is recorded. For docs-only or trivial changes run `/sdlc:gate --init tiny` **before** the first commit.
 - Gates 2–6 are `/grumpy:simplify`, then `/grumpy:review` → `/grumpy:fix` → `/grumpy:imagine` → `/grumpy:fix`. Run the skills; reviewing the diff in your head records nothing.
 - Never record a gate you did not run. Gates 2–6 can only be stamped by their skills.
+- Each pass leaves a receipt; `record-gate.py --verify <pass>` records the gate from it (the Claude Code and pi hooks also sweep receipts at turn end). Commit before the pass. A commit after the last review gate makes the chain stale and blocks the PR, so rebase before `/sdlc:gate`, not after.
 
 ### Commands
 - test: `python3 scripts/run-tests.py`

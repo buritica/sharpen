@@ -1,7 +1,7 @@
 {
   "name": "sharpen-grumpy",
-  "version": "2.8.0",
-  "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents, as a pi package. Skills only (no hooks to port) — the gate chain reads grumpy's review/imagine reports that the sdlc plugin records.",
+  "version": "2.9.0",
+  "description": "Adversarial code reviews from a principal engineer who's seen too many production incidents, as a pi package. Skills, plus a one-line extension exporting GRUMPY_PLUGIN_ROOT so each pass can write the receipt the sdlc gate chain records from.",
   "private": true,
   "type": "module",
   "keywords": ["pi-package"],
@@ -10,6 +10,7 @@
     "typebox": "*"
   },
   "pi": {
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "extensions": ["./extensions/grumpy-env.ts"]
   }
 }

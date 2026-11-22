@@ -108,10 +108,22 @@ after(() => {
 
 // --- sdlc-hooks.ts ----------------------------------------------------------
 
-test("sdlc: registers the three events and exports the plugin root", () => {
-  assert.deepEqual([...sdlc.handlers.keys()].sort(), ["session_start", "tool_call", "tool_result"]);
+test("sdlc: registers the four events and exports the plugin root", () => {
+  assert.deepEqual([...sdlc.handlers.keys()].sort(), [
+    "agent_end",
+    "session_start",
+    "tool_call",
+    "tool_result",
+  ]);
   assert.equal(process.env.CLAUDE_PLUGIN_ROOT, join(ROOT, "plugins", "sdlc"));
   assert.equal(process.env.CLAUDE_PLUGIN_SCRIPTS, join(ROOT, "plugins", "sdlc", "scripts"));
+});
+
+test("sdlc: agent_end runs the receipt sweep and stays quiet with nothing to record", async () => {
+  const c = ctx(makeRepo("feature/sweep"));
+  const r = await sdlc.handlers.get("agent_end")({}, c);
+  assert.equal(r, undefined);
+  assert.deepEqual(c.notes, []);
 });
 
 test("sdlc: non-bash tool calls are ignored", async () => {

@@ -117,20 +117,14 @@ State the reasoning in one sentence per selected mode.
 If exactly one mode is selected, invoke it the way your harness supports
 invoking one of its own commands from within another (a skill/sub-command
 dispatch mechanism) — do **not** `cat` the command file and follow its
-instructions inline yourself. Gate enforcement (the `sdlc` plugin's
-PostToolUse hook that auto-records `grumpy-review` / `grumpy-imagine` gates)
-fires only when that dispatch mechanism itself is invoked with a tracked
-command/skill name; inlining a command's instructions never makes that call,
-so on a gated branch the gate silently never records. **This gate-recording
-effect is currently Claude Code specific**: the auto-record hook watches for
-Claude Code's own `Skill` tool by name, and has not been ported to other
-hosts (see `sdlc`'s README, "Codex CLI support") — on a host without that
-hook, invoking via a dispatch mechanism vs. inlining makes no difference to
-gate recording either way, since nothing *auto*-records the gate on that
-host. There is still a manual path: `sdlc`'s `gate.md`, "Hosts with no
-`PostToolUse` support at all", covers recording `grumpy-review`/`grumpy-imagine`
-by hand (`record-gate.py --attest <gate> --reason <text>`) after the mode
-genuinely ran.
+instructions inline yourself. For gates, the receipt is what counts: each
+mode writes its receipt as its last step, and `sdlc` records the gate from it
+(`record-gate.py --verify`, or the end-of-turn sweep) on any host, so on a
+receipt-backed cycle dispatching versus inlining makes no difference to gate
+recording. **Only on a legacy cycle** (started before receipts) does it matter,
+and only on Claude Code: there the `sdlc` PostToolUse hook records
+`grumpy-review` / `grumpy-imagine` when Claude Code's own `Skill` tool is
+invoked with a tracked name, and an inlined command never makes that call.
 
 ```
 Invoke "grumpy:<mode>" with args "--worktree \"$WT\" --level <level>"

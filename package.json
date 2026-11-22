@@ -18,7 +18,8 @@
     ],
     "extensions": [
       "./plugins/sdlc/extensions/sdlc-hooks.ts",
-      "./plugins/sdlc-guardrails/extensions/guardrails-hooks.ts"
+      "./plugins/sdlc-guardrails/extensions/guardrails-hooks.ts",
+      "./plugins/grumpy/extensions/grumpy-env.ts"
     ]
   }
 }

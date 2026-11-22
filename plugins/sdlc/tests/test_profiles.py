@@ -16,6 +16,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
 sys.path.insert(0, SCRIPTS)
+# These contract tests seed skill gates through the store directly, the way a
+# legacy (event-only) cycle records them; receipt cycles are test_receipts.py's.
+os.environ["SDLC_GATE_EVIDENCE"] = "events"
 
 import gate_store as gs  # noqa: E402
 

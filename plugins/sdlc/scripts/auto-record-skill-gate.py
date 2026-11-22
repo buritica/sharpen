@@ -3,9 +3,9 @@
 
 This file parses only the Claude `Skill` hook payload. Host-neutral completion,
 routing, ordering, invalidation, and store writes live in
-`skill_gate_completion.py`; future host adapters must call that interface only
-from a trusted post-skill lifecycle callback. Hosts without one retain the
-visible, reason-required `record-gate.py --attest` fallback.
+`skill_gate_completion.py`. On a receipt-backed cycle this event alone records
+nothing: the pass's receipt does, through this hook once it exists, the Stop
+sweep, or `record-gate.py --verify` (the path for hosts with no Skill event).
 """
 
 import json
