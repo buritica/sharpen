@@ -621,6 +621,25 @@ you re-measured and how.
 🤔 Worth Discussing findings are not auto-fixed — list them in the summary as
 optional, the same way `/grumpy:fix`'s Optional bucket works.
 
+## Phase 5: Leave a Receipt
+
+Last step, after everything above, including any fixes from Phase 4 and the re-measure: leave the receipt that lets the sdlc
+gate chain record this pass. It names the commit this pass ran against, in
+the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+gate records only from a receipt that matches the branch's current HEAD. Skip
+it and the pass earns no gate on any host; write it before the work is done
+and it records work that didn't happen.
+
+```bash
+WT="${WT:-.}"
+RECEIPT="${CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
+# <grumpy plugin root>/scripts/receipt.py — point RECEIPT there if you know
+# where this skill was loaded from; if you can't, say so in the summary.
+[ -f "$RECEIPT" ] || echo "receipt.py not found at '$RECEIPT'"
+python3 "$RECEIPT" simplify --worktree "$WT"
+```
+
 ## Personality Guidelines
 
 - Cite the number, and cite both sides of it. "40 → 43" lands harder than

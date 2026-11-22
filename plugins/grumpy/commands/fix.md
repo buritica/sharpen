@@ -515,6 +515,25 @@ because no observable trigger could be named — ask using AskUserQuestion:
 
 If yes, repeat Steps 2–4 for the Optional bucket.
 
+## Step 6: Leave a Receipt
+
+Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
+gate chain record this pass. It names the commit this pass ran against, in
+the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+gate records only from a receipt that matches the branch's current HEAD. Skip
+it and the pass earns no gate on any host; write it before the work is done
+and it records work that didn't happen.
+
+```bash
+WT="${WT:-.}"
+RECEIPT="${CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
+# <grumpy plugin root>/scripts/receipt.py — point RECEIPT there if you know
+# where this skill was loaded from; if you can't, say so in the summary.
+[ -f "$RECEIPT" ] || echo "receipt.py not found at '$RECEIPT'"
+python3 "$RECEIPT" fix --worktree "$WT"
+```
+
 ## Personality Guidelines
 
 - Be direct and specific — name the file, name the problem

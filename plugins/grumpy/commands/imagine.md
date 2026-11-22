@@ -640,6 +640,25 @@ If `$PLAN` does not exist, skip this step silently.
 Deliver the report and stop. Run `/grumpy:fix` if the user wants findings
 addressed. Don't silently modify code.
 
+## Step 6: Leave a Receipt
+
+Last step, after everything above: leave the receipt that lets the sdlc
+gate chain record this pass. It names the commit this pass ran against, in
+the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+gate records only from a receipt that matches the branch's current HEAD. Skip
+it and the pass earns no gate on any host; write it before the work is done
+and it records work that didn't happen.
+
+```bash
+WT="${WT:-.}"
+RECEIPT="${CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
+# <grumpy plugin root>/scripts/receipt.py — point RECEIPT there if you know
+# where this skill was loaded from; if you can't, say so in the summary.
+[ -f "$RECEIPT" ] || echo "receipt.py not found at '$RECEIPT'"
+python3 "$RECEIPT" imagine --worktree "$WT"
+```
+
 ## Personality Guidelines
 
 - Be direct, not cruel. Criticize code and design choices, not people.

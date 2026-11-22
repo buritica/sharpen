@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Host-neutral skill-completion recorder for SDLC gate adapters.
 
-Adapters normalize their host event and call :func:`record_skill_completion`
-only after a trusted successful skill lifecycle callback. Hosts without such a
-callback must retain the visible, reason-required --attest fallback.
+Every host reaches the same function, :func:`record_skill_completion`: the
+Claude PostToolUse Skill hook, the Claude Stop / pi agent_end receipt sweep,
+and `record-gate.py --verify` (which a gate chain runs after each grumpy pass,
+on any host). On a receipt-backed cycle (`evidence: receipts`) the event alone
+proves nothing: the gate records only when the pass's receipt names the
+branch's current HEAD (see gate_store.check_receipt). Legacy cycles keep the
+old event-only behaviour. --attest stays the visible fallback when no receipt
+can be produced.
 """
 
 import os
@@ -59,8 +64,55 @@ def find_active_cycle(data, skill, active_branches):
     return pending[0]
 
 
+def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
+    """For a receipt-backed cycle: (head, None) when the receipt earns
+    `gate`, else (None, refusal dict). Legacy cycles: (None, None), unless
+    the caller is a receipt-only path (a sweep, --verify), which must never
+    stamp a legacy cycle on no evidence at all."""
+    if not gs.uses_receipts(bd):
+        if require_receipt:
+            return None, {
+                "recorded": False,
+                "gate": gate,
+                "target": target_branch,
+                "reason": (
+                    f'"{target_branch}"\'s cycle predates receipts; re-init it '
+                    "(record-gate.py --init <tier>) to record from receipts"
+                ),
+                "legacy_cycle": True,
+            }
+        return None, None
+    root, head = (evidence or {}).get(target_branch, (None, None))
+    reason = gs.check_receipt(
+        gs.receipt_path(root, target_branch, skill),
+        skill=skill,
+        gate=gate,
+        branch=target_branch,
+        head=head,
+        branch_data=bd,
+    )
+    if reason:
+        # Not surprising: "the pass hasn't finished yet" is the normal state
+        # every time a Skill tool call returns, and a sweep runs at every turn
+        # end. The gate chain's explicit --verify surfaces the reason itself.
+        return None, {
+            "recorded": False,
+            "gate": gate,
+            "target": target_branch,
+            "reason": f'"{gate}" not recorded: {reason}',
+            "awaiting_receipt": True,
+        }
+    return head, None
+
+
 def handle_skill_completion(
-    skill, data, branch, active_branches=None, source_root=None
+    skill,
+    data,
+    branch,
+    active_branches=None,
+    source_root=None,
+    evidence=None,
+    require_receipt=False,
 ):
     # `branch` and `source_root` are both resolved by the caller, never here:
     # this runs inside update_store's mutator, and a git subprocess in there
@@ -134,9 +186,15 @@ def handle_skill_completion(
                 ),
                 "surprising": True,
             }
-        # Routed or not, this hook just watched the skill run.
+        head, refusal = _receipt_gate(
+            skill, gate, target_branch, bd, evidence, require_receipt
+        )
+        if refusal:
+            return refusal
+        # Routed or not: a trusted completion event (legacy cycle) or a fresh
+        # receipt (receipt-backed cycle) is the authorization.
         invalidated = gs.record_gate_and_diff(
-            data, target_branch, gate, authorized=True
+            data, target_branch, gate, authorized=True, head=head
         )
         return {
             "recorded": True,
@@ -210,8 +268,16 @@ def handle_skill_completion(
     if bd.get("gates", {}).get(gate):
         return {"recorded": False, "reason": f'"{gate}" already recorded'}
 
-    # This hook just watched the skill run — the one authorized recorder.
-    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
+    head, refusal = _receipt_gate(
+        skill, gate, target_branch, bd, evidence, require_receipt
+    )
+    if refusal:
+        return refusal
+    # A trusted completion event (legacy cycle) or a fresh receipt
+    # (receipt-backed cycle) — the one authorized recorder.
+    invalidated = gs.record_gate_and_diff(
+        data, target_branch, gate, authorized=True, head=head
+    )
     return {
         "recorded": True,
         "gate": gate,
@@ -221,7 +287,14 @@ def handle_skill_completion(
 
 
 def record_skill_completion(
-    *, skill, cwd, succeeded, host, host_version=None, invocation_id=None
+    *,
+    skill,
+    cwd,
+    succeeded,
+    host,
+    host_version=None,
+    invocation_id=None,
+    require_receipt=False,
 ):
     """Record a successful normalized host skill-completion event.
 
@@ -274,7 +347,8 @@ def record_skill_completion(
     else:
         path = gs.default_store_path(cwd)
         git_cwd = cwd
-    active = active_worktree_branches(git_cwd)
+    evidence = gs.worktree_heads(git_cwd)
+    active = set(evidence) if evidence is not None else None
     branch = gs.detect_branch(cwd)
     holder = {}
 
@@ -285,6 +359,8 @@ def record_skill_completion(
             branch=branch,
             active_branches=active,
             source_root=source_root,
+            evidence=evidence,
+            require_receipt=require_receipt,
         )
         holder.update(res)
         return res
@@ -312,3 +388,38 @@ def record_skill_completion(
             **result_metadata,
         }
     return {**holder, **result_metadata}
+
+
+# Chain order a sweep walks. grumpy:fix appears twice because it earns two
+# gates; each call records at most one, and the receipt freshness rule keeps
+# one fix receipt from earning both.
+SWEEP_ORDER = (
+    "grumpy:simplify",
+    "grumpy:review",
+    "grumpy:fix",
+    "grumpy:imagine",
+    "grumpy:fix",
+)
+
+
+def sweep_receipts(*, cwd, host, host_version=None):
+    """Record every skill gate whose receipt is already on disk, in chain
+    order. Used by end-of-turn hooks (Claude Stop, pi agent_end) and by
+    `record-gate.py --verify all`, so a pass whose own final --verify was
+    skipped still records. Returns the list of per-skill results that
+    recorded something."""
+    recorded = []
+    for skill in SWEEP_ORDER:
+        result = record_skill_completion(
+            skill=skill,
+            cwd=cwd,
+            succeeded=True,
+            host=host,
+            host_version=host_version,
+            require_receipt=True,
+        )
+        if result.get("recorded"):
+            recorded.append(result)
+        elif result.get("error"):
+            break
+    return recorded

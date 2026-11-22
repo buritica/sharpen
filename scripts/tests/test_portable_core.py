@@ -30,7 +30,7 @@ def assert_extension_keys(test, value):
 
 class SchemaDocumentTest(unittest.TestCase):
     def test_schema_ids_and_versions_are_stable(self):
-        for name in ("capability-manifest", "review-report"):
+        for name in ("capability-manifest", "review-report", "grumpy-receipt"):
             schema = load(f"schemas/{name}.v1.schema.json")
             self.assertEqual(
                 schema["$schema"], "https://json-schema.org/draft/2020-12/schema"
@@ -39,6 +39,14 @@ class SchemaDocumentTest(unittest.TestCase):
                 schema["$id"], f"https://sharpen.dev/schemas/{name}.v1.schema.json"
             )
             self.assertEqual(schema["properties"]["protocol_version"]["const"], "1")
+
+
+class GrumpyReceiptTest(unittest.TestCase):
+    def test_example_carries_every_required_field(self):
+        schema = load("schemas/grumpy-receipt.v1.schema.json")
+        receipt = load("schemas/examples/grumpy-receipt.v1.json")
+        self.assertTrue(set(schema["required"]) <= set(receipt))
+        self.assertIn(receipt["skill"], schema["properties"]["skill"]["enum"])
 
 
 class CapabilityManifestTest(unittest.TestCase):

@@ -411,6 +411,7 @@ def main():
                     tier_reason=tier_reason,
                     profile=profile,
                     capabilities=capability_snapshot,
+                    evidence=gs.default_evidence(),
                 )
             ),
         )

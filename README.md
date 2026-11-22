@@ -64,7 +64,7 @@ Most repos enforce quality in three places: git hooks, CI, and whatever the deve
 
 This picks one: a single required check, `ci-pass`, at the boundary to shared state. Pre-commit hooks and the local gate chain are fast local echoes; they can be skipped, and merge safety never depends on them.
 
-That gate can't be faked from the inside, either. The chain records to a JSON store keyed by branch, and a review gate records only when its skill actually runs — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, `gh pr create` stays blocked. The limit is opt-out per branch, and it's stated plainly in the code: this stops an agent talking itself past its own process. It's not an adversarial control.
+That gate can't be faked from the inside, either. The chain records to a JSON store keyed by branch, and a review gate records only from the receipt its grumpy pass leaves when it finishes, naming the commit it reviewed — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, or a commit has landed since the review, `gh pr create` stays blocked. The limit is opt-out per branch, and it's stated plainly in the code: this stops an agent talking itself past its own process. It's not an adversarial control.
 
 ## Capabilities, not templates
 
@@ -90,7 +90,7 @@ pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc
 
 Under pi the gate confirmations are **replicated**, not dropped: when a hook denies (e.g. an ungated `gh pr create`), pi shows an interactive confirmation with the reason, and only an interactive human in the TUI can override. Headless (print/rpc) mode has no human to ask, so it fails closed and blocks. `$CLAUDE_PLUGIN_ROOT` in the shared SKILL.md instructions is injected into the process env by the extension, so the existing cross-host skill bodies run unchanged.
 
-Two gaps are inherent to pi, documented in [`docs/pi.md`](docs/pi.md): pi has no `Skill` tool, so skill-gated gates record via the `record-gate.py --attest` fallback the skill bodies already carry; and pi skills are flat-named, so the top-level bundle keeps sdlc's `audit` and drops grumpy's (install grumpy alone for it).
+Two gaps are inherent to pi, documented in [`docs/pi.md`](docs/pi.md): pi has no `Skill` tool, so skill-gated gates record from grumpy receipts via `record-gate.py --verify` (and the extension's `agent_end` sweep), the same path every non-Claude host uses; and pi skills are flat-named, so the top-level bundle keeps sdlc's `audit` and drops grumpy's (install grumpy alone for it).
 
 ## Pairs with ponytail
 

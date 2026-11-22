@@ -329,8 +329,8 @@ pi install git:...sharpen --dir plugins/grumpy
 
 It has no extension. The gate chain still works: `/sdlc:gate` reads grumpy's
 `review`/`imagine` reports the same way it does under Claude, and skill-gated
-gates record via the `record-gate.py --attest` fallback (pi has no `Skill` tool
-— see `docs/pi.md`). In the top-level bundle, grumpy's `audit` skill is
+gates record from the receipt each pass writes (`scripts/receipt.py`, see
+"Receipts" in `docs/pi.md` and sdlc's `gate.md`). In the top-level bundle, grumpy's `audit` skill is
 excluded because pi skill names are flat and sdlc's `audit` wins the collision;
 install grumpy alone for its `audit` skill.
 

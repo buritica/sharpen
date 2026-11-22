@@ -38,7 +38,8 @@ install. `scripts/check-marketplace.py` keeps both registries consistent.
 | `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` then `block-direct-gate-record.py`; block on non-zero exit |
 | `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
 | `PreToolUse` Bash (guardrails) | `tool_call` (bash) | run `hooks/_block-main-commits.py`; block on non-zero exit |
-| `PostToolUse` Skill | — | **no pi equivalent** (pi has no `Skill` tool) — see the attest fallback below |
+| `PostToolUse` Skill | — | **no pi equivalent** (pi has no `Skill` tool); not needed, gates record from receipts |
+| `Stop` | `agent_end` | run `sweep-skill-receipts.py`: record every skill gate whose grumpy receipt is on disk; never blocks |
 
 ## Replicating the gate confirmations
 
@@ -75,13 +76,12 @@ existing skill bodies run verbatim — no edits to the shared files.
 
 ## Known pi limitations
 
-- **No `Skill` tool → skill-gated gates record via `--attest`.** Under Claude,
-  `auto-record-skill-gate.py` stamps a gate when the actual skill finishes. pi
-  has no `Skill` tool (skills are read like any file), so this hook cannot
-  fire. The documented fallback already lives in the skill bodies:
-  `python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --attest <gate>
-  --reason "<text>"`. That stamp is marked unverified in `--status`, exactly as
-  in Claude — the loud, reason-required path, not a silent bypass.
+- **No `Skill` tool, and it doesn't matter.** Skill gates record from the
+  receipt each grumpy pass writes as its last step, on every host. The gate
+  chain runs `python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --verify
+  <pass>` after each pass, and the extension's `agent_end` sweep records any
+  receipt whose `--verify` was skipped. `--attest` remains the reason-required
+  fallback for a pass that genuinely couldn't leave a receipt.
 - **Flat skill names → the `audit` collision.** pi skills are flat-named, so
   sdlc's `audit` and grumpy's `audit` cannot coexist in one pi package. The
   top-level bundle keeps sdlc's `audit` (the pipeline grader) and excludes

@@ -5,6 +5,13 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.13.0 — `/sdlc:ship` drops the post-merge confirmation loop
+
+`/sdlc:ship` no longer runs a post-merge confirmation window; that loop was specific to one
+consumer repo, which now owns it in its own `.claude/skills/sdlc/SKILL.md` overlay. Nothing
+in an existing repo needs to change. (This release shipped without an `UPDATE.md` section;
+4.14.0 adds this note retroactively.)
+
 ## 4.12.2 — the Rust lint reference lints test code
 
 `templates/stacks.md` told `/sdlc:init` to render `cargo clippy -- -D warnings`, which does not lint test code. It now renders `cargo clippy --all-targets -- -D warnings`. A repo initialised under 4.12.1 or earlier therefore has a documented lint command weaker than the one this version renders; re-running `/sdlc:init` updates the `Commands` block (edits outside the `sdlc:begin`/`sdlc:end` markers are untouched). Nothing in an existing repo breaks — the stricter flag only adds coverage, and a repo whose test code already passes it sees no change. Repos that want the stricter form now without re-running init can edit the `lint:` line themselves.

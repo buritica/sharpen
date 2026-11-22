@@ -111,10 +111,11 @@ On a named feature branch with an initialized gate cycle, run `python3 plugins/s
 The `scripts/` are stdlib python (`gate_store.py` + `shell_parse.py` + five hook/CLI scripts), so tracking **and** enforcement run on any box with `python3`:
 
 - `gate_store.py` — the store plus the rules. `record_gate()` refuses a skill-gated gate unless the caller passes `authorized=True`, so the rule holds for every caller that goes through it: the CLI, the hooks, an inline `python3 -c` that imports the module. A direct write to `gates.json` still bypasses it — the guard is against an agent talking itself past its own process gate, not against an adversary.
-- `record-gate.py` (CLI) — `--init`/`--record`/`--status`/`--oneline`; the locked read-modify-write that `/sdlc:gate` drives.
-- `enforce-sdlc-gates.py` (PreToolUse) — blocks `gh pr create` until all required gates for the branch's tier pass. Opt-in: no cycle for the branch → allowed; an unreadable store fails closed.
+- `record-gate.py` (CLI) — `--init`/`--record`/`--verify`/`--status`/`--oneline`; the locked read-modify-write that `/sdlc:gate` drives. `--verify <pass>` records a skill gate from the receipt its grumpy pass left, on any host.
+- `enforce-sdlc-gates.py` (PreToolUse) — blocks `gh pr create` until all required gates for the branch's tier pass. On a receipt-backed cycle it also blocks when a commit has landed since the last review gate, naming the stale gates. Opt-in: no cycle for the branch → allowed; an unreadable store fails closed.
 - `block-direct-gate-record.py` (PreToolUse) — blocks manual `--record` of skill-gated gates (`simplify`, `grumpy-*`) before the command runs, with a message pointing at the skill, and blocks hand-driving `auto-record-skill-gate.py`. It reads argv via `shell_parse.py`, so wrapped forms are caught; anything it can't resolve is left to the store, which refuses it there.
-- `auto-record-skill-gate.py` (PostToolUse Skill) — records the matching gate after `/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, `/grumpy:fix`. The only caller that passes `authorized=True`. It skips when the Skill call itself reported an error, and redirects (rather than silently no-oping) a stale invocation of an old, renamed skill name (`gate_store.RENAMED_SKILLS`). Note what it can and cannot attest: PostToolUse fires when the *tool* returns, and a Skill call returns the skill's instructions — so this proves the skill was invoked, not that the agent then followed it. The guard stops an agent talking itself past its own process gate; it is not adversarial. When the current branch has no cycle it will adopt a cycle from another checked-out branch only if there is exactly one candidate — a gate stamped on the wrong branch cannot be corrected. Recording `simplify` or either fix gate also clears any already-recorded `tests`/`lint`/`typecheck` (`gate_store.CODE_MUTATING_GATES`) — those three pass by editing code, so a bash-gate stamp from before the edit no longer verifies anything, and the hook surfaces the clear loudly rather than leaving it to `--status` to notice later.
+- `auto-record-skill-gate.py` (PostToolUse Skill) — records the matching gate after `/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, `/grumpy:fix`. The only caller that passes `authorized=True`. It skips when the Skill call itself reported an error, and redirects (rather than silently no-oping) a stale invocation of an old, renamed skill name (`gate_store.RENAMED_SKILLS`). Note what it can and cannot attest: PostToolUse fires when the *tool* returns, and a Skill call returns the skill's instructions — so this proves the skill was invoked, not that the agent then followed it. The guard stops an agent talking itself past its own process gate; it is not adversarial. When the current branch has no cycle it will adopt a cycle from another checked-out branch only if there is exactly one candidate — a gate stamped on the wrong branch cannot be corrected. Recording `simplify` or either fix gate also clears any already-recorded `tests`/`lint`/`typecheck` (`gate_store.CODE_MUTATING_GATES`) — those three pass by editing code, so a bash-gate stamp from before the edit no longer verifies anything, and the hook surfaces the clear loudly rather than leaving it to `--status` to notice later. **Receipt-backed cycles** (every cycle created since 4.14.0): the Skill event fires when the instructions load, before the work, so it records only when the pass's receipt already exists; in practice `--verify` or the Stop sweep records the gate.
+- `sweep-skill-receipts.py` (Stop; pi `agent_end`) — at the end of each turn, records every skill gate whose grumpy receipt is already on disk and names the branch's HEAD. Never blocks, never touches a legacy cycle.
 - `auto-init-gate-cycle.py` (PostToolUse Bash) — starts a gate cycle on the first `git commit` to a non-default branch, which is what makes enforcement opt-out rather than opt-in. Defaults to `small-medium`, auto-downgraded to `tiny` when every file changed since `main`/`master` confidently matches a docs/text/asset allowlist (conservative by construction — an unrecognized extension or an undeterminable diff keeps `small-medium`). It announces the arming (exit 2 — visible, non-blocking; the commit already ran), because for anyone who never runs `/sdlc:gate` that is the only notice of which tier landed and how to widen or narrow it. A commit that leaves the branch with *no* cycle says so the same way; genuinely routine outcomes stay quiet.
 
 `hooks/hooks.json` is auto-loaded when the plugin is installed. Run the suite with `python3 tests/test_gate.py` from this directory, or `python3 scripts/run-tests.py` from the marketplace repo root to run every plugin's tests.
@@ -163,26 +164,18 @@ JSON shape) didn't hold up — `enforce-sdlc-gates.py` and
 `auto-init-gate-cycle.py` work on Codex via the same `hooks/hooks.json` every
 other host reads, no per-host manifest or env var required.
 
-**One confirmed real gap, not a hypothetical one**: `auto-record-skill-gate.py`
-and `block-direct-gate-record.py` depend on a distinct `Skill` tool call
-existing in `PostToolUse`. Live-tested by invoking a grumpy review skill on
-Codex — the review genuinely ran (real findings, real artifact written to
-disk) — and checking the gate store afterward: `grumpy-review` was never
-recorded. Codex's own hooks-trust config does track a `Skill`-matcher hook
-entry, so the matcher concept exists there, but whatever tool call a
-natural-language skill invocation produces on Codex doesn't fire it the same
-way Claude Code's `Skill` tool call does. Practical effect: a
-`small-medium`/`significant` gate cycle cannot auto-record gates 2–6
-(`simplify`, the grumpy passes) on Codex today; use the `tiny` cycle, or
-record those gates by hand until this gap closes — concretely,
-`record-gate.py --attest <gate> --reason "<text>"` per skill-gated gate
-actually run, since there is no manual `--record` for these. The same gap,
-reported independently for fx (sharpen#41 — a host that can dispatch the
-grumpy skills but fires no `PostToolUse` event whatsoever, not even the
-caching-specific misfire Codex has), has the identical fix: see `gate.md`'s
-"Hosts with no `PostToolUse` support at all" section for the exact commands
-and how a declared capability profile relates to (and does not reduce) what
-a tier requires.
+**The gap this used to be, and how receipts close it**: event-driven
+recording (`auto-record-skill-gate.py`) depends on a distinct `Skill` tool
+call firing `PostToolUse`. Live-tested on Codex, a grumpy review genuinely ran
+and `grumpy-review` was never recorded; fx (sharpen#41) fires no `PostToolUse`
+at all. Since sdlc 4.14.0, a new gate cycle is receipt-backed instead: each
+grumpy pass ends by writing a receipt naming the branch's HEAD
+(`plugins/grumpy/scripts/receipt.py`), and `record-gate.py --verify <pass|all>`
+records the gate from it on any host. Claude Code's `Stop` hook and pi's
+`agent_end` run the same sweep automatically; on Codex or fx, run `--verify`
+yourself after each pass. See `gate.md`'s "How skill gates record: receipts
+(every host)" section for the exact commands, the staleness rule, and the
+`SDLC_GATE_EVIDENCE=events` opt-out.
 
 Command prose was the other porting axis: `commands/*.md` files originally
 named Claude's own tools literally (`Task tool`, `TaskCreate`, `Skill tool`),
