@@ -36,3 +36,33 @@ output is non-deterministic) — this is a manual check to run whenever
 
 `scripts/tests/test_eval_grumpy_findings.py` covers the scorer's matching and
 pipe-line-parsing logic with fixed inputs — it doesn't call an LLM.
+
+## Settled findings (`settled/`)
+
+`settled/fix.md` is a fix report whose `## Settled` list holds three entries
+against `sample.diff`: one valid entry for the planted `fake-test-assertion`,
+one entry with no reason (for `unnecessary-factory`), and one that names a
+whole file (for `stale-misleading-comment`). Only the first may hold anything
+back. Run `/grumpy:review` (or imagine) on `sample.diff` in a scratch repo with
+this file at `.claude/grumpy/<branch>/fix.md`, save the findings the rendered
+report still lists as pipe lines, and score them:
+
+```sh
+python3 scripts/eval-grumpy-findings.py <rendered.txt> --expect-absent fake-test-assertion
+```
+
+Pass when recall is 100% over the other six, `fake-test-assertion` is absent,
+and the report says `Settled findings held back: 1` and lists it. Also score
+the sub-agents' raw output the usual way: the sub-agent prompts don't read the
+settled list, so their recall must stay 100% on all seven.
+
+## Fix or new capability (`fix-scope/`)
+
+`fix-scope/` holds a plan, a diff and a review with four findings.
+`expected.json` gives the sorting `/grumpy:fix` should produce: the Critical
+lock finding is asked about, never sorted on its own; the ordering bug and the
+test gap are fixes; the event-and-red-exit finding is new capability, recorded
+under `## New capability` and `## Settled` with no code marker. Run fix on a
+scratch repo holding these files (plan at `.claude/sdlc/<branch>/plan.md`,
+review at `.claude/grumpy/<branch>/review.md`) and compare by hand. This one has
+no scorer yet; area 6's benchmark is where a capability-bait scorer belongs.

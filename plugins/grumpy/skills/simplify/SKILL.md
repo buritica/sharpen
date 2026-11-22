@@ -146,7 +146,16 @@ always set), then the merge base `MB` that every base-side measurement uses:
 
 ```bash
 WT="${WT:-.}"
-BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+# The review base (scripts/diff_base.py): sdlc's resolved base for a
+# stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+# branch's upstream parent, then the default branch. On a stack this keeps
+# the pass on this branch's own layer.
+DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+BASE=""
+[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+if [ -z "$BASE" ]; then
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+fi
 if [ -z "$BASE" ]; then
   for candidate in origin/main origin/master main master; do
     git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
@@ -215,7 +224,16 @@ BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+# The review base (scripts/diff_base.py): sdlc's resolved base for a
+# stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+# branch's upstream parent, then the default branch. On a stack this keeps
+# the pass on this branch's own layer.
+DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+BASE=""
+[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+if [ -z "$BASE" ]; then
+  BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+fi
 if [ -z "$BASE" ]; then
   for candidate in origin/main origin/master main master; do
     git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }

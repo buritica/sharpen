@@ -68,13 +68,24 @@ Automatically detect what to imagine. No questions:
      running imagine — I can't reliably determine what you're trying to ship."
      and stop.
 2. Determine the best diff, in priority order:
-   - Branch ahead of origin default: resolve `BASE` first, trying each
-     candidate in order until one exists — this mirrors the same fallback
+   - Branch ahead of its base: resolve `BASE` first. On a stacked branch
+     that is the layer below, not main (`scripts/diff_base.py`, which reads
+     sdlc's resolved base); otherwise try each default-branch candidate in
+     order until one exists — this mirrors the same fallback
      chain `auto-init-gate-cycle.py` uses, since a bare `origin/HEAD` symref
      isn't always set and a `master`-only repo would otherwise silently break
      on a hardcoded `origin/main` guess:
      ```bash
-     BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     # The review base (scripts/diff_base.py): sdlc's resolved base for a
+     # stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
+     # branch's upstream parent, then the default branch. On a stack this keeps
+     # the pass on this branch's own layer.
+     DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+     BASE=""
+     [ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+     if [ -z "$BASE" ]; then
+       BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+     fi
      if [ -z "$BASE" ]; then
        for candidate in origin/main origin/master main master; do
          git -C "$WT" rev-parse --verify -q "$candidate" >/dev/null 2>&1 && { BASE="$candidate"; break; }
@@ -481,6 +492,33 @@ Bugs Found/Questionable Decisions bullets untagged. `/grumpy:fix` reads this
 tag back to decide whether a Serious finding is eligible for deferral; an
 untagged Serious bullet is treated as `fact` and must be fixed.
 
+### Settled findings (held back, never hidden)
+
+Before rendering, read the `## Settled` sections of
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it), if the
+file exists. Each entry is
+`- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
+written by `/grumpy:fix` for a finding it already decided. Hold back a
+finding of yours only when ALL of these hold:
+
+- an entry names the same file, and a line within 3 of yours (or the same
+  construct, if the code moved);
+- the entry's finding text describes the same problem as yours, not merely
+  the same area;
+- the entry has a non-empty reason;
+- your finding is not 🚨 Critical (a Critical is always reported, settled or
+  not).
+
+One entry holds back one finding: merge duplicates of the same problem
+(several agents reporting it) first, then hold back that one. A different
+problem at the same spot, such as a misleading comment next to a settled
+fake assertion, is still reported. Ignore an entry that names a whole file,
+a directory, an aspect or a category, or that has no reason: it settles
+nothing. `## Fixed` entries settle nothing either; if a finding there still
+shows in the diff, report it as usual. A held-back finding
+is never dropped silently: the report lists it (below). This is aggregation
+only; the sub-agent prompts and their pipe format do not change.
+
 Once all agents complete, combine findings into one report:
 
 ```markdown
@@ -592,10 +630,18 @@ actually present, design choices that hold up. One sentence per area. Required.]
 covered them: one line, `Deferred findings honored: N — already marked at
 the line, not re-raised.` Omit entirely when the count is zero.]
 
+[If any finding was held back as settled: `Settled findings held back: N`,
+then one line each, `- [file:line]: [finding] — settled as [decision]:
+[reason]`. Omit entirely when the count is zero.]
+
 ## Verdict
 
 [Is this safe to ship? What's the blast radius if something goes wrong? Would
-you be able to debug it at 3am?]
+you be able to debug it at 3am? End with one of: fix and reship, ship it and
+file the rest (nothing Critical remains, and every remaining finding is new
+capability or a Questionable nit), or split it (the fixes would add files
+outside the branch's plan or outgrow the original diff; name the part to
+move).]
 ```
 
 ## Step 4: Persist Imagine Output
@@ -627,7 +673,7 @@ If `$PLAN` exists, append under `## Notes`:
 
 ```markdown
 ### Imagine — YYYY-MM-DD
-- **Verdict**: <safe to ship / fix first / high blast radius>
+- **Verdict**: <safe to ship / fix first / ship it and file the rest / split it / high blast radius>
 - **Bugs found**: <count, one-line each, or "none">
 - **Deploy risk**: <first-deploy concerns, or "clean">
 - **Edge cases**: <notable edges surfaced, or "none">
@@ -720,5 +766,5 @@ fi
 
 ## Gotchas
 
-- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the resolved base from Step 1 (`origin/HEAD`, not a hardcoded `origin/main` — the default branch isn't always `main`).
+- Imagine assumes the diff is the complete change. If the PR has multiple commits and you only diff the latest, imagine misses context. Always diff against the resolved base from Step 1 (`diff_base.py`'s answer: the layer below on a stacked branch, else `origin/HEAD`, never a hardcoded `origin/main`).
 - "First deploy" scenarios are the highest-value findings — new env vars, missing migrations, config changes that need a restart. These are easy to dismiss as "obvious" but ship broken regularly.

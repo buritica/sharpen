@@ -2,7 +2,7 @@
 """Score a grumpy findings run against the golden fixture.
 
 Usage:
-    python3 scripts/eval-grumpy-findings.py <candidate> [--golden path] [--label name] [--format json|pipe]
+    python3 scripts/eval-grumpy-findings.py <candidate> [--golden path] [--label name] [--format json|pipe] [--expect-absent ID ...]
 
 <candidate> is either:
 - a JSON list of findings (default, `.json` files auto-detected), each shaped
@@ -20,6 +20,11 @@ output size (a token-cost proxy) between two prompt variants on the same
 fixture diff -- see plugins/grumpy/tests/fixtures/README.md. Passing raw
 pipe-format output directly (instead of hand-normalizing it to JSON) also
 exercises the actual line-parsing contract the format change introduced.
+
+`--expect-absent ID` (repeatable) names a planted finding the run must NOT
+report, such as one a `## Settled` entry should hold back: recall is then
+scored over the other findings, and the exit code is 1 if any expected-absent
+finding still shows up.
 """
 
 import argparse
@@ -92,17 +97,28 @@ def matches(golden_finding, candidate):
     return any(kw.lower() in text for kw in golden_finding["keywords"])
 
 
-def score(golden, candidates):
+def score(golden, candidates, expect_absent=()):
     hits = []
     misses = []
+    present = []
     matched_candidate_ids = set()
+    unknown = set(expect_absent) - {gf["id"] for gf in golden["findings"]}
+    if unknown:
+        raise ValueError(f"--expect-absent names unknown ids: {sorted(unknown)}")
     for gf in golden["findings"]:
+        if gf["id"] in expect_absent:
+            if any(matches(gf, c) for c in candidates):
+                present.append(gf["id"])
+            continue
         hit_indices = [i for i, c in enumerate(candidates) if matches(gf, c)]
         (hits if hit_indices else misses).append(gf["id"])
         matched_candidate_ids.update(hit_indices)
 
+    scored = len(golden["findings"]) - len(expect_absent)
     return {
-        "recall": len(hits) / len(golden["findings"]) if golden["findings"] else 0.0,
+        "recall": len(hits) / scored if scored else 0.0,
+        "scored": scored,
+        "present": present,
         "hits": hits,
         "misses": misses,
         "candidate_count": len(candidates),
@@ -121,6 +137,13 @@ def main():
     )
     parser.add_argument("--golden", default=DEFAULT_GOLDEN)
     parser.add_argument("--label", default=None)
+    parser.add_argument(
+        "--expect-absent",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="a golden finding id the run must not report (repeatable)",
+    )
     parser.add_argument(
         "--format",
         choices=["json", "pipe"],
@@ -148,14 +171,18 @@ def main():
         )
         return 1
 
-    result = score(golden, candidates)
+    try:
+        result = score(golden, candidates, args.expect_absent)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     label = args.label or os.path.basename(args.candidate)
     output_chars = os.path.getsize(args.candidate)
 
     print(f"=== {label} ===")
     print(
-        f"recall:            {result['recall']:.0%} ({len(result['hits'])}/{len(golden['findings'])})"
+        f"recall:            {result['recall']:.0%} ({len(result['hits'])}/{result['scored']})"
     )
     if result["misses"]:
         print(f"missed:            {', '.join(result['misses'])}")
@@ -168,8 +195,15 @@ def main():
         f"signal ratio:      {result['signal_ratio']:.0%} (matched a planted issue / total findings)"
     )
     print(f"output size:       {output_chars} bytes ({fmt} format)")
+    for fid in args.expect_absent:
+        state = (
+            "PRESENT, should have been held back"
+            if fid in result["present"]
+            else "absent, as expected"
+        )
+        print(f"expect absent:     {fid}: {state}")
 
-    return 0
+    return 1 if result["present"] else 0
 
 
 if __name__ == "__main__":

@@ -128,6 +128,99 @@ If Optional findings exist, skip to Step 5 to offer them. Otherwise respond:
 you've somehow broken my ability to find problems. I'll choose to believe the
 former."
 
+### This branch's files (the only ones fix edits)
+
+Fix edits only what this branch changed. On a stacked branch the layers below
+belong to other branches and other reviews; a fix there lands in the wrong
+PR. Resolve the same base the review used and list the branch's files:
+
+```bash
+DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
+BASE=""
+[ -f "$DIFF_BASE_PY" ] && BASE=$(python3 "$DIFF_BASE_PY" --worktree "$WT" 2>/dev/null)
+[ -z "$BASE" ] && BASE=$(git -C "$WT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+[ -n "$BASE" ] && SCOPE=$(git -C "$WT" diff --name-only "$BASE"...HEAD)
+```
+
+A finding whose fix would modify an existing file that is not in `$SCOPE` is
+never fixed here: sort it as **new capability** (Step 1a) with the reason
+"outside this branch's diff (base `<BASE>`)", so it lands in `## New
+capability` and `## Settled` for the branch that owns that file. Adding a new
+file (a test for this branch's code, say) is fine. Pass `$SCOPE` to every
+fixer sub-agent in Step 3 as the files it may modify, and before the Step 4
+commit check `git diff --name-only` against it: revert any change to an
+existing file outside it and say so in the summary. If `$BASE` didn't
+resolve, `$SCOPE` is empty: say so and treat every file in the review as in
+scope, as before.
+
+## Step 1a: Fix or New Capability
+
+Runs before Step 1b, against the **Auto-fix** and **Optional** buckets. A
+review on a fix branch often asks for things the branch never set out to do
+("add a red exit", "emit an event", "probe the lock"). Building those here
+grows the diff, and every addition needs its own review: that is how a
+two-line fix took 13 gate rounds (sharpen#37). So sort each finding first:
+
+- **fix**: the diff caused or worsened the problem, or the remedy stays
+  inside what the branch set out to do. Applied as usual (Steps 1b to 4).
+- **new capability**: the remedy adds behavior the branch did not set out to
+  provide, and the problem was not introduced by this diff. Signs: a new
+  flag, option, event, metric, alert, probe, endpoint or file; a guard for a
+  gap that existed before the branch; a change to code the diff did not
+  touch. Read the branch's plan if it exists
+  (`$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md`, its scope and approach) and the
+  diff: a remedy outside both is new capability.
+
+When unsure, it is a **fix**. A 🚨 Critical finding is never sorted as new
+capability on your own judgment: if one looks like it, ask the person (with
+your host's question tool if it has one, otherwise in chat) whether to fix it
+here or file it, and wait for the answer. If no answer can come (an
+unattended run), treat it as a **fix** and list the question under the Step 4
+summary's Open questions block. Gates 4 and 6 still require every Critical finding
+to be resolved, and filing one as new capability counts only when the person
+chose that.
+
+A new-capability finding is **not built and leaves no marker in the code**,
+so it adds no commit and no review round. Instead:
+
+1. **Always (every host):** record it in the Step 4b report under
+   `## New capability`, with a ready-to-paste issue title and body, and add
+   it to `## Settled` (below) so later reviews don't raise it again.
+2. **Enhancement, when `--file-issues` was passed and `gh` is available:**
+   file it as an issue with the same dedupe, label and failure handling as
+   Step 1c, using the title prefix `grumpy (new capability):`. A failed or
+   skipped filing leaves the report entry as the record; it never blocks.
+
+Step 1a runs first, so a finding that is new capability is recorded here
+and never reaches Step 1b's deferral table, even if it would be eligible
+there. Say how many findings you sorted as new capability, and list them, in
+the Step 4 summary.
+
+### The `## Settled` list
+
+`## Settled` in the Step 4b report is how `/grumpy:review` and
+`/grumpy:imagine` know a finding was already decided, so they don't raise it
+again every round. Only these go in it:
+
+- each new-capability finding from this step;
+- each finding Step 1b deferred with a `ponytail:` marker;
+- each Optional finding the person declined in Step 5, with what they said.
+
+One line per finding, in exactly this shape:
+
+```
+- <file:line> | <the finding's own text, first 120 characters> | <new-capability|deferred|declined> | <reason>
+```
+
+Trim the finding text at a word boundary and drop trailing spaces; review
+and imagine match on the problem it describes, not on exact text.
+
+Every entry names one finding at one `file:line` and gives a reason in plain
+words (why it is out of scope, the deferral's trigger, or what the person
+said). Never write an entry for a whole file, a directory, an aspect or a
+category, and never one without a reason: review and imagine ignore such
+entries, so the finding comes back anyway.
+
 ## Step 1b: Split Off Deferrable Findings
 
 Runs against the **Auto-fix** and **Optional** buckets, before Step 2 turns
@@ -436,9 +529,17 @@ Deferred [N]: [marked, not fixed — the ceiling is documented, not ignored]
 - [Serious|Questionable] [file:line]: [marker text] — [#issue number, "would file", or "issue filing failed: <reason>"]
 ...
 
+New capability [N]: [not built here — this branch fixes what it set out to fix]
+- [file:line]: [one-line summary] — [#issue number, "would file", or "issue filing failed: <reason>"]
+...
+
+Open questions [N]: [Critical findings that looked like new capability, asked and not yet answered; fixed meanwhile]
+- [file:line]: [the question as asked]
+...
+
 [If all fixes applied cleanly]: "You're welcome."
 [If any sub-agent flagged uncertainty]: "Double-check [file] — I fixed what I could but that section had 'here be dragons' energy."
-[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"]
+[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"; the same for New capability and Open questions]
 ```
 
 ## Step 4b: Persist the Fix Report
@@ -464,6 +565,14 @@ imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fi
 ## Fixed
 - [file:line]: [one-line description of what changed]
 
+## New capability
+- [file:line]: [finding text] — [#issue, "would file", or "filing failed: <reason>"]
+  Title: grumpy (new capability): [one-line summary] ([file]:[line])
+  Body: [finding text, why it is out of this branch's scope, and the branch]
+
+## Settled
+- [file:line] | [finding text, first 120 chars] | [new-capability|deferred|declined] | [reason]
+
 ## Deferred
 - [Serious|Questionable] [file:line]: [marker text] — [#issue or "not filed"]
 
@@ -485,6 +594,10 @@ never attempted, so filing later is a copy-paste, not a re-derivation]
 
 Omit any section with nothing in it — an empty `## Deferred` heading is
 noise, not signal.
+
+`## Settled` accumulates across runs: each run's section lists only that
+run's entries, and review and imagine read the `## Settled` sections of
+every dated run in the file.
 
 ## Step 5: Offer Optional Fixes
 
@@ -517,7 +630,9 @@ wait for the answer before going on):
 }
 ```
 
-If yes, repeat Steps 2–4 for the Optional bucket.
+If yes, repeat Steps 2–4 for the Optional bucket. If no, add each declined
+finding to `## Settled` as `declined`, with what the person said as the
+reason ("the person chose not to fix it here" when they gave none).
 
 ## Step 6: Leave a Receipt
 
@@ -547,7 +662,10 @@ WT="${WT:-.}"
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
-  python3 "$RECEIPT" fix --worktree "$WT"
+  # --stage names which review this run resolved: `review` when it fixed
+  # review.md's findings (gate 4), `imagine` when it fixed imagine.md's
+  # (gate 6). One run earns one fix gate.
+  python3 "$RECEIPT" fix --stage review --worktree "$WT"   # or: --stage imagine
 else
   echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
 fi

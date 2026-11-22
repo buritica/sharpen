@@ -276,6 +276,45 @@ No separate ledger command ships here — `grep -rnE '(#|//|--) ?ponytail:' .`
 lists every marker in the repo, and `/ponytail:ponytail-debt` is the ledger
 when the ponytail plugin is installed.
 
+## Stacked branches review their own layer
+
+`simplify`, `review`, `imagine` and `fix` diff against the base
+`scripts/diff_base.py` prints, not always main. sdlc 4.17.0+ resolves it for
+the whole gate chain and writes `.claude/sdlc/<branch>/base.json`
+(`record-gate.py --set-base <parent>` pins it); without that file grumpy
+applies the same order itself: `git config branch.<branch>.sdlcBase`, the open
+PR's base (via `gh`), the branch's upstream parent, then the default branch.
+On a stack (main <- A <- B <- yours) the passes review only your layer, and
+`/grumpy:fix` refuses to modify an existing file outside it: such a finding is
+recorded as new capability for the branch that owns the file.
+
+Each fix run writes its own receipt, `receipt.py fix --stage review` (gate 4)
+or `--stage imagine` (gate 6), so one run can never earn both fix gates.
+
+## Keeping review loops short (sharpen#37)
+
+A review on a fix branch tends to ask for things the branch never set out to do, and
+every one built there needs its own review round. Three rules keep the loop short:
+
+- **Fix or new capability.** `/grumpy:fix` sorts each finding before acting on it. A
+  finding whose remedy adds behavior the branch didn't set out to provide (a new flag,
+  event, probe, endpoint or file; a guard for a gap that predates the branch), and that
+  this diff didn't cause, is **new capability**: it is not built and leaves no marker in
+  the code. Every host gets it recorded in the fix report under `## New capability`,
+  with a ready-to-paste issue. With `--file-issues` and `gh`, it is also filed. A
+  Critical finding is never sorted this way on the agent's own judgment; fix asks the
+  person.
+- **Settled findings.** The fix report keeps a `## Settled` list: one line per decided
+  finding (new capability, `ponytail:` deferral, or declined by the person), each with
+  its `file:line` and a reason. `/grumpy:review` and `/grumpy:imagine` hold back a
+  finding only when an entry names the same spot and the same problem with a reason, and
+  never a Critical one. The report says how many were held back and lists them, so
+  nothing disappears silently. An entry for a whole file or category, or one with no
+  reason, settles nothing.
+- **Split guidance.** The review and imagine verdicts can now say "ship it and file the
+  rest" (nothing Critical left, only new capability or nits) or "split it" (the fixes
+  would add files outside the plan or outgrow the original diff).
+
 ## Grumpy Levels
 
 All commands support `--level` to control intensity:

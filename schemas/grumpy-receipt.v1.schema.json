@@ -12,7 +12,8 @@
     "head": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "written_at": {"type": "string", "format": "date-time"},
     "report": {"description": "The pass's report file, relative to <worktree>/.claude/grumpy/<branch>/.", "enum": ["simplify.md", "review.md", "imagine.md", "fix.md"]},
-    "report_sha256": {"description": "sha256 of that report when the receipt was written; links the receipt to the evidence, not a security boundary.", "type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "report_sha256": {"description": "sha256 of that report when the receipt was written; links the receipt to the evidence, not a security boundary.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stage": {"description": "fix only: which review the run resolved. Written as receipts/fix-<stage>.json, so one fix run earns one fix gate (grumpy 2.11.0+).", "enum": ["review", "imagine"]}
   },
   "additionalProperties": true
 }

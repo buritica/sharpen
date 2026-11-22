@@ -3,6 +3,28 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.11.0 — stacked branches review their own layer, fix sorts out new capability
+
+`/grumpy:fix` sorts each finding as a fix or as new capability before acting on it, and
+records new-capability findings in its report (`## New capability`, with a ready-to-paste
+issue) instead of building them; `--file-issues` also files them where `gh` is available.
+Its report gains a `## Settled` list (`file:line | finding | decision | reason`) that
+`/grumpy:review` and `/grumpy:imagine` read, holding back a finding only when an entry
+names the same spot and problem with a reason, never a Critical one, and always listing
+what they held back. Both verdicts gain "ship it and file the rest" and "split it". The
+sub-agent prompts and their pipe format are unchanged. Nothing to migrate: an older
+`fix.md` without `## Settled` holds nothing back.
+
+Every gate pass (`simplify`, `review`, `imagine`, `fix`) now diffs against the base
+`scripts/diff_base.py` prints: sdlc's resolved base (`.claude/sdlc/<branch>/base.json`,
+sdlc 4.17.0+), else `git config branch.<branch>.sdlcBase`, else the open PR's base, else
+the branch's upstream parent, else the default branch. On a stacked branch the passes
+review only its own layer, and `/grumpy:fix` refuses to edit an existing file outside that
+diff (it records such a finding as new capability instead). Each fix run now writes its
+own receipt (`receipt.py fix --stage review|imagine` -> `fix-review.json` /
+`fix-imagine.json`), so one run can't earn both fix gates. Nothing to migrate: without
+sdlc's base file the passes fall back to the default branch as before.
+
 ## 2.10.0 — plugin paths resolve on every host
 
 Every path a pass reads from its own plugin (`scripts/receipt.py`,

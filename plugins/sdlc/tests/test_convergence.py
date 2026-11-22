@@ -10,7 +10,15 @@ import os
 import re
 import unittest
 
-from test_receipts import BRANCH, ReceiptTestBase, git, ignore_artifacts
+import time
+
+from test_receipts import (
+    BRANCH,
+    GRUMPY_RECEIPT,
+    ReceiptTestBase,
+    git,
+    ignore_artifacts,
+)
 
 
 class StackTest(ReceiptTestBase):
@@ -346,14 +354,25 @@ class FixReceiptTest(ReceiptTestBase):
             self.assertEqual(self.verify(step).returncode, 0)
 
     def write_stage_receipt(self, stage):
-        self.receipt("fix")
+        # grumpy 2.11's writer: `receipt.py fix --stage <stage>`.
+        self.report("fix")
+        time.sleep(0.01)
+        r = self.run_py(
+            GRUMPY_RECEIPT, "fix", "--stage", stage, "--worktree", self.repo
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
         d = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
-        with open(os.path.join(d, "fix.json")) as f:
-            receipt = json.load(f)
-        receipt["stage"] = stage
-        with open(os.path.join(d, f"fix-{stage}.json"), "w") as f:
-            json.dump(receipt, f)
-        os.unlink(os.path.join(d, "fix.json"))
+        with open(os.path.join(d, f"fix-{stage}.json")) as f:
+            self.assertEqual(json.load(f)["stage"], stage)
+        time.sleep(0.01)
+
+    def test_a_stale_fix_report_is_refused_for_the_second_stage(self):
+        self.write_stage_receipt("review")
+        r = self.run_py(
+            GRUMPY_RECEIPT, "fix", "--stage", "imagine", "--worktree", self.repo
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("predates the last receipt", r.stderr)
 
     def test_one_shared_fix_receipt_cannot_earn_both_fix_gates(self):
         self.receipt("fix")  # first fix: --verify skipped

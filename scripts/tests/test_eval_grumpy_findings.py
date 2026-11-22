@@ -175,5 +175,28 @@ class TestScore(unittest.TestCase):
         self.assertEqual(result["misses"], [])
 
 
+class TestExpectAbsent(unittest.TestCase):
+    SWALLOW = {"file": "src/billing/charge.py", "text": "except pass swallows it"}
+    FAKE = {"file": "src/billing/test_charge.py", "text": "assert True tests nothing"}
+
+    def test_absent_finding_is_left_out_of_recall(self):
+        result = eval_grumpy_findings.score(
+            GOLDEN, [self.SWALLOW], expect_absent=["fake-test-assertion"]
+        )
+        self.assertEqual(result["recall"], 1.0)
+        self.assertEqual(result["scored"], 1)
+        self.assertEqual(result["present"], [])
+
+    def test_expected_absent_finding_that_shows_up_is_reported(self):
+        result = eval_grumpy_findings.score(
+            GOLDEN, [self.SWALLOW, self.FAKE], expect_absent=["fake-test-assertion"]
+        )
+        self.assertEqual(result["present"], ["fake-test-assertion"])
+
+    def test_unknown_id_is_an_error(self):
+        with self.assertRaises(ValueError):
+            eval_grumpy_findings.score(GOLDEN, [], expect_absent=["nope"])
+
+
 if __name__ == "__main__":
     unittest.main()

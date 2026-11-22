@@ -1,0 +1,28 @@
+diff --git a/src/notes/merge.py b/src/notes/merge.py
+--- a/src/notes/merge.py
++++ b/src/notes/merge.py
+@@ -1,8 +1,12 @@
+ from .store import archive, save
+
+
+ def merge_duplicate(survivor, duplicate):
++    if duplicate.body:
++        survivor.body = survivor.body + "\n\n---\n\n" + duplicate.body
++        save(survivor)
+     archive(duplicate)
+     return survivor
+diff --git a/src/notes/test_merge.py b/src/notes/test_merge.py
+--- a/src/notes/test_merge.py
++++ b/src/notes/test_merge.py
+@@ -1,3 +1,13 @@
+ from .merge import merge_duplicate
++
++
++def test_body_is_copied(note_factory):
++    a, b = note_factory(body="a"), note_factory(body="b")
++    assert merge_duplicate(a, b).body == "a\n\n---\n\nb"
++
++
++def test_empty_body_is_skipped(note_factory):
++    a, b = note_factory(body="a"), note_factory(body="")
++    assert merge_duplicate(a, b).body == "a"
