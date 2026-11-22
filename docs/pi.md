@@ -36,6 +36,7 @@ install. `scripts/check-marketplace.py` keeps both registries consistent.
 |---|---|---|
 | `SessionStart` | `session_start` | run `session-start.py` (writes `capabilities.pi.json`; the extension exports `SHARPEN_HOST=pi`) |
 | `PreToolUse` Bash | `tool_call` (bash) | run `enforce-sdlc-gates.py` then `block-direct-gate-record.py`; block on non-zero exit |
+| `PreToolUse` MCP PR tools | `tool_call` (any tool named `*create_pull_request` / `*create_merge_request`, e.g. pi's built-in MCP or `mcp_<server>_create_pull_request`) | run `enforce-sdlc-gates.py` with the real tool name and input; block on non-zero exit |
 | `PostToolUse` Bash | `tool_result` (bash) | run `auto-init-gate-cycle.py`; surface its notice |
 | `PreToolUse` Bash (guardrails) | `tool_call` (bash) | run `hooks/_block-main-commits.py`; block on non-zero exit |
 | `PostToolUse` Skill | — | **no pi equivalent** (pi has no `Skill` tool); not needed, gates record from receipts |

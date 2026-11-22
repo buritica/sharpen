@@ -112,7 +112,7 @@ Removing `sdlc` doesn't touch a repo's own `AGENTS.md` contract or its `.sharpen
 
 ## Contributing
 
-This repo runs its own gates. `/sdlc:gate` before every PR, and the hook blocks `gh pr create` until the chain finishes.
+This repo runs its own gates. `/sdlc:gate` before every PR, and the hook blocks opening a PR (gh, glab, hub, `gh api` or an MCP tool) until the chain finishes.
 
 Plugin changes need the version bumped in `plugins/<name>/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, **and** `plugins/<name>/package.json` (the pi manifest), in the same PR — a merged change without the bump is live in the repo and undelivered to users. `scripts/check-marketplace.py` enforces all three, and now also validates the pi `package.json` manifests and that every pi extension's referenced hook script still exists.
 

@@ -11,6 +11,8 @@
  * Event mapping (see docs/pi.md for the full contract):
  *   SessionStart     -> pi `session_start`          -> session-start.py
  *   PreToolUse Bash  -> pi `tool_call` (bash)       -> enforce-sdlc-gates.py
+ *   PreToolUse MCP   -> pi `tool_call` (*create_pull_request,
+ *                       *create_merge_request)     -> enforce-sdlc-gates.py
  *                                                    -> block-direct-gate-record.py
  *   PostToolUse Bash -> pi `tool_result` (bash)     -> auto-init-gate-cycle.py
  *   Stop             -> pi `agent_end`              -> sweep-skill-receipts.py
@@ -77,16 +79,45 @@ async function gateConfirmation(
   return { block: true, reason: clean, terminate: true };
 }
 
+// Same suffix rule as pr_paths._MCP_PR_TOOL (python stays the source of truth).
+const MCP_PR_TOOL = /(?:^|_)create_(?:pull|merge)_request$/;
+
 export default function (pi: ExtensionAPI) {
   // SessionStart: write the capability manifest the gate store reads.
   pi.on("session_start", async (_event, ctx) => {
     await runHook("session-start.py", {}, ctx.cwd);
   });
 
-  // PreToolUse Bash: block `gh pr create` until gates pass, and block direct
+  // PreToolUse: block every PR path (see pr_paths.py) until gates pass, and block direct
   // `record-gate.py --record` for skill-gated gates.
   pi.on("tool_call", async (event, ctx) => {
-    if (!isToolCallEventType("bash", event)) return;
+    // Any other tool that opens a PR (pi's built-in MCP, or an MCP extension's
+    // `mcp_<server>_create_pull_request`) goes through the same script under
+    // its own name; pr_paths.py decides whether it is a PR. Name-only filter
+    // here so python isn't spawned on every tool call.
+    if (!isToolCallEventType("bash", event)) {
+      if (!MCP_PR_TOOL.test(event.toolName)) return;
+      const out = await runHook(
+        "enforce-sdlc-gates.py",
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: event.toolName,
+          tool_input: event.input,
+          cwd: ctx.cwd,
+        },
+        ctx.cwd,
+      );
+      if (out.exitCode !== 0) {
+        return gateConfirmation(
+          out.stderr,
+          "SDLC gate incomplete — block PR?",
+          "Run /sdlc:gate to finish the chain, then retry.",
+          ctx,
+        );
+      }
+      if (out.systemMessage) ctx.ui.notify(out.systemMessage, "info");
+      return;
+    }
     const payload = {
       hook_event_name: "PreToolUse",
       tool_name: "Bash",
