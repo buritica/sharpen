@@ -5,7 +5,9 @@ Offline and deterministic: no LLM is called. Host runs use a fake CLI on PATH
 that writes a canned report, so the runner's plumbing is tested, not a model.
 """
 
+import argparse
 import contextlib
+import difflib
 import importlib.util
 import io
 import json
@@ -24,6 +26,29 @@ spec = importlib.util.spec_from_file_location(
 )
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+
+def changed_lines(case, cases_dir=None):
+    """{path: set of after/ line numbers that are added or changed}."""
+    base = os.path.join(cases_dir or bench.CASES_DIR, case)
+    before = bench._tree_files(os.path.join(base, "before"))
+    after = bench._tree_files(os.path.join(base, "after"))
+    out = {}
+    for rel, path in after.items():
+        with open(path, encoding="utf-8") as f:
+            new = f.read().splitlines()
+        old = []
+        if rel in before:
+            with open(before[rel], encoding="utf-8") as f:
+                old = f.read().splitlines()
+        lines = set()
+        matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
+        for tag, _, _, j1, j2 in matcher.get_opcodes():
+            if tag in ("replace", "insert"):
+                lines.update(range(j1 + 1, j2 + 1))
+        if lines:
+            out[rel] = lines
+    return out
 
 
 def F(severity, text, file="src/a.py", line=None):
@@ -166,6 +191,29 @@ class ParseReportTest(unittest.TestCase):
         findings = bench.parse_report(report)
         self.assertEqual([f["severity"] for f in findings], ["CRIT", "WARN"])
 
+    def test_placeholder_bullets_are_not_findings(self):
+        report = (
+            "## Critical Issues\n\n- No critical issues found.\n\n"
+            "## Serious Concerns\n\n- None.\n- Nothing to report\n"
+            "- None is returned after retries [a.py:3]\n"
+            "- Nothing logs the failure [a.py:5]\n"
+        )
+        texts = [f["text"][:7] for f in bench.parse_report(report)]
+        self.assertEqual(texts, ["None is", "Nothing"])
+
+    def test_deferred_list_alone_ends_the_section(self):
+        report = (
+            "## Questionable Decisions\n\n- keep [a.py:1]\n\n"
+            "Deferred findings honored: 1 \u2014 already marked at the line.\n"
+            "- a.py:9: not raised\n"
+        )
+        self.assertEqual(len(bench.parse_report(report)), 1)
+
+    def test_has_severity_sections(self):
+        self.assertTrue(bench.has_severity_sections("## Serious Concerns\n"))
+        self.assertFalse(bench.has_severity_sections("# Code Review\nAll good.\n"))
+        self.assertFalse(bench.has_severity_sections("```\n## Critical Issues\n```\n"))
+
     def test_held_back_lists_are_not_findings(self):
         report = (
             "## Simplify This\n\n"
@@ -197,37 +245,17 @@ class ParseReportTest(unittest.TestCase):
         self.assertEqual(bench.parse_locations("bumped to v1.2 e.g. later"), [])
 
 
-class ParsePipeAndJsonTest(unittest.TestCase):
-    def test_pipe_lines(self):
-        raw = "CRIT|src/a.py:30|name is undefined | really|fact|code\nCONTEXT|area ok\nWARN|bad\n"
-        findings = bench.parse_pipe(raw)
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0]["locations"][0]["line"], 30)
-        self.assertIn("| really", findings[0]["text"])
-
-    def test_pipe_skips_lines_without_pipes_or_with_unknown_severity(self):
-        raw = "just prose\nBOGUS|src/a.py:1|text|fact|code\nWARN|src/a.py:3|real|fact|code\n"
-        findings = bench.parse_pipe(raw)
-        self.assertEqual([f["text"] for f in findings], ["real"])
-
-    def test_json_old_shape(self):
-        findings = bench.normalize_json(
-            [{"severity": "WARN", "file": "src/a.py", "text": "swallows"}]
-        )
-        self.assertEqual(
-            findings[0]["locations"][0], {"file": "src/a.py", "line": None, "end": None}
-        )
-
-    def test_json_locations_shape_passes_through(self):
-        locs = [{"file": "src/a.py", "line": 4, "end": 5}]
-        findings = bench.normalize_json(
-            [{"severity": "WARN", "text": "t", "locations": locs}]
-        )
-        self.assertEqual(findings[0]["locations"], locs)
-
-
 class MatchTest(unittest.TestCase):
     T = KEY["planted"][0]
+
+    def test_keywords_match_at_a_word_start_in_any_case(self):
+        t = {"file": "src/a.py", "lines": [5, 5], "keywords": ["log"]}
+        self.assertTrue(bench.matches(t, F("WARN", "No LOGGING here", line=5)))
+        self.assertFalse(bench.matches(t, F("WARN", "the catalog is off", line=5)))
+        f = {"file": "src/a.py", "lines": [5, 5], "keywords": ["factory", "smoke"]}
+        self.assertTrue(bench.matches(f, F("NOTE", "drop FormatterFactory", line=5)))
+        self.assertTrue(bench.matches(f, F("NOTE", "test_smoke is empty", line=5)))
+        self.assertFalse(bench.matches(f, F("NOTE", "SATISFACTORY", line=5)))
 
     def test_line_window_and_keyword(self):
         self.assertTrue(bench.matches(self.T, F("WARN", "swallows errors", line=13)))
@@ -307,7 +335,11 @@ class ScoreTest(unittest.TestCase):
         )
         self.assertEqual(s["duplicates"], 1)
         self.assertEqual(s["noise"], 0)
+        # A duplicate is neither a true nor a false positive.
+        self.assertEqual(s["blocking"], 1)
         self.assertEqual(s["precision"], 1.0)
+        summary = bench.summarize([{"case": "c", "pass": "review", "score": s}])
+        self.assertEqual(summary["c/review"]["duplicates"], 1)
 
     def test_finding_without_a_file_is_unlocated_not_noise(self):
         s = bench.score(KEY, [F("WARN", "nothing logs anything", file="", line=None)])
@@ -509,12 +541,43 @@ class SummaryCompareTest(unittest.TestCase):
             self.assertNotIn("score", meta["runs"][1])
             self.assertIn("billing-planted/review", meta["summary"])
 
-    def test_missing_case_is_a_note(self):
+    def test_case_missing_from_candidate_is_a_regression(self):
         problems, notes = bench.compare(
             _results({"a/review": {}, "b/review": {}}), _results({"a/review": {}})
         )
+        self.assertEqual(problems, ["b/review: in baseline, not in candidate"])
+
+    def test_empty_candidate_is_a_regression(self):
+        problems, _ = bench.compare(_results({"a/review": {}}), {"summary": {}})
+        self.assertIn("candidate has no runs", problems)
+
+    def test_failed_runs_compare_as_rates(self):
+        problems, _ = bench.compare(
+            _results({"a/review": {"runs": 1, "failed_runs": 1}}),
+            _results({"a/review": {"runs": 3, "failed_runs": 1}}),
+        )
         self.assertEqual(problems, [])
-        self.assertEqual(notes, ["b/review: not in candidate"])
+
+    def test_overrated_and_duplicate_rises_are_regressions(self):
+        problems, _ = bench.compare(
+            _results({"a/review": {"overrated": 0.0, "duplicates": 0.0}}),
+            _results({"a/review": {"overrated": 1.0, "duplicates": 2.0}}),
+        )
+        self.assertEqual(len(problems), 2)
+
+    def test_precision_drop_boundary(self):
+        problems, _ = bench.compare(
+            _results({"a/review": {"precision": 0.9}}),
+            _results({"a/review": {"precision": 0.8}}),
+            precision_drop=0.1 + 1e-9,
+        )
+        self.assertEqual(problems, [])
+        problems, _ = bench.compare(
+            _results({"a/review": {}}),
+            _results({"a/review": {"recall": 0.9}}),
+            recall_drop=0.2,
+        )
+        self.assertEqual(problems, [])
 
     def test_new_case_in_candidate_is_a_note(self):
         problems, notes = bench.compare(
@@ -582,7 +645,7 @@ class FixtureTest(unittest.TestCase):
     def test_keys_point_at_real_changed_lines(self):
         for case in bench.list_cases():
             key = bench.load_key(case)
-            changed = bench.changed_lines(case)
+            changed = changed_lines(case)
             after = os.path.join(bench.CASES_DIR, case, "after")
             ids = [t["id"] for t in key["planted"] + key["acceptable"]]
             self.assertEqual(len(ids), len(set(ids)), case)
@@ -687,17 +750,36 @@ class FixtureTest(unittest.TestCase):
                 self.assertIn("## Settled", f.read())
             self.assert_clean_worktree(d)
 
-    def test_find_report_falls_back_to_a_walk(self):
+    def test_find_report_reads_only_the_branch_folder(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(bench.find_report(d, "bench/x", "review"))
             odd = os.path.join(d, ".claude", "grumpy", "elsewhere")
             os.makedirs(odd)
             with open(os.path.join(odd, "review.md"), "w") as f:
                 f.write("# Code Review\n")
+            self.assertIsNone(bench.find_report(d, "bench/x", "review"))
+            right = os.path.join(d, ".claude", "grumpy", "bench", "x")
+            os.makedirs(right)
+            with open(os.path.join(right, "review.md"), "w") as f:
+                f.write("# Code Review\n")
             self.assertEqual(
                 bench.find_report(d, "bench/x", "review"),
-                os.path.join(odd, "review.md"),
+                os.path.join(right, "review.md"),
             )
+
+    def test_bad_keys_are_refused(self):
+        good = {"planted": [{"id": "a", "severity": "WARN"}], "acceptable": []}
+        good.update(expect_absent=[], passes=["review"])
+        bench.validate_key(good)
+        for change in (
+            {"expect_absent": ["typo"]},
+            {"planted": [{"id": "a", "severity": "CRITICAL"}]},
+            {"acceptable": [{"id": "a"}]},
+            {"acceptable": [{"id": "b", "max_severity": "HIGH"}]},
+            {"passes": ["reveiw"]},
+        ):
+            with self.assertRaises(ValueError, msg=change):
+                bench.validate_key(dict(good, **change))
 
     def test_cli_version_of_a_missing_binary_is_none(self):
         self.assertIsNone(bench.cli_version("definitely-not-a-binary-xyz"))
@@ -854,6 +936,20 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(r["status"], "timeout")
         self.assertIsNone(r["exit_code"])
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "t.log")))
+        # Partial output is decoded, and a printed report is not scored.
+        slow_print = [
+            sys.executable,
+            "-c",
+            "import sys, time; print('# Code Review\\n\\n## Critical Issues\\n\\n- x [a.py:1]');"
+            " sys.stdout.flush(); time.sleep(10)",
+        ]
+        r = bench.run_one(
+            "clean-refactor", "review", slow_print, None, self.tmp, "t2", 1.5, False
+        )
+        self.assertEqual(r["status"], "timeout")
+        self.assertNotIn("score", r)
+        with open(os.path.join(self.tmp, "t2.log"), encoding="utf-8") as f:
+            self.assertTrue(f.read().startswith("# Code Review"))
         r = bench.run_one(
             "clean-refactor",
             "review",
@@ -866,6 +962,45 @@ class RunnerTest(unittest.TestCase):
         )
         self.assertEqual(r["status"], "cli-missing")
         self.assertIn("not found on PATH", r["error"])
+
+    def test_unparseable_report_is_a_failed_run(self):
+        out = [sys.executable, "-c", "print('# Code Review\\n\\nAll good.')"]
+        r = bench.run_one(
+            "clean-refactor", "review", out, None, self.tmp, "u", 5, False
+        )
+        self.assertEqual(r["status"], "unparsed")
+        self.assertNotIn("score", r)
+
+    def test_host_markers_are_not_inherited(self):
+        probe = [
+            sys.executable,
+            "-c",
+            "import os; print('CC=' + os.environ.get('CLAUDECODE', '-'),"
+            " 'CPR=' + os.environ.get('CLAUDE_PLUGIN_ROOT', '-'),"
+            " 'GPR=' + str(bool(os.environ.get('GRUMPY_PLUGIN_ROOT'))))",
+        ]
+        old = {k: os.environ.get(k) for k in ("CLAUDECODE", "CLAUDE_PLUGIN_ROOT")}
+        os.environ.update(CLAUDECODE="1", CLAUDE_PLUGIN_ROOT="/x")
+        try:
+            bench.run_one(
+                "clean-refactor", "review", probe, None, self.tmp, "e", 5, False
+            )
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        with open(os.path.join(self.tmp, "e.log"), encoding="utf-8") as f:
+            self.assertEqual(f.read().split(), ["CC=-", "CPR=-", "GPR=True"])
+
+    def test_a_run_that_raises_is_recorded_not_fatal(self):
+        args = argparse.Namespace(timeout=5, keep=False)
+        r = bench._run_labelled(
+            "no-such-case", "review", ["x"], None, self.tmp, "z", args
+        )
+        self.assertEqual(r["status"], "error")
+        self.assertIn("error", r)
 
     def test_keep_leaves_the_repo_behind(self):
         quiet = [sys.executable, "-c", "pass"]
@@ -907,34 +1042,6 @@ class RunnerTest(unittest.TestCase):
         code, stdout = self.run_cli("compare", a, b)
         self.assertEqual(code, 1)
         self.assertIn("REGRESSION", stdout)
-
-    def test_score_accepts_pipe_and_json_formats(self):
-        pipe = os.path.join(self.tmp, "r.txt")
-        with open(pipe, "w") as f:
-            f.write(
-                "WARN|src/billing/charge.py:18|bare except swallows errors|fact|errors\n"
-            )
-        code, stdout = self.run_cli(
-            "score", pipe, "--case", "billing-planted", "--format", "pipe"
-        )
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(stdout)["hits"], ["swallowed-exception"])
-        js = os.path.join(self.tmp, "r.json")
-        with open(js, "w") as f:
-            json.dump(
-                [
-                    {
-                        "severity": "WARN",
-                        "file": "src/billing/charge.py",
-                        "line": 18,
-                        "text": "bare except swallows errors",
-                    }
-                ],
-                f,
-            )
-        code, stdout = self.run_cli("score", js, "--case", "billing-planted")
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(stdout)["hits"], ["swallowed-exception"])
 
     def test_compare_prints_notes_and_prompt_drift(self):
         a, b = os.path.join(self.tmp, "a.json"), os.path.join(self.tmp, "b.json")

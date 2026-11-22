@@ -50,8 +50,9 @@ precision and blocking noise, and writes results to the gitignored `.sharpen/ben
 `plugins/grumpy/tests/bench/README.md` for cases, cost and the per-host command lines. It
 is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only constraint below), so
 skipping it means a prompt change can regress silently. `compare` exits non-zero on a
-recall drop, a rise in blocking noise or a precision drop; don't merge on a regression
-you can't explain.
+recall drop, a rise in blocking noise or overrated findings, or a precision drop of more
+than 10 points (all thresholds are flags); don't merge on a regression you can't
+explain.
 
 ## Gates on this repo
 

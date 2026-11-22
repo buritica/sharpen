@@ -13,11 +13,18 @@
         12
       ],
       "keywords": [
-        "log",
+        "logging",
+        "logged",
+        "logger",
+        "log line",
+        "log message",
+        "log call",
+        "no log",
+        "not log",
+        "never log",
         "metric",
         "observab",
         "audit trail",
-        "event",
         "monitor"
       ],
       "max_severity": "NOTE"

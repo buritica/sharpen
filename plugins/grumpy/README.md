@@ -81,9 +81,13 @@ writes against each case's answer key, and compares runs:
 
 - **recall**: planted issues found, matched by file, a line window and a keyword,
   one finding per issue
-- **precision**: CRIT/WARN findings that are planted or known-acceptable
-- **blocking noise**: CRIT/WARN findings that match nothing, plus acceptable
-  findings rated above their cap (a missing log line flagged as a must-fix)
+- **precision**: of the distinct, located CRIT/WARN findings, the share that are
+  planted or known-acceptable within their severity cap. Duplicates (a second finding
+  for an issue already claimed) and findings with no file reference are counted on
+  their own, not in precision.
+- **blocking noise**: CRIT/WARN findings that match nothing
+- **overrated**: acceptable findings rated above their cap (a missing log line flagged
+  as a must-fix), counted against precision and compared on their own
 
 Clean, comment-only and capability-bait cases have no planted issues, so any
 blocking finding there is noise of the kind that makes review loops run long.

@@ -32,9 +32,19 @@ report is scored and the run is marked `scored-from-output`. The report, the hos
 pass's prompt files, so two runs can be told apart later.
 
 `--repeat` (default 3) runs each case several times; models aren't deterministic, and the
-spread across repeats is reported next to the mean. `compare` exits 1 when the candidate
-loses recall, gains blocking noise, drops precision by more than 10 points, or has runs
-that wrote no report. Thresholds are flags.
+spread across repeats is reported next to the mean. `compare` exits 1 when the candidate,
+against the baseline:
+
+- loses recall (`--recall-drop`, default 0);
+- gains blocking noise or overrated findings (`--noise-rise`, default 0);
+- gains duplicate findings by more than one per run (`--dup-rise`);
+- drops precision by more than 10 points (`--precision-drop`, default 0.1);
+- has a higher share of failed runs or of runs that re-raised a settled finding;
+- or is missing a case/pass the baseline has, or has no runs at all.
+
+A run fails when it wrote no report, timed out (even with a half-written report), raised
+an error, or produced a report with none of the severity headings the scorer reads.
+Runs scored from printed output are counted in `from_output`.
 
 ## Hosts
 
@@ -47,15 +57,17 @@ that wrote no report. Thresholds are flags.
 Codex and pi get the skill body inline because skill discovery differs per host and
 version, and inlining makes the run independent of what is installed. `--invoke inline`
 does the same on Claude Code. `--cmd` replaces the whole command line (`{model}`,
-`{grumpy}` and `{prompt}` are substituted), so a wrong flag can be fixed without a code
-change. Claude Code runs get `acceptEdits` plus an allowlist of the tools a pass needs
-(git, python3, file tools, Agent), not a permission bypass; Codex runs in its
+`{grumpy}`, `{claude_tools}` and `{prompt}` are substituted; `{model}` must be its own
+token after its flag, so both drop when no model is given), so a wrong flag can be fixed
+without a code change. Claude Code runs get `acceptEdits` plus an allowlist of what a
+review or imagine pass needs (git, python3, read-only file tools, `Write` scoped to the
+report folder, Agent), not a permission bypass; Codex runs in its
 `workspace-write` sandbox inside the temp repo.
 
 ## Cost
 
-Six cases, four for review and two for imagine. `run --pass all` with the default three
-repeats is 18 headless sessions per host and model. `--cases` and `--repeat 1` give a
+Seven cases, five for review and two for imagine. `run --pass all` with the default
+three repeats is 21 headless sessions per host and model. `--cases` and `--repeat 1` give a
 quick check.
 
 ## Cases
@@ -81,7 +93,7 @@ refer to files in `after/`. File basenames must be unique within a case.
   "description": "One sentence: what the change is and what a good review says.",
   "planted": [
     {"id": "swallowed-exception", "severity": "WARN", "file": "src/billing/charge.py",
-     "lines": [18, 19], "keywords": ["swallow", "silent", "pass"]}
+     "lines": [18, 19], "keywords": ["swallow", "silent", "bare except"]}
   ],
   "acceptable": [
     {"id": "no-backoff", "file": "src/billing/charge.py", "lines": [15, 21],
@@ -100,8 +112,17 @@ refer to files in `after/`. File basenames must be unique within a case.
 - **artifacts**: `{"fix.md": "artifacts/fix.md"}` copies earlier pass output into the
   case's `.claude/grumpy/<branch>/` folder before the pass runs.
 - **keywords**: a finding matches when it names the file, cites a line within 3 of the
-  range (or no line at all), and contains one keyword. Pick words a reviewer would use
-  for this issue and not for its neighbours.
+  range (or no line at all), and contains one keyword at a word start, ignoring case
+  (`log` matches "logging" and `factory` matches "FormatterFactory", but `log` doesn't
+  match "catalog"). A finding that cites the file without a line matches on keyword
+  alone, so pick words a reviewer would use for this issue and not for its neighbours:
+  avoid short stems like `pass` or `except` that also mean something else. A keyword
+  that starts with punctuation, such as `` `pass` ``, matches anywhere.
+- **passes**: optional, defaults to both review and imagine. Set it, or a review-only
+  case also runs, and scores every planted issue as a miss, under imagine.
+
+`load_key` refuses a key with duplicate ids, an unknown severity or pass, or an
+`expect_absent` id that names no planted issue, so a typo can't silently skew a score.
 
 The scorer reads only the severity sections of a rendered report: Critical Issues or
 Bugs Found (CRIT), Serious Concerns (WARN), Questionable Decisions and Simplify This

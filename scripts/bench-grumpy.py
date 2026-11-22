@@ -9,7 +9,8 @@ runs in CI, and results land in the gitignored .sharpen/bench/.
     bench-grumpy.py run --host claude [--model ID] [--pass review|imagine|all]
                         [--cases a,b] [--repeat N] [--invoke native|inline]
                         [--cmd TEMPLATE] [--timeout S] [--keep]
-    bench-grumpy.py score REPORT --case NAME [--format report|pipe|json]
+    bench-grumpy.py score REPORT --case NAME
+    bench-grumpy.py rescore RESULTS.json
     bench-grumpy.py compare BASELINE.json CANDIDATE.json
     bench-grumpy.py commands --host codex [--model ID] [--pass review]
     bench-grumpy.py cases
@@ -20,7 +21,7 @@ a key refer to the `after/` files.
 
 Scoring is deterministic: a finding matches a planted issue when it names the
 same file, a line within WINDOW lines of the issue's range, and one of its
-keywords. Matching is one to one, so a single finding can't claim two issues
+keywords (matched at a word start, case-insensitively). Matching is one to one, so a single finding can't claim two issues
 and two findings can't both claim one. Findings that match an `acceptable`
 entry (real, but not planted) don't count as noise unless they exceed that
 entry's `max_severity`.
@@ -28,7 +29,6 @@ entry's `max_severity`.
 
 import argparse
 import datetime
-import difflib
 import hashlib
 import json
 import os
@@ -39,6 +39,9 @@ import statistics
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frontmatter import split as split_frontmatter  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GRUMPY = os.path.join(ROOT, "plugins", "grumpy")
@@ -55,12 +58,16 @@ BLOCKING = {"CRIT", "WARN"}
 # the prompt on stdin. The codex flags (exec, --model, --sandbox
 # workspace-write, --skip-git-repo-check, `-` for stdin) match OpenAI's Codex
 # CLI docs as of 2026-11-22; the pi flags match docs.pi.dev. Neither has had a
-# live run yet, so results record `flags_verified: false` until one does.
+# live run yet, so their `verified` is False below and results record
+# `flags_verified: false`; flip it here after a live run confirms them.
 # --cmd overrides any of them without a code change, and `commands` prints
 # exactly what would run.
 # ---------------------------------------------------------------------------
-# What a pass needs on Claude Code, and no more: git and python3 for the diff
-# and the receipt, file tools for the report, Agent for per-aspect passes.
+# What a review or imagine pass needs on Claude Code: git and python3 for the
+# diff and the receipt, Write scoped to the report folder, read-only file
+# tools, Agent for per-aspect passes. No unscoped Write or Edit: these passes
+# report, they don't change code. (Headless Claude Code still refuses writes
+# under .claude/ as a sensitive path; run_one then scores the printed report.)
 CLAUDE_TOOLS = ",".join(
     [
         "Bash(git:*)",
@@ -69,8 +76,6 @@ CLAUDE_TOOLS = ",".join(
         "Bash(ls:*)",
         "Bash(head:*)",
         "Read",
-        "Write",
-        "Edit",
         "Write(.claude/grumpy/**)",
         "Glob",
         "Grep",
@@ -151,7 +156,29 @@ def load_key(case, cases_dir=CASES_DIR):
     key.setdefault("acceptable", [])
     key.setdefault("expect_absent", [])
     key.setdefault("passes", list(PASSES))
+    validate_key(key, case)
     return key
+
+
+def validate_key(key, case="key"):
+    """Raise ValueError on a key whose typo would silently skew scores."""
+    ids = [t["id"] for t in key["planted"] + key["acceptable"]]
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        raise ValueError(f"{case}: duplicate ids {dupes}")
+    for t in key["planted"]:
+        if t.get("severity") not in RANK:
+            raise ValueError(f"{case}: {t['id']} severity {t.get('severity')!r}")
+    for t in key["acceptable"]:
+        if "max_severity" in t and t["max_severity"] not in RANK:
+            raise ValueError(f"{case}: {t['id']} max_severity {t['max_severity']!r}")
+    planted_ids = {t["id"] for t in key["planted"]}
+    unknown = sorted(set(key["expect_absent"]) - planted_ids)
+    if unknown:
+        raise ValueError(f"{case}: expect_absent names no planted issue: {unknown}")
+    bad = sorted(set(key["passes"]) - set(PASSES))
+    if bad:
+        raise ValueError(f"{case}: unknown passes {bad}")
 
 
 def _tree_files(root):
@@ -160,29 +187,6 @@ def _tree_files(root):
         for name in files:
             full = os.path.join(dirpath, name)
             out[os.path.relpath(full, root).replace(os.sep, "/")] = full
-    return out
-
-
-def changed_lines(case, cases_dir=CASES_DIR):
-    """{path: set of after/ line numbers that are added or changed}."""
-    base = os.path.join(cases_dir, case)
-    before = _tree_files(os.path.join(base, "before"))
-    after = _tree_files(os.path.join(base, "after"))
-    out = {}
-    for rel, path in after.items():
-        with open(path, encoding="utf-8") as f:
-            new = f.read().splitlines()
-        old = []
-        if rel in before:
-            with open(before[rel], encoding="utf-8") as f:
-                old = f.read().splitlines()
-        lines = set()
-        matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
-        for tag, _, _, j1, j2 in matcher.get_opcodes():
-            if tag in ("replace", "insert"):
-                lines.update(range(j1 + 1, j2 + 1))
-        if lines:
-            out[rel] = lines
     return out
 
 
@@ -196,13 +200,18 @@ def build_repo(case, dest, cases_dir=CASES_DIR):
     key = load_key(case, cases_dir)
     branch = f"bench/{case}"
 
+    # Isolated from the user's global and system git config (hooksPath,
+    # templates, signing), so a personal pre-commit hook never runs here.
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
     def git(*args):
-        subprocess.run(
-            ["git", "-C", dest, *args],
-            check=True,
-            capture_output=True,
-            text=True,
+        proc = subprocess.run(
+            ["git", "-C", dest, *args], capture_output=True, text=True, env=env
         )
+        if proc.returncode:
+            raise RuntimeError(
+                f"git {' '.join(args)} failed in {dest}: {proc.stderr.strip()}"
+            )
 
     os.makedirs(dest, exist_ok=True)
     git("init", "-q", "-b", "main")
@@ -245,8 +254,13 @@ _HELD_BACK = re.compile(
     r"^\W*(settled findings held back|deferred findings honored)", re.IGNORECASE
 )
 _BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
+# A placeholder bullet: "None.", "N/A", "Nothing to report", "No critical
+# issues found." It must be the whole bullet, so "None is returned after
+# retries" or "Nothing logs the failure" stay findings.
 _EMPTY_BULLET = re.compile(
-    r"^(none|n/?a|nothing|no (findings|issues|concerns))\b", re.I
+    r"^(none|n/?a|nothing( (to report|found|here))?"
+    r"|no( \w+)? (findings|issues|concerns|problems)( found)?)\W*$",
+    re.I,
 )
 
 
@@ -280,6 +294,20 @@ def parse_locations(text):
         end = int(m.group(3)) if m.group(3) else line
         locs.append({"file": name, "line": line, "end": end})
     return locs
+
+
+def has_severity_sections(markdown):
+    """True when the report has at least one severity heading the scorer reads."""
+    in_fence = False
+    for raw in markdown.splitlines():
+        if raw.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        heading = _HEADING.match(raw)
+        if not in_fence and heading and len(heading.group(1)) <= 2:
+            if section_severity(heading.group(2)):
+                return True
+    return False
 
 
 def parse_report(markdown):
@@ -323,58 +351,6 @@ def parse_report(markdown):
     return findings
 
 
-def parse_pipe(raw_text):
-    """Findings from raw SEVERITY|file:line|text|FACT|ASPECT sub-agent lines."""
-    findings = []
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if "|" not in line:
-            continue
-        try:
-            severity, rest = line.split("|", 1)
-            loc, rest = rest.split("|", 1)
-            text, _fact, _aspect = rest.rsplit("|", 2)
-        except ValueError:
-            continue
-        severity = severity.strip()
-        if severity not in RANK:
-            continue
-        findings.append(
-            {
-                "severity": severity,
-                "text": text.strip(),
-                "locations": parse_locations(loc)
-                or [{"file": loc.split(":")[0].strip(), "line": None, "end": None}],
-            }
-        )
-    return findings
-
-
-def normalize_json(items):
-    """Accept {severity, file, line?, text} or {severity, locations, text}."""
-    out = []
-    for item in items:
-        if "locations" in item:
-            locs = item["locations"]
-        else:
-            line = item.get("line")
-            locs = [
-                {
-                    "file": item.get("file", ""),
-                    "line": line,
-                    "end": item.get("end", line),
-                }
-            ]
-        out.append(
-            {
-                "severity": item.get("severity", "NOTE"),
-                "text": item.get("text", ""),
-                "locations": locs,
-            }
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
@@ -385,16 +361,31 @@ def _same_file(a, b):
     return a == b or a.endswith("/" + b) or b.endswith("/" + a)
 
 
+def _keyword_in(keyword, text):
+    """keyword occurs in text at a word start ("log" in "logging", not in
+    "catalog"), ignoring case. Identifier parts count as word starts, so
+    "factory" is in "FormatterFactory" and "smoke" in "test_smoke". A keyword
+    that starts with punctuation, such as "`pass`", matches anywhere."""
+    start = (
+        r"(?:\b|(?<=_)|(?-i:(?<=[a-z])(?=[A-Z])))"
+        if keyword[:1].isalnum() or keyword[:1] == "_"
+        else ""
+    )
+    return re.search(start + re.escape(keyword), text, re.IGNORECASE) is not None
+
+
 def matches(target, finding, window=WINDOW):
     """Same file, a line inside the target's range +/- window, and a keyword.
 
-    A finding that names the file but no line matches on keyword alone. A
-    keyword is required either way: planted issues sit a few lines apart, and
-    a line window alone would let one finding claim its neighbour.
+    A finding that names the file but no line matches on keyword alone, so
+    keys must use keywords specific to the issue (a word start must match:
+    "log" matches "logging" but not "catalog"). A keyword is required either
+    way: planted issues sit a few lines apart, and a line window alone would
+    let one finding claim its neighbour.
     """
-    text = finding.get("text", "").lower()
+    text = finding.get("text", "")
     keywords = target.get("keywords") or []
-    if keywords and not any(k.lower() in text for k in keywords):
+    if keywords and not any(_keyword_in(k, text) for k in keywords):
         return False
     lo, hi = target["lines"]
     lo, hi = lo - window, hi + window
@@ -413,7 +404,8 @@ def matches(target, finding, window=WINDOW):
 def _max_matching(edges, n_left, owner=None):
     """Kuhn's algorithm. edges[i] = right indices for left i. Returns {right: left}.
 
-    `owner` seeds the matching; augmenting keeps every seeded right matched.
+    `owner` seeds the matching; augmenting keeps every seeded right matched,
+    though it may re-route a seeded right to another left to fit one more.
     """
     owner = dict(owner or {})
 
@@ -443,7 +435,9 @@ def _pair_findings(findings, planted, acceptable, window):
     ]
     # Prefer pairings where the finding is rated at least as high as the
     # planted issue, so a CRIT and a NOTE that both describe two neighbouring
-    # issues are paired the right way round; then fill in the rest.
+    # issues are paired the right way round; then fill in the rest. Filling in
+    # can re-route a preferred pair when that matches one more issue: recall
+    # comes first, severity agreement second.
     rated_ok = [
         [
             j
@@ -464,7 +458,8 @@ def _pair_findings(findings, planted, acceptable, window):
     a_owner = _max_matching(a_edges, len(free))
     for j, k in a_owner.items():
         matched[free[k]] = ("acceptable", j)
-    return matched, p_edges
+    acceptable_hit = {free[k] for k, edges in enumerate(a_edges) if edges}
+    return matched, p_edges, acceptable_hit
 
 
 def _rate_matches(matched, findings, planted, acceptable, absent=()):
@@ -486,16 +481,12 @@ def _rate_matches(matched, findings, planted, acceptable, absent=()):
     return hits, underrated, overrated, present
 
 
-def _classify_unmatched(findings, matched, p_edges, acceptable, window):
+def _classify_unmatched(findings, matched, p_edges, acceptable_hit):
     """Split the unmatched findings into (duplicates, unlocated, noise)."""
     unmatched = [i for i in range(len(findings)) if i not in matched]
     # An unmatched finding that describes an issue another finding already
     # claimed is a duplicate: a dedup miss, reported separately, not noise.
-    duplicates = [
-        i
-        for i in unmatched
-        if p_edges[i] or any(matches(t, findings[i], window) for t in acceptable)
-    ]
+    duplicates = [i for i in unmatched if p_edges[i] or i in acceptable_hit]
     # A finding with no file reference can't be scored or acted on (the
     # report contract asks for [file:line]); it's a format miss, kept apart
     # from noise and out of the precision denominator.
@@ -522,17 +513,24 @@ def score(key, findings, window=WINDOW):
     scored = [t for t in planted if t["id"] not in absent]
     n = len(findings)
 
-    matched, p_edges = _pair_findings(findings, planted, acceptable, window)
+    matched, p_edges, acceptable_hit = _pair_findings(
+        findings, planted, acceptable, window
+    )
     hits, underrated, overrated, present = _rate_matches(
         matched, findings, planted, acceptable, absent
     )
     duplicates, unlocated, noise = _classify_unmatched(
-        findings, matched, p_edges, acceptable, window
+        findings, matched, p_edges, acceptable_hit
     )
+    # Precision is over distinct, locatable blocking findings: a duplicate
+    # (a dedup miss) or an unlocated finding (a format miss) is counted on its
+    # own and compared on its own, never as a true positive.
     blocking = [
         i
         for i in range(n)
-        if findings[i].get("severity") in BLOCKING and i not in unlocated
+        if findings[i].get("severity") in BLOCKING
+        and i not in unlocated
+        and i not in duplicates
     ]
     noise_blocking = [i for i in noise if i in blocking]
     present_blocking = [i for _, i in present if i in blocking]
@@ -566,7 +564,11 @@ def _mean(values):
 
 
 def summarize(runs):
-    """Aggregate per (case, pass) over repeats. Runs without a report count as failures."""
+    """Aggregate per (case, pass) over repeats. Runs without a score (no report,
+    a timeout, an unparseable report, an error) count as failures.
+
+    `.get` defaults read results.json files from before a key existed, so an
+    older baseline still compares."""
     groups = {}
     for r in runs:
         groups.setdefault(f"{r['case']}/{r['pass']}", []).append(r)
@@ -584,34 +586,65 @@ def summarize(runs):
             "noise_blocking": _mean(s["noise_blocking"] for s in scored),
             "overrated": _mean(len(s["overrated"]) for s in scored),
             "unlocated": _mean(s.get("unlocated", 0) for s in scored),
+            "duplicates": _mean(s.get("duplicates", 0) for s in scored),
             "findings": _mean(s["findings"] for s in scored),
+            "from_output": sum(
+                1 for r in rs if r.get("status") == "scored-from-output"
+            ),
             "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
             "held_back_failures": sum(1 for s in scored if s.get("present")),
         }
     return out
 
 
-def compare(baseline, candidate, recall_drop=0.0, noise_rise=0.0, precision_drop=0.1):
-    """List regressions of candidate vs baseline summaries. Empty list = no regression."""
+def _rate(s, key):
+    return s.get(key, 0) / s["runs"] if s.get("runs") else 0.0
+
+
+def compare(
+    baseline,
+    candidate,
+    recall_drop=0.0,
+    noise_rise=0.0,
+    precision_drop=0.1,
+    dup_rise=1.0,
+):
+    """Regressions of candidate vs baseline summaries.
+
+    Returns (problems, notes); an empty problems list means no regression.
+    A case/pass the baseline has and the candidate lacks is a problem: a
+    narrowed run must not read as a clean one. Counts of failed runs are
+    compared as rates, so runs with different --repeat compare fairly.
+    """
     problems, notes = [], []
     b, c = baseline.get("summary", {}), candidate.get("summary", {})
+    if not c:
+        problems.append("candidate has no runs")
     for name in sorted(set(b) | set(c)):
         if name not in c:
-            notes.append(f"{name}: not in candidate")
+            problems.append(f"{name}: in baseline, not in candidate")
             continue
         if name not in b:
             notes.append(f"{name}: new in candidate")
             continue
         bs, cs = b[name], c[name]
-        if cs["failed_runs"] > bs["failed_runs"]:
+        if _rate(cs, "failed_runs") > _rate(bs, "failed_runs"):
             problems.append(
-                f"{name}: {cs['failed_runs']} run(s) wrote no report (baseline {bs['failed_runs']})"
+                f"{name}: {cs['failed_runs']}/{cs['runs']} run(s) failed"
+                f" (baseline {bs['failed_runs']}/{bs['runs']})"
             )
-        if cs.get("held_back_failures", 0) > bs.get("held_back_failures", 0):
+        if _rate(cs, "held_back_failures") > _rate(bs, "held_back_failures"):
             problems.append(
-                f"{name}: {cs['held_back_failures']} run(s) re-raised a settled finding"
-                f" (baseline {bs.get('held_back_failures', 0)})"
+                f"{name}: {cs['held_back_failures']}/{cs['runs']} run(s) re-raised a settled finding"
+                f" (baseline {bs.get('held_back_failures', 0)}/{bs['runs']})"
             )
+        for field, label, limit in (
+            ("overrated", "overrated findings", noise_rise),
+            ("duplicates", "duplicate findings", dup_rise),
+        ):
+            bv, cv = bs.get(field), cs.get(field)
+            if bv is not None and cv is not None and cv > bv + limit:
+                problems.append(f"{name}: {label} {bv:.1f} -> {cv:.1f}")
         if (
             bs["recall"] is not None
             and cs["recall"] is not None
@@ -645,11 +678,7 @@ def skill_prompt(pass_name, grumpy=GRUMPY):
     with open(
         os.path.join(grumpy, "skills", pass_name, "SKILL.md"), encoding="utf-8"
     ) as f:
-        body = f.read()
-    if body.startswith("---"):
-        end = body.find("\n---", 3)
-        if end != -1:
-            body = body[end + 4 :]
+        _, body = split_frontmatter(f.read())
     body = body.replace("$ARGUMENTS", "")
     return (
         f"Run grumpy's {pass_name} pass on the current branch of this repository, non-interactively. "
@@ -736,12 +765,9 @@ def find_report(repo, branch, pass_name):
     expected = os.path.join(
         repo, ".claude", "grumpy", *branch.split("/"), f"{pass_name}.md"
     )
-    if os.path.isfile(expected):
-        return expected
-    for dirpath, _, files in os.walk(os.path.join(repo, ".claude", "grumpy")):
-        if f"{pass_name}.md" in files:
-            return os.path.join(dirpath, f"{pass_name}.md")
-    return None
+    # Only the branch's own folder: a report written anywhere else is a
+    # contract miss, and a case can seed other files there via `artifacts`.
+    return expected if os.path.isfile(expected) else None
 
 
 def run_one(
@@ -761,7 +787,17 @@ def run_one(
     result = {"case": case, "pass": pass_name, "label": label}
     try:
         branch = build_repo(case, repo, cases_dir)
-        env = dict(os.environ, CLAUDE_PLUGIN_ROOT=grumpy, GRUMPY_PLUGIN_ROOT=grumpy)
+        # GRUMPY_PLUGIN_ROOT is what pi sets; Claude Code fills the braced
+        # name into the prompt itself and never exports CLAUDE_PLUGIN_ROOT, so
+        # neither does the bench. The parent's own host markers are dropped so
+        # a pass doesn't detect the shell that launched the bench as its host.
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CLAUDECODE", "CLAUDE_PLUGIN_ROOT", "SHARPEN_HOST")
+            and not k.startswith("CLAUDE_CODE_")
+        }
+        env["GRUMPY_PLUGIN_ROOT"] = grumpy
         started = datetime.datetime.now(datetime.timezone.utc)
         try:
             proc = subprocess.run(
@@ -771,15 +807,26 @@ def run_one(
                 stdin=None if stdin_text is not None else subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 env=env,
             )
             result["exit_code"] = proc.returncode
             output = (proc.stdout or "") + (proc.stderr or "")
         except subprocess.TimeoutExpired as e:
+            # A timed-out run is a failed run even if it left a report: a
+            # half-written report would otherwise score as a clean one. Its
+            # partial output arrives as bytes despite text=True.
+            # ponytail: the host's own children (Agent, Bash) can outlive the
+            # timeout; kill the process group if a timed-out run is seen
+            # still spending tokens.
             result["exit_code"] = None
             result["status"] = "timeout"
-            output = str(e.stdout or "")
+            output = "".join(
+                part.decode("utf-8", "replace") if isinstance(part, bytes) else part
+                for part in (e.stdout or "", e.stderr or "")
+            )
         except FileNotFoundError:
             result["status"] = "cli-missing"
             result["error"] = f"{argv[0]} not found on PATH"
@@ -789,12 +836,15 @@ def run_one(
         )
         with open(os.path.join(out_dir, f"{label}.log"), "w", encoding="utf-8") as f:
             f.write(output)
+        if result.get("status") == "timeout":
+            return result
         report = find_report(repo, branch, pass_name)
         saved = os.path.join(out_dir, f"{label}.md")
         if report:
             shutil.copyfile(report, saved)
-            with open(report, encoding="utf-8") as f:
-                findings = parse_report(f.read())
+            with open(report, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            findings = parse_report(text)
             result["status"] = "scored"
         elif report_in_output(output, pass_name):
             # The host printed the report but couldn't save it (Claude Code
@@ -802,10 +852,16 @@ def run_one(
             # it printed, and say so: the pass's own write step failed.
             with open(saved, "w", encoding="utf-8") as f:
                 f.write(output)
+            text = output
             findings = parse_report(output)
             result["status"] = "scored-from-output"
         else:
-            result.setdefault("status", "no-report")
+            result["status"] = "no-report"
+            return result
+        if not has_severity_sections(text):
+            # A renamed heading or a report in a fence parses to no findings;
+            # scoring that as a quiet, clean run would hide the break.
+            result["status"] = "unparsed"
             return result
         result["report"] = (
             os.path.relpath(saved, ROOT) if saved.startswith(ROOT) else saved
@@ -861,9 +917,13 @@ def _selected_cases(arg):
 def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
     """One run_one call, bracketed by progress lines on stderr."""
     print(f"[bench] {label} ...", file=sys.stderr, flush=True)
-    r = run_one(
-        case, pass_name, argv, stdin_text, out_dir, label, args.timeout, args.keep
-    )
+    try:
+        r = run_one(
+            case, pass_name, argv, stdin_text, out_dir, label, args.timeout, args.keep
+        )
+    except Exception as e:  # one broken run must not discard the paid-for rest
+        r = {"case": case, "pass": pass_name, "label": label, "status": "error"}
+        r["error"] = f"{type(e).__name__}: {e}"
     s = r.get("score")
     detail = f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}" if s else ""
     print(f"[bench] {label}: {r.get('status')}{detail}", file=sys.stderr, flush=True)
@@ -893,26 +953,30 @@ def cmd_run(args):
         "commands": {},
         "runs": [],
     }
-    for case in _selected_cases(args.cases):
-        key = load_key(case)
-        for pass_name in _passes(args.pass_):
-            if pass_name not in key["passes"]:
-                continue
-            argv, stdin_text = build_command(
-                args.host, pass_name, args.model, invoke, args.cmd
-            )
-            meta["commands"][pass_name] = shlex.join(argv) + (
-                " < prompt" if stdin_text else ""
-            )
-            for i in range(1, args.repeat + 1):
-                label = f"{case}-{pass_name}-{i}"
-                meta["runs"].append(
-                    _run_labelled(
-                        case, pass_name, argv, stdin_text, out_dir, label, args
-                    )
-                )
-    meta["summary"] = summarize(meta["runs"])
     path = os.path.join(out_dir, "results.json")
+    try:
+        for case in _selected_cases(args.cases):
+            key = load_key(case)
+            for pass_name in _passes(args.pass_):
+                if pass_name not in key["passes"]:
+                    continue
+                argv, stdin_text = build_command(
+                    args.host, pass_name, args.model, invoke, args.cmd
+                )
+                meta["commands"][pass_name] = shlex.join(argv) + (
+                    " < prompt" if stdin_text else ""
+                )
+                for i in range(1, args.repeat + 1):
+                    label = f"{case}-{pass_name}-{i}"
+                    meta["runs"].append(
+                        _run_labelled(
+                            case, pass_name, argv, stdin_text, out_dir, label, args
+                        )
+                    )
+    except KeyboardInterrupt:
+        meta["interrupted"] = True
+        print("[bench] interrupted; writing the runs so far", file=sys.stderr)
+    meta["summary"] = summarize(meta["runs"])
     with open(path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
         f.write("\n")
@@ -923,21 +987,21 @@ def cmd_run(args):
             f"note: the {args.host} command line is unverified; check commands in results.json",
             file=sys.stderr,
         )
-    return 0 if all("score" in r for r in meta["runs"]) else 1
+    if not meta["runs"]:
+        print("error: no runs (check --cases, --pass and --repeat)", file=sys.stderr)
+        return 1
+    ok = all("score" in r for r in meta["runs"]) and not meta.get("interrupted")
+    return 0 if ok else 1
 
 
 def cmd_score(args):
     key = load_key(args.case)
     with open(args.report, encoding="utf-8") as f:
         raw = f.read()
-    fmt = args.format or ("json" if args.report.endswith(".json") else "report")
-    if fmt == "json":
-        findings = normalize_json(json.loads(raw))
-    elif fmt == "pipe":
-        findings = parse_pipe(raw)
-    else:
-        findings = parse_report(raw)
-    result = score(key, findings)
+    if not has_severity_sections(raw):
+        print(f"error: {args.report} has no severity sections", file=sys.stderr)
+        return 1
+    result = score(key, parse_report(raw))
     print(json.dumps(result, indent=2))
     return 0
 
@@ -950,9 +1014,17 @@ def cmd_rescore(args):
     for r in meta["runs"]:
         saved = os.path.join(run_dir, f"{r['label']}.md")
         if not os.path.exists(saved):
+            if "score" in r:  # nothing to re-score from: don't mix old and new
+                del r["score"]
+                r["status"] = "no-saved-report"
             continue
         with open(saved, encoding="utf-8") as f:
-            r["score"] = score(load_key(r["case"]), parse_report(f.read()))
+            text = f.read()
+        if has_severity_sections(text):
+            r["score"] = score(load_key(r["case"]), parse_report(text))
+        else:
+            r.pop("score", None)
+            r["status"] = "unparsed"
     meta["summary"] = summarize(meta["runs"])
     meta["rescored_at"] = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ"
@@ -978,7 +1050,12 @@ def cmd_compare(args):
     if base.get("prompt_hashes") != cand.get("prompt_hashes"):
         print("prompts differ between runs")
     problems, notes = compare(
-        base, cand, args.recall_drop, args.noise_rise, args.precision_drop
+        base,
+        cand,
+        args.recall_drop,
+        args.noise_rise,
+        args.precision_drop,
+        args.dup_rise,
     )
     for n in notes:
         print(f"  note: {n}")
@@ -1027,7 +1104,7 @@ def main(argv=None):
         p.add_argument(
             "--cmd",
             default=None,
-            help="override the host command line ({model}, {grumpy}, {prompt})",
+            help="override the host command line ({model}, {grumpy}, {claude_tools}, {prompt}; {model} must be its own token)",
         )
 
     p = sub.add_parser("run", help="run passes on a host and score them")
@@ -1050,7 +1127,6 @@ def main(argv=None):
     p = sub.add_parser("score", help="score one report against a case")
     p.add_argument("report")
     p.add_argument("--case", required=True)
-    p.add_argument("--format", choices=["report", "pipe", "json"], default=None)
     p.set_defaults(func=cmd_score)
 
     p = sub.add_parser(
@@ -1066,6 +1142,7 @@ def main(argv=None):
     p.add_argument("--recall-drop", type=float, default=0.0)
     p.add_argument("--noise-rise", type=float, default=0.0)
     p.add_argument("--precision-drop", type=float, default=0.1)
+    p.add_argument("--dup-rise", type=float, default=1.0)
     p.set_defaults(func=cmd_compare)
 
     p = sub.add_parser("commands", help="print the exact command a run would use")

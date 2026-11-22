@@ -15,10 +15,15 @@
       "keywords": [
         "swallow",
         "silent",
-        "pass",
+        "`pass`",
+        "except: pass",
+        "bare except",
+        "broad except",
+        "except exception",
+        "catch-all",
+        "catches every",
         "discard",
         "ignor",
-        "except",
         "lost",
         "hid"
       ]
@@ -112,7 +117,13 @@
         "meaningless",
         "fake",
         "useless",
-        "smoke"
+        "smoke",
+        "asserts true",
+        "asserts `true`",
+        "assert `true`",
+        "covers nothing",
+        "doesn't import",
+        "does not import"
       ]
     }
   ],
@@ -153,7 +164,15 @@
         28
       ],
       "keywords": [
-        "log",
+        "logging",
+        "logged",
+        "logger",
+        "log line",
+        "log message",
+        "log call",
+        "no log",
+        "not log",
+        "never log",
         "context",
         "customer",
         "amount"
