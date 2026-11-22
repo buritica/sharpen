@@ -1,0 +1,71 @@
+{
+  "passes": [
+    "review"
+  ],
+  "description": "A correct two-line fix (a merged duplicate's body was dropped) with tests, in code that has no logging, metrics or transactional save. A good review passes the fix and, at most, notes the missing capabilities as follow-ups. Flagging them as CRIT or WARN is what turned issue #37's two-line fix into 13 rounds.",
+  "planted": [],
+  "acceptable": [
+    {
+      "id": "no-observability",
+      "file": "notes/merge.py",
+      "lines": [
+        4,
+        12
+      ],
+      "keywords": [
+        "log",
+        "metric",
+        "observab",
+        "audit trail",
+        "event",
+        "monitor"
+      ],
+      "max_severity": "NOTE"
+    },
+    {
+      "id": "save-archive-not-atomic",
+      "file": "notes/merge.py",
+      "lines": [
+        10,
+        11
+      ],
+      "keywords": [
+        "atomic",
+        "transaction",
+        "partial",
+        "crash between",
+        "rollback"
+      ],
+      "max_severity": "NOTE"
+    },
+    {
+      "id": "substring-dedup",
+      "file": "notes/merge.py",
+      "lines": [
+        8,
+        9
+      ],
+      "keywords": [
+        "substring",
+        "not in",
+        "contain",
+        "partial match"
+      ]
+    },
+    {
+      "id": "missing-body-key",
+      "file": "notes/merge.py",
+      "lines": [
+        8,
+        9
+      ],
+      "keywords": [
+        "keyerror",
+        "missing",
+        "none",
+        "absent"
+      ],
+      "max_severity": "NOTE"
+    }
+  ]
+}

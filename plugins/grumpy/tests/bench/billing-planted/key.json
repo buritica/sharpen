@@ -1,0 +1,30 @@
+{
+  "passes": ["review"],
+  "description": "Billing helpers with 7 planted defects across errors, correctness, comments, simplification and tests. Carried over from the original recall fixture, now with line ranges.",
+  "planted": [
+    {"id": "swallowed-exception", "severity": "WARN", "file": "src/billing/charge.py", "lines": [18, 19],
+     "keywords": ["swallow", "silent", "pass", "discard", "ignor", "except", "lost", "hid"]},
+    {"id": "silent-none-return", "severity": "WARN", "file": "src/billing/charge.py", "lines": [22, 22],
+     "keywords": ["none", "exhaust", "caller", "distinguish", "failure"]},
+    {"id": "undefined-formatter", "severity": "CRIT", "file": "src/billing/charge.py", "lines": [36, 36],
+     "keywords": ["undefined", "nameerror", "not defined", "never defined", "not imported", "doesn't exist", "does not exist", "missing"]},
+    {"id": "unnecessary-factory", "severity": "NOTE", "file": "src/billing/charge.py", "lines": [32, 35],
+     "keywords": ["factory", "abstraction", "indirection", "over-engineer", "overengineer", "unnecessary", "pointless"]},
+    {"id": "stale-soap-comment", "severity": "NOTE", "file": "src/billing/charge.py", "lines": [26, 26],
+     "keywords": ["soap", "comment", "stale", "misleading", "legacy"]},
+    {"id": "refund-unhandled", "severity": "NOTE", "file": "src/billing/charge.py", "lines": [25, 29],
+     "keywords": ["error handling", "unhandled", "no retry", "exception", "inconsistent", "raise", "fails"]},
+    {"id": "fake-test", "severity": "WARN", "file": "src/billing/test_charge.py", "lines": [5, 7],
+     "keywords": ["assert true", "tests nothing", "never calls", "doesn't call", "does not call", "no assertion", "meaningless", "fake", "useless", "smoke"]}
+  ],
+  "acceptable": [
+    {"id": "no-backoff", "file": "src/billing/charge.py", "lines": [15, 21],
+     "keywords": ["backoff", "sleep", "delay", "hammer", "immediately"]},
+    {"id": "unused-loop-var", "file": "src/billing/charge.py", "lines": [15, 18],
+     "keywords": ["attempt", "unused", "`e`"]},
+    {"id": "refund-log-context", "file": "src/billing/charge.py", "lines": [28, 28],
+     "keywords": ["log", "context", "customer", "amount"], "max_severity": "NOTE"},
+    {"id": "charge-not-idempotent", "file": "src/billing/charge.py", "lines": [15, 21],
+     "keywords": ["idempot", "double charge", "duplicate charge", "charged twice"]}
+  ]
+}

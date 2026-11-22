@@ -3,6 +3,22 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.13.0 — a review benchmark replaces the recall eval
+
+The one-fixture recall eval (`scripts/eval-grumpy-findings.py`, `tests/fixtures/sample.diff`,
+`golden.json`) is gone. Its scorer counted a planted issue as found when any finding in the
+same file used any of its keywords, including words like `none` and `except`, ignored line
+numbers, and let one finding claim several issues, so its 100% could be earned by findings
+about something else. It also scored raw sub-agent lines rather than the rendered report
+`/grumpy:fix` reads, and had no imagine fixture.
+
+`scripts/bench-grumpy.py` replaces it: six fixture repos under `tests/bench/` (planted
+issues for review and imagine, plus clean, comment-only and capability-bait cases), a
+line-aware one-to-one scorer that reports recall, precision and blocking noise, a headless
+runner for Claude Code, Codex and pi, and `compare` for before/after runs. Results are
+written to the gitignored `.sharpen/bench/`. No skill or command behavior changed, so an
+in-flight gate cycle is unaffected.
+
 ## 2.12.0 — the report folder ignores itself
 
 Every pass that creates `.claude/grumpy/<branch>/` now also writes

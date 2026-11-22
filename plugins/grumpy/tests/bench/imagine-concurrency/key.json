@@ -1,0 +1,24 @@
+{
+  "passes": ["imagine"],
+  "description": "A parallel bulk refresh against a partner API documented at 10 requests per second. Planted: no rate limiting with 32 workers, retries with no backoff, a shared counter mutated from threads, and failures that vanish without a trace.",
+  "planted": [
+    {"id": "rate-limit-exceeded", "severity": "CRIT", "file": "sync/bulk.py", "lines": [25, 27],
+     "keywords": ["rate limit", "rate-limit", "10 requests", "10 req", "429", "throttl", "32 workers", "max_workers", "per second", "quota"]},
+    {"id": "retry-no-backoff", "severity": "WARN", "file": "sync/bulk.py", "lines": [13, 20],
+     "keywords": ["backoff", "back-off", "sleep", "jitter", "immediately", "tight loop", "hammer", "retry storm"]},
+    {"id": "counter-race", "severity": "WARN", "file": "sync/bulk.py", "lines": [10, 21],
+     "keywords": ["race", "thread-safe", "thread safe", "lock", "atomic", "concurren", "lost update", "+="]},
+    {"id": "silent-failures", "severity": "WARN", "file": "sync/bulk.py", "lines": [19, 29],
+     "keywords": ["silent", "swallow", "no log", "not logged", "never logged", "invisible", "which sku", "dropped", "observab", "lost"]}
+  ],
+  "acceptable": [
+    {"id": "broad-except", "file": "sync/bulk.py", "lines": [19, 19],
+     "keywords": ["broad", "exception", "4xx", "404", "permanent", "non-retryable"]},
+    {"id": "log-without-counts", "file": "sync/bulk.py", "lines": [28, 28],
+     "keywords": ["count", "stats", "summary", "context", "metric"]},
+    {"id": "stats-never-reset", "file": "sync/bulk.py", "lines": [10, 10],
+     "keywords": ["reset", "global", "module-level", "accumulat", "across runs"]},
+    {"id": "no-docs", "file": "sync/bulk.py", "lines": [1, 29],
+     "keywords": ["document", "docs", "readme", "runbook"], "max_severity": "NOTE"}
+  ]
+}
