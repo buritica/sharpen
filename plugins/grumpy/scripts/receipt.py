@@ -104,7 +104,7 @@ def _report_digest(report, previous_receipts):
     return hashlib.sha256(data).hexdigest()
 
 
-def write_receipt(pass_name, worktree=".", stage=None):
+def write_receipt(pass_name, worktree=".", stage=None, executor=None):
     if pass_name not in PASSES:
         raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
     if stage is not None and (pass_name != "fix" or stage not in FIX_STAGES):
@@ -152,6 +152,11 @@ def write_receipt(pass_name, worktree=".", stage=None):
     }
     if stage:
         receipt["stage"] = stage
+    if executor:
+        # Which path ran the pass, when it wasn't an agent host following the
+        # command (oneshot.py: {"host": "oneshot", "provider", "model"}).
+        # sdlc shows it next to the gate in --status.
+        receipt["executor"] = dict(executor)
     # A stage receipt also refreshes fix.json, the one name sdlc before 4.17
     # reads, so a newer grumpy with an older installed sdlc still records the
     # fix gates. sdlc 4.17+ prefers the stage file.

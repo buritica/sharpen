@@ -420,6 +420,57 @@ under Claude, and skill-gated gates record from the receipt each pass writes
 excluded because pi skill names are flat and sdlc's `audit` wins the collision;
 install grumpy alone for its `audit` skill.
 
+## No agent installed (`scripts/oneshot.py`)
+
+With no coding agent at all, the review pass can still run against a chat API:
+
+```sh
+export OPENAI_API_KEY=...                      # read from the environment only
+python3 <grumpy>/scripts/oneshot.py review --provider openai
+
+export SHARPEN_LLM_URL=http://localhost:11434/v1   # Ollama, llama.cpp, vLLM, LM Studio
+python3 <grumpy>/scripts/oneshot.py review --provider compatible --model <a model you pulled>
+```
+
+`<grumpy>` is the grumpy plugin folder: a clone of sharpen's `plugins/grumpy`, or the
+installed plugin's cache folder. Commit first: the pass reviews `HEAD` and refuses a dirty
+tree. `--dry-run` prints every prompt it would send and calls nothing; `--aspects` picks
+review aspects; `--worktree` points it at another checkout. sdlc's `openai_adapter.py` and
+`local_llm_adapter.py` run the gate commands from a capability manifest and then this.
+
+**It is the same review, run differently.** The prompts are built from
+`commands/review.md` each run, not written separately: the persona, the aspect list, Step 3's
+finding-pass template and its `CRIT`/`WARN`/`NOTE` severities, the Audit discipline, Step 4
+with its settled-findings rules and report template, and the Personality Guidelines. It sends
+one finding call per aspect (in parallel), then one aggregation call, saves
+`.sharpen/grumpy/<branch>/review.md` with a `_Model:_` line it writes itself, and leaves the
+same receipt an agent host leaves, plus an `executor` naming the path. `record-gate.py
+--verify review` records gate 3 from it, and `--status` says the gate came from `oneshot`. If
+`review.md` changes in a way the extraction can't follow, the script stops with exit 2 and
+`tests/test_oneshot.py` fails; it never falls back to a prompt of its own.
+
+**What it can't do compared with an agent host:**
+
+- It sees only the diff and the changed files' text at `HEAD` (capped), never the rest of
+  the repo, so it can't follow a call site or check a caller it wasn't shown.
+- One model does every aspect: no per-pass model routing from `models.yaml`.
+- It doesn't append the review note to the sdlc plan (Step 6).
+- Simplify and fix edit code, so gates 2, 4 and 6 still need an agent or a person. Imagine
+  comes to this path in the next release; until then only gate 3 can be earned here.
+- Whether it reviews as well as an agent host is not measured yet. The benchmark host for
+  this path comes with imagine. The `openai` model in `models.yaml` stays marked unverified
+  until then.
+
+**Your code leaves the machine with `--provider openai`.** The diff and the changed files'
+full text are sent to OpenAI. To keep the code local, run a model on your own machine and
+use `--provider compatible`. The key is read from the environment only: it is never written
+to the report, the receipt or a log line, and provider error text is redacted before it is
+printed.
+
+Exit codes: 0 report and receipt written; 1 the pass earned nothing (empty diff, failed
+calls, unusable report, refused receipt); 2 setup error (no key, no model, extraction
+failed).
+
 ## Upgrading
 
 Version-specific migration notes live in [`CHANGELOG.md`](CHANGELOG.md).

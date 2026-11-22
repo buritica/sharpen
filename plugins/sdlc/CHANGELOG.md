@@ -5,6 +5,42 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.21.0 — plans and reports move out of `.claude/`
+
+Plans and specs are now written to `.sharpen/sdlc/<branch>/`, and grumpy 2.15 writes its
+reports and pass receipts to `.sharpen/grumpy/<branch>/`. Headless Claude Code refuses to
+write under `.claude/`, which it treats as its own configuration, so a pass run with
+`claude -p` printed its report instead of saving it. `.sharpen/` already held gate state,
+and no host treats it specially.
+
+- **Nothing to migrate.** The old `.claude/sdlc/` and `.claude/grumpy/` folders are still
+  read, and never written. A receipt in both places counts by whichever copy is newer. A
+  plan or `fix.md` that only exists in the old folder is copied into `.sharpen/` the first
+  time a pass appends to it (its Settled and Deferred entries come along). Other reports,
+  specs and `base.json` are read from the new folder first and the old one when the new
+  copy is missing.
+- **Rolling back** to sdlc 4.20 and grumpy 2.14 means copying back what was written since,
+  because they read only `.claude/`. Run this in each worktree that holds work in progress
+  (`/sdlc:plan` worktrees included); `-p` keeps the reports' mtimes, so grumpy 2.14 doesn't
+  count a copied report as freshly saved:
+  `mkdir -p .claude/sdlc .claude/grumpy && cp -pR .sharpen/sdlc/. .claude/sdlc/ && cp -pR .sharpen/grumpy/. .claude/grumpy/`.
+- **Upgrade grumpy to 2.15 with this release.** They share the path contract. With an
+  older grumpy, receipts still record (the fallback above), but `/grumpy:review` and
+  `/grumpy:imagine` look for the plan only under `.claude/sdlc/`, so they miss a plan this
+  version wrote, and its `diff_base.py` misses the stack base (`base.json`) and resolves the
+  base on its own (sdlc 4.21 removes a legacy `.claude/sdlc/<branch>/base.json` whenever it
+  writes the new one, so an older grumpy never reads a stale one).
+- **`/sdlc:init` adds `.sharpen/sdlc/` and `.sharpen/grumpy/` to its ignore block.** Both
+  folders also ignore themselves when created, so a repo that skips init stays clean.
+  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` and
+  `.sharpen/models.yaml` are committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
+  still hold old files there.
+- **A team that commits its plans** keeps the ones already tracked under `.claude/sdlc/`.
+  New plans land in `.sharpen/sdlc/`, which ignores itself; put `!*` in
+  `.sharpen/sdlc/.gitignore` (deleting it doesn't last) to commit them there.
+- `/sdlc:plan` worktrees stay under `.claude/worktrees/`. `git worktree add` creates them
+  from a shell, which Claude Code's check on its file tools doesn't cover.
+
 ## 4.20.0 — CI no longer checks gate state
 
 `ci-validate.py` and the `gates` CI job it backed are gone. They read the gate store in CI,

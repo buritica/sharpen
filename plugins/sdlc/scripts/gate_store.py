@@ -991,6 +991,16 @@ def determine_gate(skill, branch_data):
     return None
 
 
+def _executor_note(branch_data, gate):
+    """` (via oneshot: openai gpt-6.2-astra)` when a receipt from a non-agent
+    path earned the gate (gate_receipts.EVIDENCE_EXECUTORS_KEY)."""
+    executor = (branch_data.get("evidence_executors") or {}).get(gate)
+    if not isinstance(executor, dict) or not executor.get("host"):
+        return ""
+    detail = " ".join(executor[k] for k in ("provider", "model") if executor.get(k))
+    return f" (via {executor['host']}{': ' + detail if detail else ''})"
+
+
 def format_status(branch_data, branch=None):
     if not branch_data:
         suffix = f' for branch "{branch}"' if branch else ""
@@ -1043,7 +1053,7 @@ def format_status(branch_data, branch=None):
             detail = f": {reason}" if reason else ""
             lines.append(f"  {mark} {g} — {ts} (attested, not hook-verified{detail})")
         elif ts:
-            lines.append(f"  {mark} {g} — {ts}")
+            lines.append(f"  {mark} {g} — {ts}{_executor_note(branch_data, g)}")
         else:
             cleared = branch_data.get("invalidated_by", {}).get(g)
             if cleared:

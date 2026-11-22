@@ -31,6 +31,12 @@
 #           model and this column is advice for next time. Ids are from
 #           OpenAI's Codex models page on 2026-11-22. Which id suits which role
 #           is UNVERIFIED until scripts/bench-grumpy.py has measured it on Codex.
+#   openai  The OpenAI API id oneshot.py (the no-agent path, scripts/oneshot.py)
+#           calls when --provider openai is given no --model. Checked against
+#           developers.openai.com/api/docs/models on 2026-11-22. Which id suits
+#           which role is UNVERIFIED until scripts/bench-grumpy.py has measured
+#           it. oneshot.py reads only `analysis`; a `compatible` server (Ollama
+#           and the like) has no column, because its models are the user's own.
 # pi has no column: it can't choose a model per subagent either, and the
 # provider is the user's choice, so pi runs everything on the session's model.
 
@@ -39,18 +45,22 @@ roles:
     claude: claude-opus-5-5
     native: opus
     codex: gpt-6.2-astra
+    openai: gpt-6.2-astra
   analysis:     # review's finding passes, audit's dimension reviews, the top rung of fix's ladder
     claude: claude-opus-5-5
     native: opus
     codex: gpt-6.2-astra
+    openai: gpt-6.2-astra
   exec:         # default fix execution (M steps)
     claude: claude-sonnet-5-5
     native: sonnet
     codex: gpt-6.2-sol
+    openai: gpt-6.2-sol
   exec-trivial: # S mechanical steps (exec: trivial)
     claude: claude-haiku-5-5
     native: haiku
     codex: gpt-6-luna
+    openai: gpt-6-luna
 
 # Fix's escalation ladder (low → high). --max-tier clamps to a rung; a failed
 # check escalates one rung. If an override makes two rungs the same alias,

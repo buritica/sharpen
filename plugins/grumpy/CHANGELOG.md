@@ -3,6 +3,24 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.16.0 — review with no agent installed (`scripts/oneshot.py`)
+
+`python3 <grumpy>/scripts/oneshot.py review` runs the review pass against a chat API instead
+of a coding agent: OpenAI (`--provider openai`, key in `OPENAI_API_KEY`) or any
+OpenAI-compatible server such as Ollama (`--provider compatible`, `SHARPEN_LLM_URL`). It
+builds every prompt from `commands/review.md` at run time, one finding call per aspect plus
+one aggregation call, saves `.sharpen/grumpy/<branch>/review.md` and writes the usual
+receipt, so `record-gate.py --verify review` records gate 3. Simplify, fix and (until the
+next release) imagine still need an agent host. The diff and changed files go to the
+provider; see the README's "No agent installed".
+
+- Receipts may carry an `executor` (`{host, provider, model}`); `oneshot.py` writes it and
+  sdlc 4.22's `--status` shows it next to the gate. Agent hosts don't write it.
+- `models.yaml` has an `openai` column (API ids). `oneshot.py` reads `analysis.openai`
+  when `--provider openai` gets no `--model`. Unverified until the benchmark measures it.
+- sdlc 4.22's `openai_adapter.py` and `local_llm_adapter.py` call `oneshot.py`, so upgrade
+  both plugins together.
+
 ## 2.15.0 — reports and receipts move to `.sharpen/grumpy/`
 
 Every pass now writes its report, and its receipt, to `.sharpen/grumpy/<branch>/` instead of

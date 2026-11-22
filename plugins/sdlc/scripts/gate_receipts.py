@@ -14,6 +14,9 @@ adds to a branch entry:
 
   "evidence": "receipts",                        # absent on a legacy cycle
   "evidence_heads": {"grumpy-review": "<sha>"}   # HEAD each gate was earned on
+  "evidence_executors": {"grumpy-review": {"host": "oneshot", ...}}
+                                                 # set only when the receipt names a
+                                                 # non-agent executor (grumpy oneshot.py)
 
 `--init` replaces the whole entry, so a reset clears `evidence_heads` too.
 """
@@ -31,6 +34,10 @@ from artifact_dirs import GRUMPY_ROOT, LEGACY_GRUMPY_ROOT
 EVIDENCE_KEY = "evidence"
 EVIDENCE_RECEIPTS = "receipts"
 EVIDENCE_HEADS_KEY = "evidence_heads"
+# gate -> the receipt's `executor` when a path other than an agent host ran the
+# pass (grumpy's oneshot.py). Shown by --status so a one-shot review is never
+# mistaken for an agent review. Mirrored in gate_store.format_status.
+EVIDENCE_EXECUTORS_KEY = "evidence_executors"
 RECEIPT_PROTOCOL = "1"
 # Skill (as seen on the Skill tool) -> receipt file name. grumpy:fix writes
 # one `fix` receipt per run; which fix gate it earns is decided by
@@ -325,6 +332,16 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     bd = data[branch]
     stamp_head(data, branch, gate, receipt.get("head"))
     _stamp_receipt_identity(data, branch, gate, receipt)
+    executor = receipt.get("executor")
+    executors = bd.setdefault(EVIDENCE_EXECUTORS_KEY, {})
+    if isinstance(executor, dict) and executor.get("host"):
+        executors[gate] = {
+            k: str(executor[k]) for k in ("host", "provider", "model") if k in executor
+        }
+    else:
+        executors.pop(gate, None)  # re-earned by an agent host
+    if not executors:
+        bd.pop(EVIDENCE_EXECUTORS_KEY, None)
     written = _parse_ts(receipt.get("written_at"))
     cleared = []
     for g in invalidated:

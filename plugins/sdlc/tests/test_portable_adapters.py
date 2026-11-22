@@ -5,7 +5,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
@@ -13,8 +12,8 @@ sys.path.insert(0, SCRIPTS)
 
 import capabilities  # noqa: E402
 import generic_adapter as ga  # noqa: E402
+import gate_receipts as gr  # noqa: E402
 import gate_store as gs  # noqa: E402
-import local_llm_adapter as la  # noqa: E402
 import review_report  # noqa: E402
 
 
@@ -140,44 +139,26 @@ class GenericAdapterTest(unittest.TestCase):
         self.assertEqual([result["exit_code"] for result in results], [0, 0, 0])
 
 
-class LocalLlmAdapterTest(unittest.TestCase):
-    def manifest(self):
-        return {"provider": {"name": "local", "model": "test-model"}}
+class ExecutorStatusTest(unittest.TestCase):
+    """A gate earned from a one-shot receipt says so in --status."""
 
-    def passed_gates(self):
-        return [{"capability": "test", "exit_code": 0}]
+    def stamp(self, data, receipt):
+        data["feat/x"].setdefault("gates", {})["grumpy-review"] = "2026-11-22T00:00:00Z"
+        gr.stamp_receipt(data, "feat/x", "grumpy-review", receipt, [], {})
 
-    @mock.patch.object(ga, "_detect_head", return_value="head")
-    @mock.patch.object(ga, "_detect_base", return_value="base")
-    @mock.patch.object(la, "_extract_diff", return_value="diff")
-    @mock.patch.object(la, "_local_llm_chat")
-    def test_critical_finding_fails_review(self, chat, *_):
-        chat.return_value = (
-            '[{"severity":"critical","summary":"loss","location":"a.py:1",'
-            '"consequence":"data loss"}]'
+    def test_oneshot_receipt_is_named_then_cleared_by_an_agent_receipt(self):
+        data = {}
+        gs.init_gates(data, "feat/x", "small-medium")
+        head = {"head": "a" * 40, "written_at": "2026-11-22T00:00:00+00:00"}
+        executor = {"host": "oneshot", "provider": "openai", "model": "gpt-x"}
+        self.stamp(data, dict(head, executor=executor))
+        self.assertIn(
+            "grumpy-review — 2026-11-22T00:00:00Z (via oneshot: openai gpt-x)",
+            gs.format_status(data["feat/x"], "feat/x"),
         )
-        report = la.build_review_report(self.manifest(), self.passed_gates())
-        self.assertEqual(report["status"], "fail")
-        self.assertEqual(report["findings"][0]["severity"], "critical")
-
-    @mock.patch.object(ga, "_detect_head", return_value="head")
-    @mock.patch.object(ga, "_detect_base", return_value="base")
-    @mock.patch.object(la, "_extract_diff", return_value="diff")
-    @mock.patch.object(la, "_local_llm_chat")
-    def test_malformed_model_finding_fails_review(self, chat, *_):
-        chat.return_value = '[{"severity":"nit","summary":"missing fields"}]'
-        report = la.build_review_report(self.manifest(), self.passed_gates())
-        self.assertEqual(report["status"], "fail")
-        self.assertEqual(report["findings"][0]["summary"], "delegated review failed")
-
-    @mock.patch.object(ga, "_detect_head", return_value="head")
-    @mock.patch.object(ga, "_detect_base", return_value="base")
-    @mock.patch.object(la, "_extract_diff", return_value="diff")
-    @mock.patch.object(la, "_local_llm_chat", return_value="not JSON")
-    def test_non_json_model_response_fails_review(self, *_):
-        report = la.build_review_report(self.manifest(), self.passed_gates())
-        self.assertEqual(report["status"], "fail")
-        self.assertEqual(report["findings"][0]["summary"], "delegated review failed")
+        self.stamp(data, head)
+        self.assertNotIn("via oneshot", gs.format_status(data["feat/x"], "feat/x"))
+        self.assertNotIn(gr.EVIDENCE_EXECUTORS_KEY, data["feat/x"])
 
 
 if __name__ == "__main__":

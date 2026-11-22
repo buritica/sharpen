@@ -13,6 +13,7 @@
     "written_at": {"type": "string", "format": "date-time"},
     "report": {"description": "The pass's report file, relative to the folder holding receipts/: <worktree>/.sharpen/grumpy/<branch>/ (or .claude/grumpy/<branch>/ before grumpy 2.15).", "enum": ["simplify.md", "review.md", "imagine.md", "fix.md"]},
     "report_sha256": {"description": "sha256 of that report when the receipt was written; links the receipt to the evidence, not a security boundary.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "executor": {"description": "Which path ran the pass when it wasn't an agent host following the command: oneshot.py writes {host: oneshot, provider, model} (grumpy 2.16.0+). sdlc shows it next to the gate in --status. Absent on an agent host's receipt.", "type": "object", "required": ["host"], "properties": {"host": {"type": "string"}, "provider": {"type": "string"}, "model": {"type": "string"}}},
     "stage": {"description": "fix only: which review the run resolved. Written as receipts/fix-<stage>.json, so one fix run earns one fix gate (grumpy 2.11.0+).", "enum": ["review", "imagine"]}
   },
   "additionalProperties": true

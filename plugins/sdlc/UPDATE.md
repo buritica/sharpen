@@ -1,45 +1,30 @@
-# sdlc UPDATE — v4.21.0
+# sdlc UPDATE — v4.22.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.21.0 — plans and reports move out of `.claude/`
+## New in 4.22.0 — the no-agent adapters run grumpy's review
 
-Plans and specs are now written to `.sharpen/sdlc/<branch>/`, and grumpy 2.15 writes its
-reports and pass receipts to `.sharpen/grumpy/<branch>/`. Headless Claude Code refuses to
-write under `.claude/`, which it treats as its own configuration, so a pass run with
-`claude -p` printed its report instead of saving it. `.sharpen/` already held gate state,
-and no host treats it specially.
+`openai_adapter.py` and `local_llm_adapter.py` no longer send a prompt of their own. After
+the manifest's gate commands pass, they run grumpy 2.16's `scripts/oneshot.py review`, which
+builds its prompts from grumpy's `commands/review.md`, saves a real report to
+`.sharpen/grumpy/<branch>/review.md` and leaves the same receipt an agent host leaves. So
+`record-gate.py --verify review` now records gate 3 from them, and `--status` names the path:
+`grumpy-review — <time> (via oneshot: openai gpt-6.2-astra)`.
 
-- **Nothing to migrate.** The old `.claude/sdlc/` and `.claude/grumpy/` folders are still
-  read, and never written. A receipt in both places counts by whichever copy is newer. A
-  plan or `fix.md` that only exists in the old folder is copied into `.sharpen/` the first
-  time a pass appends to it (its Settled and Deferred entries come along). Other reports,
-  specs and `base.json` are read from the new folder first and the old one when the new
-  copy is missing.
-- **Rolling back** to sdlc 4.20 and grumpy 2.14 means copying back what was written since,
-  because they read only `.claude/`. Run this in each worktree that holds work in progress
-  (`/sdlc:plan` worktrees included); `-p` keeps the reports' mtimes, so grumpy 2.14 doesn't
-  count a copied report as freshly saved:
-  `mkdir -p .claude/sdlc .claude/grumpy && cp -pR .sharpen/sdlc/. .claude/sdlc/ && cp -pR .sharpen/grumpy/. .claude/grumpy/`.
-- **Upgrade grumpy to 2.15 with this release.** They share the path contract. With an
-  older grumpy, receipts still record (the fallback above), but `/grumpy:review` and
-  `/grumpy:imagine` look for the plan only under `.claude/sdlc/`, so they miss a plan this
-  version wrote, and its `diff_base.py` misses the stack base (`base.json`) and resolves the
-  base on its own (sdlc 4.21 removes a legacy `.claude/sdlc/<branch>/base.json` whenever it
-  writes the new one, so an older grumpy never reads a stale one).
-- **`/sdlc:init` adds `.sharpen/sdlc/` and `.sharpen/grumpy/` to its ignore block.** Both
-  folders also ignore themselves when created, so a repo that skips init stays clean.
-  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` and
-  `.sharpen/models.yaml` are committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
-  still hold old files there.
-- **A team that commits its plans** keeps the ones already tracked under `.claude/sdlc/`.
-  New plans land in `.sharpen/sdlc/`, which ignores itself; put `!*` in
-  `.sharpen/sdlc/.gitignore` (deleting it doesn't last) to commit them there.
-- `/sdlc:plan` worktrees stay under `.claude/worktrees/`. `git worktree add` creates them
-  from a shell, which Claude Code's check on its file tools doesn't cover.
+- **They need grumpy.** Set `GRUMPY_PLUGIN_ROOT` to the grumpy plugin folder or pass
+  `--grumpy <path>`; without it they stop with exit 2.
+- **New variable names.** `SHARPEN_LLM_URL`, `SHARPEN_LLM_MODEL` and `SHARPEN_LLM_API_KEY`
+  replace `LOCAL_LLM_URL`, `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`, and `SHARPEN_LLM_MODEL`
+  replaces `OPENAI_MODEL`. The old names still work for now and print a deprecation line.
+- **No more `gpt-4o-mini` or `llama3.1` defaults.** OpenAI defaults to grumpy's
+  `models.yaml` (`analysis.openai`, currently `gpt-6.2-astra`, unverified until measured);
+  a local server has no default and needs a model named.
+- **`generic_adapter.py` no longer attaches a "review" report.** It runs the gate commands
+  and prints PASS/FAIL; a gate summary was never a review. `record-gate.py --attach-report`
+  still attaches a report you produce yourself.
 
 ## Coming from 4.13 or earlier
 
