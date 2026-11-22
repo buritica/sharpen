@@ -1,9 +1,30 @@
-# sdlc UPDATE — v4.18.0
+# sdlc UPDATE — v4.19.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
+
+## New in 4.19.0 — the gate runs the commands AGENTS.md declares
+
+`/sdlc:init` (step 10) writes the repo's test, lint, format and typecheck commands into
+the AGENTS.md managed block, but `/sdlc:gate` ignored them and re-detected from its own
+table. On a repo whose real runner isn't the obvious one (this repo runs
+`python3 scripts/run-tests.py`; the table said `pytest`), the gate ran something other
+than what the repo says it runs.
+
+- `/sdlc:gate` now reads the block first, through the new `scripts/declared_commands.py`
+  (prints the declared commands as JSON; "not configured" reads back as null).
+- **AGENTS.md wins** when it and the detection table disagree. The table only fills a
+  command the block leaves null, or all of them in a repo with no block.
+- The gate names the source of each command in its mode line, e.g.
+  `Commands: AGENTS.md (test, lint); detected (typecheck)`.
+- A block stamped by an older sdlc is still read (it is still the repo's declaration);
+  the gate suggests re-running `/sdlc:init` step 10.
+
+**What an existing repo needs to do:** nothing. A repo without the block behaves exactly
+as before. A repo with one now runs what it declares; if a declared command is wrong or
+out of date, fix it by re-running `/sdlc:init` step 10, not by editing inside the markers.
 
 ## New in 4.18.0 — artifact folders keep themselves out of git
 

@@ -417,7 +417,13 @@ For **Docs-only** (no executable files in the diff, any size): use the `tiny` cy
 
 ## Auto-detection
 
-Detect the project's toolchain by checking for config files:
+Declared commands come first: `/sdlc:init` writes the repo's own into the AGENTS.md block.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/declared_commands.py" --root "${WT:-.}"
+```
+
+Run each non-null command it prints for its gate (`test` → 1, `lint` → 7, `typecheck` → 8). **AGENTS.md wins** when it and the tables below disagree; the tables only fill a command it leaves null (all of them when `source` is null). Name the source in the mode line, e.g. `Commands: AGENTS.md (test, lint); detected (typecheck)`. A `stale` block is still the repo's declaration: use it, and suggest re-running `/sdlc:init` step 10. Otherwise detect from config files:
 
 **Test runner:**
 ```
