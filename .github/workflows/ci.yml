@@ -1,6 +1,9 @@
-# PR validation: lint, test, marketplace consistency check.
-# Each job fans through the shared setup workflow and only runs when the
-# files it cares about changed (path gate below).
+# Lint, test, marketplace consistency, the pi extension smoke test and the
+# portable gate check. lint, test and marketplace fan through the shared setup
+# workflow; pi and gates set up their own. Every job runs on every event:
+# there is no path filter, because a filter that misses one file the checks
+# depend on (it once missed package.json, pyproject.toml and schemas/) turns
+# into a green ci-pass that validated nothing.
 #
 # Scaffolded by the `sdlc` plugin (/sdlc:init).
 name: CI
@@ -17,64 +20,74 @@ on:
   # BASE CHANGES. The default set (opened/synchronize/reopened) does not include
   # it, so when a parent PR merges and GitHub auto-retargets a stacked PR to
   # main, no new run fires — and the stacked PR keeps a green earned against a
-  # base that no longer exists, computed from a path gate diffed against that
-  # old base. `edited` also fires on title/body edits, so this costs some extra
-  # runs. That is the deliberate trade: a few wasted minutes against a required
+  # base that no longer exists. `edited` also fires on title/body edits, so
+  # this costs some extra runs. That is the deliberate trade: a few wasted minutes against a required
   # check that means "we validated this against a different branch."
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  # main itself: a merge result is never what any PR run validated, so check
+  # it after it lands. The weekly run catches runner-image and dependency
+  # drift on a quiet repo; workflow_dispatch is for re-running by hand.
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are cancelled. Runs on main get a group of their own
+  # (the run id): a shared group would keep only one pending run, so a third
+  # quick merge would cancel the second's queued run and that merge would
+  # never get a result.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
-  # Always-runs path gate. Exposes one boolean per file bucket so downstream
-  # jobs only run when relevant files change. On docs-only PRs, downstream
-  # jobs are skipped. Note: skipped jobs do NOT satisfy GitHub required status
-  # checks — only the changes job itself always completes.
-  changes:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            code:
-              - 'plugins/**'
-              - 'scripts/**'
-              - '.claude-plugin/**'
-              - '.github/workflows/**'
-              - 'requirements-dev.txt'
-
   lint:
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     uses: ./.github/workflows/setup.yml
     with:
       command: "ruff format --check . && ruff check ."
 
+  # The hooks promise to run on "any box with python3". 3.9 is the floor
+  # (macOS's system python3); 3.13 is the newest this repo targets.
   test:
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
     uses: ./.github/workflows/setup.yml
     with:
+      python-version: ${{ matrix.python }}
       command: "python3 scripts/run-tests.py"
 
   marketplace:
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     uses: ./.github/workflows/setup.yml
     with:
       command: "python3 scripts/check-marketplace.py"
+
+  # The pi adapters (plugins/*/extensions/*.ts), loaded against a stub pi API
+  # and driven through the real python hooks. Run directly rather than through
+  # run-tests.py's wrapper, which skips when Node is missing.
+  pi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: pi extension smoke test
+        run: >-
+          node --experimental-strip-types --no-warnings
+          --import ./scripts/tests/pi/register.mjs
+          --test scripts/tests/pi/extensions.test.mjs
 
   # Portable gate enforcement: validates the PR head's gate cycle and review
   # report against the commit being merged. This is the cross-clone authority
@@ -94,24 +107,31 @@ jobs:
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           SDLC_GATES_PATH: .sharpen/data/gates.json
 
-  # Aggregator: always runs, fails if any validation job failed, was
-  # cancelled, or timed out. Treats skipped (path-gated) as passing so
-  # docs-only PRs satisfy this required check without hanging on skipped jobs.
+  # Aggregator and the one required check: always runs, fails if any job it
+  # needs failed, was cancelled, timed out or was skipped. Nothing is
+  # path-gated any more, so a skip means something went wrong.
   ci-pass:
-    needs: [changes, lint, test, marketplace, gates]
+    needs: [lint, test, marketplace, pi, gates]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Verify all required jobs passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
           set -eu
-          results="${{ join(needs.*.result, ' ') }}"
-          [ -n "$results" ] || { echo "ERROR: No job results found — needs list may be empty"; exit 1; }
-          for r in $results; do
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "Failed jobs check — results (changes lint test marketplace): $results"
-              exit 1
-            fi
-          done
-          echo "All required jobs passed: $results"
+          summary=$(printf '%s' "$NEEDS" | python3 -c '
+          import json, sys
+          for job, need in json.load(sys.stdin).items():
+              print("%s=%s" % (job, need["result"]))
+          ')
+          [ -n "$summary" ] || { echo "ERROR: no job results found; is the needs list empty?"; exit 1; }
+          echo "$summary"
+          failed=$(printf '%s\n' "$summary" | grep -v '=success$' || true)
+          if [ -n "$failed" ]; then
+            echo "Jobs that did not pass:"
+            echo "$failed"
+            exit 1
+          fi
+          echo "All required jobs passed."

@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import sysconfig
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKETPLACE = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
@@ -47,11 +48,48 @@ _generate_skill_spec = importlib.util.spec_from_file_location(
 generate_skill = importlib.util.module_from_spec(_generate_skill_spec)
 _generate_skill_spec.loader.exec_module(generate_skill)
 
-# sys.stdlib_module_names needs Python 3.10+. This repo's own CLAUDE.md
-# promises hook enforcement "works on any box with python3" — None here
-# means an older interpreter, and check_local_imports degrades to a warning
-# instead of crashing the whole run over one attribute.
+# sys.stdlib_module_names needs Python 3.10+. The hooks promise to work on
+# "any box with python3", and macOS's system python3 is 3.9, so older
+# interpreters fall back to _is_stdlib_by_location() instead of skipping
+# the check.
 STDLIB_MODULE_NAMES = getattr(sys, "stdlib_module_names", None)
+_SYS_PATHS = sysconfig.get_paths()
+_STDLIB_DIRS = tuple(
+    {os.path.realpath(_SYS_PATHS[k]) for k in ("stdlib", "platstdlib")}
+)
+
+
+def _is_stdlib_by_location(mod):
+    """Pre-3.10 fallback: a top-level module is stdlib when it is built in,
+    frozen, or resolves to a file under the interpreter's stdlib directory
+    (and not its site-packages). find_spec on a top-level name locates the
+    module without importing it."""
+    if mod in sys.builtin_module_names:
+        return True
+    try:
+        spec = importlib.util.find_spec(mod)
+    except (ImportError, ValueError):
+        return False
+    if spec is None:
+        return False
+    if spec.origin in ("built-in", "frozen"):
+        return True
+    locations = [spec.origin] if spec.origin else []
+    locations += list(spec.submodule_search_locations or [])
+    for loc in locations:
+        real = os.path.realpath(loc)
+        if {"site-packages", "dist-packages"} & set(real.split(os.sep)):
+            continue
+        if any(real.startswith(d + os.sep) for d in _STDLIB_DIRS):
+            return True
+    return False
+
+
+def _is_stdlib(mod):
+    if STDLIB_MODULE_NAMES is not None:
+        return mod in STDLIB_MODULE_NAMES
+    return _is_stdlib_by_location(mod)
+
 
 errors = []
 warnings = []
@@ -340,12 +378,6 @@ def check_local_imports(script, ref, name):
         # to parse every file, so a real syntax error surfaces there. Not a
         # substitute for that check, just not a second one.
         return
-    if STDLIB_MODULE_NAMES is None:
-        warn(
-            "{}: skipping import check for {} (needs Python 3.10+ for "
-            "sys.stdlib_module_names)".format(name, ref)
-        )
-        return
     mods = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -354,7 +386,7 @@ def check_local_imports(script, ref, name):
             mods.add(node.module.split(".")[0])  # level > 0 is a relative import
     script_dir = os.path.dirname(script)
     for mod in sorted(mods):
-        if mod == "__future__" or mod in STDLIB_MODULE_NAMES:
+        if mod == "__future__" or _is_stdlib(mod):
             continue
         if not os.path.isfile(os.path.join(script_dir, mod + ".py")):
             err(

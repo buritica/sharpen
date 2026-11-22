@@ -103,7 +103,24 @@ as in Claude.
 
 ## Testing
 
-The pi adapters are exercised the same way the Codex port was: a real repo
-with an incomplete gate cycle, a real `gh pr create` attempt (blocked), and a
-real first commit (auto-arms a cycle). The deny contract is verified by feeding
-the exact payload the adapter sends to the script and asserting exit code 2.
+`scripts/tests/pi/extensions.test.mjs` exercises the adapters the same way the
+Codex port was checked by hand: a real repo with an incomplete gate cycle, a
+`gh pr create` tool call (blocked headless; in the TUI the human can override
+or uphold), a hand-stamped skill gate (blocked), and a first commit (arms a
+cycle), plus the guardrails extension on protected and unprotected branches.
+Each extension loads against a stub pi API (`scripts/tests/pi/pi-stub.mjs`,
+the two runtime type guards the extensions call) and spawns the real python
+hooks, so a payload the scripts can't read fails as a wrong decision.
+
+It needs Node 22.6+ and nothing from npm:
+
+```sh
+node --experimental-strip-types --no-warnings \
+  --import ./scripts/tests/pi/register.mjs \
+  --test scripts/tests/pi/extensions.test.mjs
+```
+
+`scripts/run-tests.py` runs it when Node is present and prints SKIP otherwise;
+CI's `pi` job always runs it. The stub covers only what the extensions call at
+runtime, so a change in pi's real event shape is not caught here; that still
+needs a live pi session.

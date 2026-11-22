@@ -1,0 +1,13 @@
+{
+  "session_id": "019a4c2e-7b1d-7f30-9c55-2e8d4a6b1f07",
+  "transcript_path": "/home/dev/.codex/sessions/2026/11/22/rollout-019a4c2e.jsonl",
+  "cwd": "__REPO__",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5-codex",
+  "turn_id": "turn_3",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git -C __REPO__ commit -m wip"
+  },
+  "tool_use_id": "call_Qm2fT8xLwP0aZr5Ke1Ny"
+}
