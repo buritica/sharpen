@@ -33,7 +33,7 @@ roles:
     native: fable
     codex: gpt-6.2-astra
     pi: null
-  analysis:     # review / imagine / architecture / security / product / edge-cases finding passes
+  analysis:     # review / architecture / security / product / edge-cases finding passes
     claude: claude-opus-5-5
     native: opus
     codex: gpt-6.2-astra
@@ -50,6 +50,13 @@ roles:
     pi: null
   escalation:   # gate-failure bump target — one rung up; the ladder tops at `analysis`
     order: [exec-trivial, exec, analysis]
+
+# Routing follows the benchmark (scripts/bench-grumpy.py, Claude Code, Sonnet
+# session, 3 repeats per case, 2026-11-22). Review's passes on `analysis` (opus)
+# matched or beat the session model. /grumpy:imagine is not routed: on that run
+# opus lost recall on one imagine case, and 3 repeats is too small a sample to
+# say which model is better at it. Imagine stays on the session's model until a
+# larger rerun settles it; revisit then rather than reading this as a verdict.
 
 # Escalation ladder for `--max-tier` clamping (low → high):
 #   exec-trivial(haiku) < exec(sonnet) < analysis(opus)

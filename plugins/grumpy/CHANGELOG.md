@@ -3,7 +3,7 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
-## 2.14.0 — current models, per-host columns, review and imagine route
+## 2.14.0 — current models, per-host columns, review routes
 
 `models.yaml` moves to the current Claude ids (`claude-opus-5-5`, `claude-sonnet-5-5`,
 `claude-haiku-5-5`, `claude-fable-5-2`). Fable is no longer `wrapper_required`: Claude
@@ -16,9 +16,11 @@ so the columns say which model to start the session on, and a pass that can't ro
 which model it ran on. The Codex ids come from OpenAI's Codex models page; which one fits
 which role is unverified until the benchmark has measured it.
 
-`/grumpy:review` and `/grumpy:imagine` now read the map too. Their finding passes run on
-the `analysis` role, so on Claude Code their subagents are dispatched on `opus` instead of
-inheriting the session's model, and the report names the model. This is the one behavior
+`/grumpy:review` now reads the map too. Its finding passes run on the `analysis` role, so
+on Claude Code its subagents are dispatched on `opus` instead of inheriting the session's
+model, and the report names the model. `/grumpy:imagine` is not routed: on the benchmark
+run behind this change (3 repeats) opus lost recall on one imagine case, too small a sample
+to call, so imagine stays on the session's model until a larger rerun. This is the one behavior
 change: a review started from a Sonnet session now costs Opus rates for its passes. Pin
 `analysis` lower in a repo's `.sharpen/models.yaml` (new: it overrides individual entries
 of the plugin's map) if that's not wanted.

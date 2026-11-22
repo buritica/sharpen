@@ -72,8 +72,9 @@ agent and escalating one tier on a failed `accept:` check:
 The role→model map lives in `models.yaml` (single switch point). Each role has
 a column per host: the Anthropic API id, the Claude Code alias passed to
 subagents (`opus`, `sonnet`, `haiku`, `fable`), and the model to start a Codex
-or pi session on, since those hosts can't pick a model per subagent. Review and
-imagine run their finding passes on the `analysis` role; fix routes by `exec:`
+or pi session on, since those hosts can't pick a model per subagent. Review runs
+its finding passes on the `analysis` role; imagine stays on the session's model
+until a larger benchmark run settles which model suits it; fix routes by `exec:`
 tier; audit synthesizes on the `audit` role (Fable). A repo can override
 entries in its own `.sharpen/models.yaml`. The Codex column is unverified
 until the benchmark below has measured it.

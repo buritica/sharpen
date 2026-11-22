@@ -137,14 +137,9 @@ CONTEXT/FINDING/HANDLED output per pass before moving to Step 3's aggregation.
 The only thing that changes is *who* runs the pass, not what it does or what
 it returns.
 
-**Model:** these are finding passes, so they run on the `analysis` role.
-Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
-(it overrides individual entries), then from `models.yaml` in grumpy's plugin
-root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`). When your dispatch primitive takes a
-per-subagent model (Claude Code's Agent tool takes
-`sonnet`/`opus`/`haiku`/`fable`), pass the role's `native` value. When it doesn't, or you're running the passes yourself, they run on the
-session's model. Either way, name the model in the report's opening line, and
-if the map couldn't be read say so ("models.yaml unreadable — used `opus`").
+**Model:** these passes run on the session's model; don't pass a model to
+the subagents. `models.yaml` doesn't route imagine yet (its note says why).
+Name the model in the report's opening line.
 
 ### Agent 1: Happy Path Simulation (per transport)
 
