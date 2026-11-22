@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "scripts")
@@ -346,14 +347,23 @@ class WireTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.root)), ["AGENTS.md", "CLAUDE.md"])
 
     def test_failed_second_write_names_the_first(self):
+        # Fail the AGENTS.md temp write directly rather than chmod-ing the
+        # directory: root ignores directory modes, and containers and cloud
+        # sessions (where agents run gate 1) usually run as root.
         write(self.p("CLAUDE.md"), "# repo\n")
-        os.chmod(self.root, 0o555)
-        try:
+        real_open = open
+
+        def deny_agents_tmp(path, *args, **kwargs):
+            if os.path.basename(str(path)).startswith("AGENTS.md.") and str(
+                path
+            ).endswith(".sdlc-tmp"):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", deny_agents_tmp):
             with self.assertRaises(am.WireError) as ctx:
                 am.wire(self.root, FACTS)
-            self.assertIn("could not write AGENTS.md", str(ctx.exception))
-        finally:
-            os.chmod(self.root, 0o755)
+        self.assertIn("could not write AGENTS.md", str(ctx.exception))
 
     def test_agents_old_reminder_is_removed_too(self):
         write(self.p("AGENTS.md"), "# repo\n\n" + OLD_SECTION + "\n## Rules\n\nkeep\n")
@@ -370,14 +380,22 @@ class WireTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.p("CLAUDE.md")))
 
     def test_read_only_target_is_refused(self):
+        # os.access(W_OK) is always true for root, so report the file as
+        # unwritable through the same call _write() makes instead of relying
+        # on a mode bit root ignores.
         write(self.p("AGENTS.md"), "# repo\n")
-        os.chmod(self.p("AGENTS.md"), 0o444)
-        try:
+        target = self.p("AGENTS.md")
+        real_access = os.access
+
+        def read_only_target(path, mode, *args, **kwargs):
+            if path == target and mode == os.W_OK:
+                return False
+            return real_access(path, mode, *args, **kwargs)
+
+        with mock.patch.object(am.os, "access", read_only_target):
             with self.assertRaises(am.WireError) as ctx:
                 am.wire(self.root, FACTS)
-            self.assertIn("read-only", str(ctx.exception))
-        finally:
-            os.chmod(self.p("AGENTS.md"), 0o644)
+        self.assertIn("read-only", str(ctx.exception))
 
     def test_failed_rename_leaves_no_temp_file(self):
         real = am.os.replace

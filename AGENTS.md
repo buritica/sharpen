@@ -116,12 +116,34 @@ pi manifest version sync and that every referenced hook script still exists.
 ## Tests
 
 ```sh
-python3 scripts/run-tests.py          # every plugin's suite
+python3 scripts/run-tests.py          # every plugin's suite, plus scripts/tests/
 python3 scripts/check-marketplace.py  # registry consistency (incl. pi manifests)
+scripts/install-hooks.sh              # once per clone: wires .githooks/pre-push
 ```
 
-Stdlib python only, so there is no runtime to install and enforcement works on any box with
-`python3`.
+Stdlib python only, so there is no runtime to install. **Python 3.9 is the floor** (macOS's
+system `python3`), and CI tests 3.9 and 3.13; ruff targets `py39`, so syntax newer than 3.9
+fails lint. Don't reach for a newer stdlib API without a fallback.
+
+`run-tests.py` also runs two contract suites that sit outside any plugin:
+
+- `scripts/tests/test_hook_payloads.py` replays full Claude and Codex hook payloads
+  (`scripts/tests/fixtures/hook-payloads/`, provenance in its README) through the real hooks.
+- `scripts/tests/pi/extensions.test.mjs` loads the pi extensions against a stub pi API and
+  drives them through the real hooks. Node 22.6+ with `node:test` only, no npm. Without Node
+  the wrapper prints SKIP; CI's `pi` job runs it directly so it can't skip there.
+
+Tests must pass as root too: containers and cloud sessions usually run as root, and that is
+where agents run gate 1. Don't rely on file modes to make a write fail; patch the call.
+
+CI (`.github/workflows/ci.yml`) runs every job on every PR, on each push to `main`, weekly and
+by hand, with no path filter. `ci-pass` is the single required check and fails on any job that
+didn't succeed, skipped included.
+
+Two repo-local hooks back that up before a PR exists: `.githooks/pre-push` (any agent or
+human; it also chains the sdlc plugin's own pre-push and anything in `.git/hooks`), and
+`.claude/settings.json`, which runs `scripts/pre-merge-check.sh` before `gh pr create` /
+`gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
 <!-- rendered by sdlc 4.13.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->

@@ -13,6 +13,11 @@ on:
         required: false
         default: '"ubuntu-latest"'
         type: string
+      python-version:
+        description: "Python version for actions/setup-python"
+        required: false
+        default: "3.13"
+        type: string
       command:
         description: "Command to run after setup"
         required: true
@@ -31,7 +36,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
         with:
-          python-version: "3.12"
+          python-version: ${{ inputs.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
 

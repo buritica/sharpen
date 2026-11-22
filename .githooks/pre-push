@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# sharpen repo's own pre-push: run the marketplace consistency check (version
+# bumps, SKILL.md staleness, pi manifests) before anything leaves this clone.
+# Host-agnostic: it catches every agent and a human alike, which the
+# Claude-only scripts/pre-merge-check.sh hook cannot.
+#
+# Wire it once per clone: scripts/install-hooks.sh (sets core.hooksPath).
+#
+# core.hooksPath makes git ignore .git/hooks, so this hook then calls, in
+# order: the sdlc plugin's product pre-push (its documented chain line; a
+# no-op until /sdlc:gate has recorded sharpen.sdlcScripts, and warn-only
+# unless `git config sharpen.prePush block`), and any other pre-push hook
+# left in .git/hooks.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+# git feeds the refs being pushed on stdin; read it once and pass it on.
+PUSH_STDIN="$(cat)"
+
+if ! python3 "$ROOT/scripts/check-marketplace.py"; then
+  echo "pre-push: marketplace check failed; fix it before pushing." >&2
+  exit 1
+fi
+
+# sdlc product pre-push (plugins/sdlc/scripts/pre-push.py), via the chain line
+# its installer prints when core.hooksPath is set.
+dir=$(git config --get sharpen.sdlcScripts || true); [ -n "$dir" ] && [ -f "$dir/pre-push.py" ] && { printf '%s\n' "$PUSH_STDIN" | python3 "$dir/pre-push.py" "$@" || exit $?; }
+
+CHAINED="$(git rev-parse --git-common-dir)/hooks/pre-push"
+if [ -x "$CHAINED" ] && [ "$(cd "$(dirname "$CHAINED")" && pwd -P)" != "$(cd "$ROOT/.githooks" && pwd -P)" ]; then
+  printf '%s\n' "$PUSH_STDIN" | "$CHAINED" "$@"
+fi
+exit 0

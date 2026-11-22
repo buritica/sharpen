@@ -1,0 +1,13 @@
+{
+  "session_id": "0b7f6c1e-5d2a-4c1e-9a43-3f1c2d9e8a10",
+  "transcript_path": "/home/dev/.claude/projects/-repo/0b7f6c1e-5d2a-4c1e-9a43-3f1c2d9e8a10.jsonl",
+  "cwd": "__REPO__",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git -C __REPO__ commit -m wip",
+    "description": "run it"
+  },
+  "tool_use_id": "toolu_01Hx8Yq2kR7mTn4Vb9Lc3Pdz"
+}

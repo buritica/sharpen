@@ -1,0 +1,8 @@
+# Keep the tag-pinned GitHub Actions current. Python has no runtime deps
+# (stdlib only); requirements-dev.txt pins ruff, which stays a deliberate bump.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

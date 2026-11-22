@@ -98,7 +98,7 @@ Two gaps are inherent to pi, documented in [`docs/pi.md`](docs/pi.md): pi has no
 
 ## Requirements
 
-`python3` for gate tracking and enforcement, stdlib only, nothing to install. `gh` for the ship commands. Everything else comes from the repo you point it at.
+`python3` 3.9 or newer for gate tracking and enforcement, stdlib only, nothing to install. `gh` for the ship commands. Everything else comes from the repo you point it at.
 
 ## Uninstall
 

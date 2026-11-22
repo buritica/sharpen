@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py312"
+target-version = "py39"
 
 [tool.ruff.lint]
 # Ruff's own documented defaults (pyflakes + a pycodestyle error subset):

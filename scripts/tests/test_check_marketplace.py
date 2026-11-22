@@ -293,17 +293,34 @@ class HookScriptImportTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("yaml", out)
 
-    def test_missing_stdlib_module_names_degrades_to_a_warning(self):
-        # Python <3.10 has no sys.stdlib_module_names. This must not crash
-        # the whole checker run over one attribute — CLAUDE.md promises
-        # this tooling works on any box with python3.
-        root = self._with_hook_script("import gate_store as gs\n")
+    def test_without_stdlib_module_names_stdlib_imports_pass(self):
+        # Python <3.10 has no sys.stdlib_module_names (macOS system python3
+        # is 3.9). The checker falls back to locating modules instead of
+        # skipping, so stdlib imports, built-ins included, still pass.
+        root = self._with_hook_script(
+            "import json, os, subprocess, sys, sqlite3\nfrom collections import deque\n"
+        )
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         r = run_without_stdlib_module_names(root)
         out = r.stdout.decode()
         self.assertEqual(r.returncode, 0, out)
-        self.assertIn("WARN", out)
-        self.assertIn("3.10", out)
+        self.assertNotIn("WARN", out)
+
+    def test_without_stdlib_module_names_third_party_is_still_an_error(self):
+        root = self._with_hook_script("import yaml\n")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run_without_stdlib_module_names(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("yaml", out)
+
+    def test_without_stdlib_module_names_missing_sibling_is_still_an_error(self):
+        root = self._with_hook_script("import gate_store_typo as gs\n")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        r = run_without_stdlib_module_names(root)
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("gate_store_typo", out)
 
     def test_from_import_of_missing_sibling_is_an_error(self):
         root = self._with_hook_script("from helper import thing\n")
