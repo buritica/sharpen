@@ -609,6 +609,11 @@ GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
 [ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
+# Carry a fix.md a grumpy before 2.15 wrote, so its Settled and Deferred
+# entries stay in the one file every later pass reads. A shell copy, not a
+# file-tool write, and only into the new folder.
+LEGACY_FIX="$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md"
+[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || cp "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"
 ```
 
 Write (or append to, with a dated `### Fix — YYYY-MM-DD` header — this
@@ -742,15 +747,20 @@ if [ -f "$RECEIPT" ]; then
   # imagine ran after the last review and this run fixed its findings;
   # otherwise `review` (gate 4).
   # Decided from the review and imagine receipts' written_at (the order sdlc
-  # checks), not the reports' mtimes, which a re-save or copy changes.
-  A="$(git -C "$WT" rev-parse --show-toplevel)/.claude/grumpy/$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
+  # checks), not the reports' mtimes, which a re-save or copy changes. A
+  # receipt an older grumpy left under .claude/ still counts, newest copy wins.
+  T="$(git -C "$WT" rev-parse --show-toplevel)"
+  B="$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
   STAGE=$(python3 -c 'import json,os,sys
 def at(n):
-    try:
-        return json.load(open(os.path.join(sys.argv[1], n + ".json")))["written_at"]
-    except Exception:
-        return ""
-print("imagine" if at("imagine") > at("review") else "review")' "$A/receipts")
+    best = ""
+    for d in sys.argv[1:]:
+        try:
+            best = max(best, json.load(open(os.path.join(d, n + ".json")))["written_at"])
+        except Exception:
+            pass
+    return best
+print("imagine" if at("imagine") > at("review") else "review")' "$T/.sharpen/grumpy/$B/receipts" "$T/.claude/grumpy/$B/receipts")
   python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
   # If sdlc refuses the fix gate, its message names the receipt it read and
   # what that receipt predates or belongs to. Re-run the pass it names

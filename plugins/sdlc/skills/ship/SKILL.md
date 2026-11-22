@@ -45,8 +45,8 @@ Then create the PR with `gh pr create`. Follow these conventions:
 
 **Body:** Include `Closes #XXX` when a linked issue exists. Include `## Deferred`
 only when the branch added at least one `ponytail:` marker — check
-`.sharpen/grumpy/<branch>/fix.md`'s (or, from grumpy before 2.15, `.claude/grumpy/<branch>/fix.md`'s) own `## Deferred` section first; if that
-artifact doesn't exist (gated with an older installed grumpy, or fixed by
+`.sharpen/grumpy/<branch>/fix.md`'s own `## Deferred` section first, plus the legacy `.claude/grumpy/<branch>/fix.md`'s if that exists too (a grumpy before 2.15 wrote it; read both, since a mid-chain upgrade can split entries across them); if neither
+artifact exists (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
 `git diff "$BASE"...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
 — anchored to an actual comment prefix (not a bare substring match, which a
@@ -105,7 +105,12 @@ After the PR is created, update the plan artifact if it exists:
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
 PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
-[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21
+LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21; read, never written
+if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
+  mkdir -p "$(dirname "$PLAN")"
+  [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
+  cp "$LEGACY_PLAN" "$PLAN"
+fi
 ```
 
 If `$PLAN` exists, append:

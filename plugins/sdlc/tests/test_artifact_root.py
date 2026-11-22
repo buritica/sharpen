@@ -66,7 +66,7 @@ class PluginsAgreeTest(unittest.TestCase):
             self.assertEqual(root[0], ".sharpen")
             self.assertEqual(len(root), 2)
             self.assertIn(root, artifact_dirs.OWNED)
-        self.assertNotIn((".", ".sharpen"), artifact_dirs.OWNED)
+        self.assertFalse(any(f == ".sharpen" for _, f in artifact_dirs.OWNED))
 
 
 class WriterReaderTest(unittest.TestCase):
@@ -271,12 +271,12 @@ class CommandsTest(unittest.TestCase):
                         legacy = f'"$GIT_ROOT/.claude/{folder}/'
                         if legacy not in line:
                             continue
-                        # The allowed shapes: a plan read fallback, taken only
-                        # when the new plan is missing, or naming the legacy
-                        # report folder fix reads per file.
+                        # The allowed shapes only name a legacy file or folder;
+                        # what's done with it (read, or copied into the new
+                        # folder) is pinned by the tests below.
                         self.assertRegex(
                             line,
-                            r'^(\[ -f "\$PLAN" \] \|\| |LEGACY_DIR="\$GIT_ROOT/)',
+                            r'^(LEGACY_DIR|LEGACY_PLAN|LEGACY_FIX)="\$GIT_ROOT/',
                             where,
                         )
 
@@ -307,21 +307,71 @@ class CommandsTest(unittest.TestCase):
                     '[ -d "$ARTIFACT_DIR" ] ||', f.read(), os.path.relpath(path)
                 )
 
-    def test_every_plan_read_falls_back_to_the_legacy_plan(self):
-        seen = 0
+    def _plan_snippets(self):
+        """Each command's plan block: the PLAN= line through its `fi`."""
+        snippets = []
         for path in self._commands():
             with open(path) as f:
                 lines = f.read().splitlines()
             for i, line in enumerate(lines):
                 if line == 'PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"':
-                    seen += 1
-                    self.assertTrue(
-                        lines[i + 1].startswith(
-                            '[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/'
-                        ),
-                        f"{os.path.relpath(path, PLUGINS)}:{i + 2}",
-                    )
-        self.assertGreaterEqual(seen, 4)  # review, imagine, simplify, ship
+                    end = lines.index("fi", i)
+                    snippets.append((path, "\n".join(lines[i : end + 1])))
+        return snippets
+
+    def test_every_plan_read_carries_a_legacy_plan_over(self):
+        snippets = self._plan_snippets()
+        self.assertGreaterEqual(len(snippets), 4)  # review, imagine, simplify, ship
+        for path, snippet in snippets:
+            where = os.path.relpath(path, PLUGINS)
+            self.assertIn(
+                'LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"', snippet, where
+            )
+            self.assertIn('cp "$LEGACY_PLAN" "$PLAN"', snippet, where)
+            # The plan is appended to at $PLAN, which never moves to .claude/.
+            self.assertNotIn('PLAN="$LEGACY_PLAN"', snippet, where)
+
+    def test_the_plan_carry_over_runs_in_a_real_shell(self):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        legacy = os.path.join(repo, ".claude", "sdlc", BRANCH, "plan.md")
+        os.makedirs(os.path.dirname(legacy))
+        with open(legacy, "w") as f:
+            f.write("# old plan\n")
+        _, snippet = self._plan_snippets()[0]
+        env = {**os.environ, "GIT_ROOT": repo, "BRANCH": BRANCH}
+        for _ in range(2):  # idempotent: a second run leaves the copy alone
+            subprocess.run(["bash", "-c", snippet], env=env, check=True)
+        new = os.path.join(repo, ".sharpen", "sdlc", BRANCH, "plan.md")
+        with open(new) as f:
+            self.assertEqual(f.read(), "# old plan\n")
+        self.assertTrue(
+            os.path.isfile(os.path.join(repo, ".sharpen", "sdlc", ".gitignore"))
+        )
+
+    def test_fix_carries_a_legacy_fix_report_over_before_appending(self):
+        with open(os.path.join(PLUGINS, "grumpy", "commands", "fix.md")) as f:
+            text = f.read()
+        self.assertIn(
+            '[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || '
+            'cp "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"',
+            text,
+        )
+
+    def test_settled_and_deferred_readers_read_both_fix_reports(self):
+        for rel in (
+            ("grumpy", "commands", "review.md"),
+            ("grumpy", "commands", "imagine.md"),
+            ("sdlc", "commands", "ship.md"),
+        ):
+            with open(os.path.join(PLUGINS, *rel)) as f:
+                text = " ".join(f.read().split())
+            self.assertIn(".claude/grumpy/", text, "/".join(rel))
+            self.assertRegex(
+                text,
+                r"(also|plus) the (`## Settled` sections of|legacy)",
+                "/".join(rel),
+            )
 
 
 if __name__ == "__main__":

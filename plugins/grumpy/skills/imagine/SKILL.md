@@ -501,8 +501,10 @@ Before rendering, read the `## Settled` sections of
 `$GIT_ROOT/.sharpen/grumpy/$BRANCH/fix.md` (every dated run in it; set
 `GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
 `BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
-file exists (or `$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md`, from a grumpy before
-2.15, when the new one doesn't). Each entry is
+file exists, and also the `## Settled` sections of
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` if that legacy file exists (a grumpy
+before 2.15 wrote it; a mid-chain upgrade can leave settled entries in both).
+Each entry is
 `- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
 written by `/grumpy:fix` for a finding it already decided. Hold back a
 finding of yours only when ALL of these hold:
@@ -677,7 +679,12 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
-[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21
+LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21; read, never written
+if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
+  mkdir -p "$(dirname "$PLAN")"
+  [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
+  cp "$LEGACY_PLAN" "$PLAN"
+fi
 ```
 
 If `$PLAN` exists, append under `## Notes`:

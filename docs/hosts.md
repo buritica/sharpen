@@ -138,8 +138,10 @@ enforcement needs the Claude Code or Codex plugin install, or `pi install`.
 Plans, specs, review reports and receipts go under `.sharpen/sdlc/<branch>/`
 and `.sharpen/grumpy/<branch>/` (sdlc 4.21, grumpy 2.15), next to the gate
 state in `.sharpen/data/`. They used to go under `.claude/`, which Claude Code
-treats as its own configuration. The old folders are still read when the new
-ones have nothing.
+treats as its own configuration. The old folders are still read, never
+written: a receipt counts by whichever copy is newer, a plan or `fix.md` found
+only there is copied into `.sharpen/` before a pass appends to it, and other
+files are read from there when the new copy is missing.
 
 What is known about writing under `.claude/`, per host:
 

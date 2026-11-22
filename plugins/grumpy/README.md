@@ -428,7 +428,9 @@ Version-specific migration notes live in [`CHANGELOG.md`](CHANGELOG.md).
 (`.sharpen/grumpy/<branch>/` and `.sharpen/sdlc/<branch>/`): review and imagine read a plan
 `/sdlc:plan` writes, and sdlc's gate chain reads the reports written here. Before grumpy
 2.15 and sdlc 4.21 both lived under `.claude/`, which headless Claude Code refuses to
-write; the old folders are still read when the new ones have nothing.
+write. The old folders are still read: a receipt counts by whichever copy is newer, a
+plan or `fix.md` found only there is copied into `.sharpen/` before a pass appends to
+it, and other reports are read from there when the new copy is missing.
 
 **grumpy 2.15+ needs sdlc 4.21+, or gates 2–6 never record.** An older sdlc looks for
 receipts only under `.claude/grumpy/`, never sees the ones grumpy 2.15 writes to

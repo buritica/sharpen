@@ -587,7 +587,12 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
-[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21
+LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21; read, never written
+if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
+  mkdir -p "$(dirname "$PLAN")"
+  [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
+  cp "$LEGACY_PLAN" "$PLAN"
+fi
 ```
 
 If `$PLAN` exists, append under `## Notes`:

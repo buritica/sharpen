@@ -197,8 +197,12 @@ class GateUsesItTests(unittest.TestCase):
         self.assertIn("single space-free token", self.section)
 
     def test_update_notes_carry_the_install_check_rule(self):
-        with open(os.path.join(os.path.dirname(GATE_MD), "..", "UPDATE.md")) as f:
-            notes = " ".join(f.read().split())
+        # 4.19.0's notes, wherever they are now (UPDATE.md holds only the
+        # latest release; superseded ones move to CHANGELOG.md).
+        notes = ""
+        for name in ("UPDATE.md", "CHANGELOG.md"):
+            with open(os.path.join(os.path.dirname(GATE_MD), "..", name)) as f:
+                notes += " " + " ".join(f.read().split())
         self.assertNotIn("(exit 127)", notes)
         self.assertIn("fails the gate, whatever its exit code", notes)
 

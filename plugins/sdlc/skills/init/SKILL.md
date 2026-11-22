@@ -185,7 +185,7 @@ chain's floor, not an echo of CI.)
   covered only when that source is a repo-level file (`.gitignore`, a parent
   folder's `.gitignore`, `.git/info/exclude`), a blanket `.claude/` included.
   A match whose source is the folder's own `.gitignore` (for example
-  `.sharpen/data/.gitignore:2:*`, or `.claude/sdlc/.gitignore:1:*`; the
+  `.sharpen/data/.gitignore:2:*`, or `.sharpen/sdlc/.gitignore:1:*`; the
   line number depends on which writer made it) is sharpen's self-ignore, not the repo
   saying so: append the line anyway, unless the repo's `.gitignore` already
   has a rule naming that folder's contents (`.sharpen/sdlc/*`, `.sharpen/sdlc/**`),

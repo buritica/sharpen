@@ -369,5 +369,5 @@ a `.gitignore` holding `*` the moment they are created, on every host. `/sdlc:in
 lists them in the repo's `.gitignore`. The one exception is a repo still on the legacy
 `.claude/data/` store, a folder sharpen shares and never marks; init's block covers it.
 `.sharpen/simplify.json` is config and stays tracked, so never ignore `.sharpen/` as a
-whole. A team that commits its plans replaces `.claude/sdlc/.gitignore`'s contents with
+whole. A team that commits its plans replaces `.sharpen/sdlc/.gitignore`'s contents with
 `!*` (deleting it doesn't last: the next command writes it back).

@@ -71,7 +71,7 @@ def git(repo, *args, check=True):
 def make_repo():
     repo = os.path.realpath(tempfile.mkdtemp())
     # A real default branch, so a cycle resolves a base and writes
-    # `.claude/sdlc/<branch>/base.json` too.
+    # `.sharpen/sdlc/<branch>/base.json` too.
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "t@t")
     git(repo, "config", "user.name", "t")
@@ -121,10 +121,11 @@ class GateStateTest(RepoTest):
     def test_the_base_record_never_shows_up_in_git_status(self):
         # gate_base.write_base_file, called whenever a cycle resolves a base.
         self.init_cycle()
-        base = os.path.join(self.repo, ".claude", "sdlc", BRANCH, "base.json")
+        base = os.path.join(self.repo, ".sharpen", "sdlc", BRANCH, "base.json")
         self.assertTrue(os.path.isfile(base), "no base resolved; fixture broken")
         self.assertEqual(untracked(self.repo), [])
-        self.assertTrue(ignored(self.repo, f".claude/sdlc/{BRANCH}/base.json"))
+        self.assertTrue(ignored(self.repo, f".sharpen/sdlc/{BRANCH}/base.json"))
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")))
 
     def test_an_existing_state_folder_heals_on_its_next_write(self):
         data = os.path.join(self.repo, ".sharpen", "data")
@@ -362,12 +363,18 @@ class WriteFailureTest(RepoTest):
     def test_only_sharpens_own_folders_get_one(self):
         import artifact_dirs
 
-        for rel in (".sharpen", ".claude/data", "custom/data", ".claude/sdlc/x"):
+        for rel in (".sharpen", ".claude/data", "custom/data", ".sharpen/sdlc/x"):
             folder = os.path.join(self.repo, rel)
             os.makedirs(folder, exist_ok=True)
             artifact_dirs.ensure_self_ignored(folder)
             self.assertFalse(os.path.exists(os.path.join(folder, ".gitignore")), rel)
-        for rel in (".sharpen/data", ".claude/sdlc", ".claude/grumpy"):
+        for rel in (
+            ".sharpen/data",
+            ".sharpen/sdlc",
+            ".sharpen/grumpy",
+            ".claude/sdlc",
+            ".claude/grumpy",
+        ):
             folder = os.path.join(self.repo, rel)
             os.makedirs(folder, exist_ok=True)
             artifact_dirs.ensure_self_ignored(folder)
