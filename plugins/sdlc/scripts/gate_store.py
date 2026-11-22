@@ -991,22 +991,6 @@ def determine_gate(skill, branch_data):
     return None
 
 
-# gate -> the receipt's `executor` when a path other than an agent host ran the
-# pass (grumpy's oneshot.py). gate_receipts stamps it; --status shows it so a
-# one-shot review is never mistaken for an agent review.
-EVIDENCE_EXECUTORS_KEY = "evidence_executors"
-
-
-def _executor_note(branch_data, gate):
-    """` (via oneshot: openai gpt-6.2-astra)` when a receipt from a non-agent
-    path earned the gate."""
-    executor = (branch_data.get(EVIDENCE_EXECUTORS_KEY) or {}).get(gate)
-    if not isinstance(executor, dict) or not executor.get("host"):
-        return ""
-    detail = " ".join(executor[k] for k in ("provider", "model") if executor.get(k))
-    return f" (via {executor['host']}{': ' + detail if detail else ''})"
-
-
 def format_status(branch_data, branch=None):
     if not branch_data:
         suffix = f' for branch "{branch}"' if branch else ""
@@ -1046,6 +1030,8 @@ def format_status(branch_data, branch=None):
     lines.append("")
     gates = branch_data.get("gates", {})
     attestations = branch_data.get("attestations", {})
+    import gate_receipts as gr  # receipt evidence lives there; it imports this module
+
     for g in required_gates(branch_data):
         ts = gates.get(g)
         att = attestations.get(g)
@@ -1059,7 +1045,7 @@ def format_status(branch_data, branch=None):
             detail = f": {reason}" if reason else ""
             lines.append(f"  {mark} {g} — {ts} (attested, not hook-verified{detail})")
         elif ts:
-            lines.append(f"  {mark} {g} — {ts}{_executor_note(branch_data, g)}")
+            lines.append(f"  {mark} {g} — {ts}{gr.executor_note(branch_data, g)}")
         else:
             cleared = branch_data.get("invalidated_by", {}).get(g)
             if cleared:

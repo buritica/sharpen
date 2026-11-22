@@ -34,7 +34,9 @@ from artifact_dirs import GRUMPY_ROOT, LEGACY_GRUMPY_ROOT
 EVIDENCE_KEY = "evidence"
 EVIDENCE_RECEIPTS = "receipts"
 EVIDENCE_HEADS_KEY = "evidence_heads"
-EVIDENCE_EXECUTORS_KEY = gs.EVIDENCE_EXECUTORS_KEY  # set by stamp_receipt
+# gate -> the receipt's `executor` when a non-agent path ran the pass (grumpy's
+# oneshot.py); stamp_receipt sets it, executor_note renders it for --status.
+EVIDENCE_EXECUTORS_KEY = "evidence_executors"
 RECEIPT_PROTOCOL = "1"
 # Skill (as seen on the Skill tool) -> receipt file name. grumpy:fix writes
 # one `fix` receipt per run; which fix gate it earns is decided by
@@ -349,6 +351,15 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
         else:
             cleared.append(g)
     return cleared
+
+
+def executor_note(branch_data, gate):
+    """` (via oneshot: openai gpt-6.2-astra)` when a non-agent receipt earned the gate."""
+    executor = (branch_data.get(EVIDENCE_EXECUTORS_KEY) or {}).get(gate)
+    if not isinstance(executor, dict) or not executor.get("host"):
+        return ""
+    detail = " ".join(executor[k] for k in ("provider", "model") if executor.get(k))
+    return f" (via {executor['host']}{': ' + detail if detail else ''})"
 
 
 def receipt_heads(worktree_root, branch, head, cwd=None):
