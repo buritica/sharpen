@@ -50,7 +50,15 @@ record_skill_completion(
 
 The event fields are a canonical skill ID, canonical invocation cwd, boolean success result, host name/version, and optional invocation ID. The shared recorder validates the event, resolves same- and cross-repo routes, preserves gate ordering and invalidation, and performs the authorized atomic store write. Adapter metadata is returned for diagnostics, not treated as stored authority.
 
-An adapter must invoke this interface only after its host reports a successful skill invocation. It must not expose it as a user command or translate arbitrary manual records into automatic evidence. Claude Code supplies this through its `PostToolUse` `Skill` hook. fx and Codex do not yet have a reliable post-skill callback in Sharpen's plugin boundary, so they must retain the visible, reason-required `record-gate.py --attest` fallback until such an event exists.
+On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.claude/grumpy/<branch>/receipts/`) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
+
+- `record-gate.py --verify <pass>` is the host-neutral path. A gate chain runs it after each pass on any host that can run a shell.
+- Claude Code's `PostToolUse` `Skill` hook and `Stop` hook, and pi's `agent_end`, call the same recorder sooner. They are conveniences; the receipt is the evidence.
+- `record-gate.py --attest` stays the visible, reason-required fallback when a receipt can't be produced.
+
+Receipts record that the work ran. They are not a security boundary, and are not meant to be.
+
+Legacy cycles (no `evidence` key) keep event-only recording until their next `--init`, and the receipt-only paths (`--verify`, the sweeps) never stamp them.
 
 ## Capability profiles
 

@@ -640,6 +640,41 @@ If `$PLAN` does not exist, skip this step silently.
 Deliver the report and stop. Run `/grumpy:fix` if the user wants findings
 addressed. Don't silently modify code.
 
+## Step 6: Leave a Receipt
+
+Last step, after everything above: leave the receipt that lets the sdlc
+gate chain record this pass. It names the commit this pass ran against, in
+the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+gate records only from a receipt that names a commit on the branch. The
+writer refuses uncommitted changes. This pass changes nothing, so a dirty
+tree means it reviewed work in progress: don't commit someone's work just to
+get a receipt. Report that no receipt was written; the gate waits until the
+work is committed and the pass re-run. Skip
+it and the pass earns no gate on any host; write it before the work is done
+and it records work that didn't happen.
+
+The receipt records the sha256 of `imagine.md`, so it is refused unless this
+run saved that report under `.claude/grumpy/<branch>/` first. If the host
+would not let you write there and you printed the report instead, no receipt
+is written and no gate can be earned from this run: say so plainly, and don't
+write the report somewhere else to get one.
+
+```bash
+# Shell state doesn't persist between calls: set WT to the --worktree path
+# again if one was given, or the receipt lands on the wrong branch.
+WT="${WT:-.}"
+# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
+# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
+# shell. If neither is set, point RECEIPT at
+# <grumpy plugin root>/scripts/receipt.py yourself.
+RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
+if [ -f "$RECEIPT" ]; then
+  python3 "$RECEIPT" imagine --worktree "$WT"
+else
+  echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
+fi
+```
+
 ## Personality Guidelines
 
 - Be direct, not cruel. Criticize code and design choices, not people.

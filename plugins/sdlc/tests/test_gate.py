@@ -34,6 +34,11 @@ os.environ["SDLC_CROSS_REPO_ROUTES_PATH"] = os.path.join(
     tempfile.mkdtemp(), "cross-repo-routes.json"
 )
 
+# These suites exercise routing, ordering and invalidation through the
+# event-only recorder; receipt-backed recording has its own suite
+# (test_receipts.py). Opt every cycle these tests create out of receipts.
+os.environ["SDLC_GATE_EVIDENCE"] = "events"
+
 import gate_store as gs  # noqa: E402
 import hook_out as ho  # noqa: E402
 
@@ -2189,7 +2194,7 @@ class CrossRepoAutoRecordTest(unittest.TestCase):
         )
 
     def test_liveness_check_asks_the_target_repo_not_the_source(self):
-        # `active_worktree_branches` must run against the target's own root —
+        # `worktree_heads` must run against the target's own root —
         # confirmed indirectly: `feat/target` is the target's main checkout
         # branch (always "checked out" there), so if the hook mistakenly ran
         # `git worktree list` against the SOURCE instead, this would fail as

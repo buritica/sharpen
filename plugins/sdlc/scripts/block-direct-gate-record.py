@@ -2,8 +2,9 @@
 """
 PreToolUse hook: block direct `record-gate.py --record` for skill-gated gates.
 
-Skill-gated gates (simplify, grumpy-*) can ONLY be recorded by the auto-record
-hook after the actual skill runs, or via `record-gate.py --attest <gate>
+Skill-gated gates (simplify, grumpy-*) can ONLY be recorded from the skill's
+own run (its receipt via `--verify` or the end-of-turn sweep; on a legacy cycle
+the auto-record hook), or via `record-gate.py --attest <gate>
 --reason <text>` (gate_store.attest_gate) — a deliberately separate, loud,
 reason-required path for the reported case (sharpen#11) where the skill
 genuinely ran but a re-invoked Skill tool call returned a cached "already

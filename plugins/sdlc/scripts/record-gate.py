@@ -28,6 +28,10 @@ Usage:
   record-gate.py --attach-review <path>
                                       # attach a validated portable review
                                       # report without recording a gate
+  record-gate.py --verify <skill|all>  # record a skill gate from the receipt
+                                      # its grumpy pass left (review, fix,
+                                      # imagine, simplify, or grumpy:<name>);
+                                      # `all` sweeps every receipt on disk
   record-gate.py --attest <gate> --reason "<text>"
                                       # last-resort: stamp a skill-gated gate
                                       # on human attestation instead of the
@@ -41,8 +45,10 @@ Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
 import sys
 
 import capabilities
+import gate_receipts as rc
 import gate_store as gs
 import review_report
+import skill_gate_completion as completion
 
 
 def _log(msg):
@@ -83,7 +89,14 @@ def _init_with_route(
     where this worktree's skill gates land, and an unannounced move is the exact
     failure this whole channel was built to stop.
     """
-    bd = gs.init_gates(data, branch, tier, profile=profile, capabilities=capabilities)
+    bd = rc.init_gates(
+        data,
+        branch,
+        tier,
+        profile=profile,
+        capabilities=capabilities,
+        evidence=rc.default_evidence(),
+    )
     dropped = gs.clear_route(data, route_to_clear) if route_to_clear else []
     if route_to_set:
         gs.set_route(data, branch, route_to_set)
@@ -177,6 +190,68 @@ def _resolve_routing(branch, route_from):
     if gs.detect_branch() == branch:
         return None, gs.canonical_worktree_root(), None
     return None, None, None
+
+
+def _verify(target, branch_override):
+    """`--verify <skill|all>`: record skill gates from receipts.
+
+    Host-neutral: this is the same recorder the Claude hooks and the pi
+    extension call, so a gate chain on any host runs it after each grumpy
+    pass. It only ever records on a fresh receipt (gate_receipts.check_receipt),
+    which is why block-direct-gate-record lets it through while a bare
+    `--record <skill-gate>` stays refused."""
+    import os
+
+    if branch_override:
+        _log(
+            "[gate] error: --verify resolves the branch from the worktree; drop --branch"
+        )
+        return 1
+    if not target:
+        _log("Usage: --verify <review|fix|imagine|simplify|all>")
+        return 1
+    cwd = os.path.realpath(os.getcwd())
+    if target == "all":
+        swept = completion.sweep_receipts(cwd=cwd, host="cli", quick=False)
+        for r in swept["recorded"]:
+            _log(f"[gate] ✓ {r['gate']} recorded on {r['target']} from its receipt")
+            if r.get("warning"):
+                _log(f"[gate] ⚠ {r['warning']}")
+        for reason in dict.fromkeys(swept["refused"]):
+            _log(f"[gate] {reason}")
+        if swept["error"]:
+            _log(f"[gate] error: {swept['error']}")
+        elif not swept["recorded"] and not swept["refused"]:
+            _log("[gate] no new receipts to record")
+        return 1 if swept["error"] or swept["refused"] else 0
+    skill = target if target.startswith("grumpy:") else f"grumpy:{target}"
+    if skill not in gs.SKILL_TO_GATE:
+        _log(
+            f'[gate] error: "{target}" is not a gated skill '
+            f"(one of: {', '.join(rc.RECEIPT_NAME_FOR_SKILL.values())}, all)"
+        )
+        return 1
+    result = completion.record_skill_completion(
+        skill=skill, cwd=cwd, succeeded=True, host="cli", require_receipt=True
+    )
+    if result.get("recorded"):
+        _log(
+            f"[gate] ✓ {result['gate']} recorded on {result['target']} from its receipt"
+        )
+        if result.get("warning"):
+            _log(f"[gate] ⚠ {result['warning']}")
+        for g in result.get("invalidated") or []:
+            _log(f"[gate] {g} cleared: {result['gate']} can change code, re-run it")
+        return 0
+    reason = result.get("error") or result.get("reason") or ""
+    if not result.get("error") and '" already recorded' in reason:
+        _log(
+            f"[gate] {skill}: nothing left to record ({reason}). A gate is "
+            "earned once per cycle; after a stale-gates block, re-init first."
+        )
+        return 0
+    _log(f"[gate] {skill}: {reason}")
+    return 1
 
 
 def main(argv):
@@ -280,6 +355,9 @@ def main(argv):
             )
         )
         return 0
+
+    if command == "--verify":
+        return _verify(rest[1] if len(rest) > 1 else None, branch_override)
 
     branch = branch_override or gs.detect_branch()
     if not branch or branch == "HEAD":
@@ -477,6 +555,7 @@ def main(argv):
         elif command == "--status":
             data = gs.load_store(path)
             out = gs.format_status(data.get(branch), branch)
+            out += rc.stale_suffix(data.get(branch), branch)
             # `format_status`'s own "Driven from:" line only reaches whoever
             # asks about the branch being routed TO. The source side — the
             # worktree actually doing the driving — had no way to learn this
@@ -509,11 +588,14 @@ def main(argv):
                 out += f"\n\n{note}"
             sys.stdout.write(out + "\n")
         elif command == "--oneline":
-            sys.stdout.write(gs.format_oneline(gs.load_store(path).get(branch)) + "\n")
+            bd = gs.load_store(path).get(branch)
+            line = gs.format_oneline(bd) + rc.stale_suffix(bd, branch)
+            sys.stdout.write(line + "\n")
         else:
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "
-                "--attest <gate> --reason <text> | --status | --oneline | "
+                "--attest <gate> --reason <text> | --verify <skill|all> | "
+                "--status | --oneline | "
                 "--unroute] [--branch <name>] [--route-from <path>] "
                 "[--profile <name> --capabilities-file <path>] "
                 "[--attach-review <path>]"

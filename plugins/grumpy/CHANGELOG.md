@@ -3,6 +3,20 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.9.0 — every pass leaves a receipt
+
+`/grumpy:simplify`, `/grumpy:review`, `/grumpy:fix` and `/grumpy:imagine` now end by running
+`scripts/receipt.py <pass> --worktree <path>`, which writes
+`.claude/grumpy/<branch>/receipts/<pass>.json` with the branch and its current HEAD
+(schema: `schemas/grumpy-receipt.v1.schema.json`). sdlc 4.14.0+ records gates 2 through 6
+from these receipts instead of from the `Skill` tool event, so the gates now record on
+Codex, fx and pi as well as Claude Code. The receipt is evidence that the pass ran, not a
+security boundary. It also names the pass's report and its sha256: no saved report, no
+receipt, and sdlc refuses a receipt whose report is missing, and warns when it changed. A detached HEAD is refused, because a gate is keyed by branch, and so
+is a dirty tree: commit the pass's edits first, or the commit that follows would make
+every gate stale. Under pi, a new one-line extension exports `GRUMPY_PLUGIN_ROOT` so the
+passes can find `receipt.py` (sdlc's extension owns `CLAUDE_PLUGIN_ROOT` there).
+
 ## 2.8.0 — `/grumpy:imagine` gains documentation coverage
 
 `/grumpy:imagine` now dispatches a 5th simulation agent (Documentation Coverage) alongside

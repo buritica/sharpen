@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Host-neutral skill-completion recorder for SDLC gate adapters.
 
-Adapters normalize their host event and call :func:`record_skill_completion`
-only after a trusted successful skill lifecycle callback. Hosts without such a
-callback must retain the visible, reason-required --attest fallback.
+Every host reaches the same function, :func:`record_skill_completion`: the
+Claude PostToolUse Skill hook, the Claude Stop / pi agent_end receipt sweep,
+and `record-gate.py --verify` (which a gate chain runs after each grumpy pass,
+on any host). On a receipt-backed cycle (`evidence: receipts`) the event alone
+proves nothing: the gate records only when the pass's receipt names the
+branch's HEAD or an ancestor of it (see gate_receipts.check_receipt). Legacy cycles keep the
+old event-only behaviour. --attest stays the visible fallback when no receipt
+can be produced.
 """
 
 import os
 
 import subprocess
 
+import gate_receipts as rc
 import gate_store as gs
 
 
@@ -59,8 +65,76 @@ def find_active_cycle(data, skill, active_branches):
     return pending[0]
 
 
+def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
+    """For a receipt-backed cycle: (receipt, None) when the receipt earns
+    `gate`, else (None, refusal dict). Legacy cycles: (None, None), unless
+    the caller is a receipt-only path (a sweep, --verify), which must never
+    stamp a legacy cycle on no evidence at all."""
+    if not rc.uses_receipts(bd):
+        if require_receipt:
+            return None, {
+                "recorded": False,
+                "gate": gate,
+                "target": target_branch,
+                "reason": (
+                    f'"{target_branch}"\'s cycle predates receipts; re-init it '
+                    "(record-gate.py --init <tier>) to record from receipts"
+                ),
+                "legacy_cycle": True,
+            }
+        return None, None
+    root, head, reachable = (evidence or {}).get(target_branch, (None, None, ()))
+    receipt, reason = rc.check_receipt(
+        rc.receipt_path(root, target_branch, skill),
+        skill=skill,
+        gate=gate,
+        branch=target_branch,
+        head=head,
+        branch_data=bd,
+        reachable=reachable,
+    )
+    if reason:
+        # Not surprising: "the pass hasn't finished yet" is the normal state
+        # every time a Skill tool call returns, and a sweep runs at every turn
+        # end. The gate chain's explicit --verify surfaces the reason itself.
+        return None, {
+            "recorded": False,
+            "gate": gate,
+            "target": target_branch,
+            "reason": f'"{gate}" not recorded: {reason}',
+            "awaiting_receipt": True,
+        }
+    return receipt, None
+
+
+def _record(data, target_branch, gate, receipt):
+    """The one authorized stamp: a trusted completion event (legacy cycle)
+    or a fresh receipt (receipt-backed cycle)."""
+    before = dict(data[target_branch].get("gates", {}))
+    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
+    if receipt:
+        invalidated = rc.stamp_receipt(
+            data, target_branch, gate, receipt, invalidated, before
+        )
+    result = {
+        "recorded": True,
+        "gate": gate,
+        "target": target_branch,
+        "invalidated": invalidated,
+    }
+    if receipt and receipt.get("warning"):
+        result["warning"] = receipt["warning"]
+    return result
+
+
 def handle_skill_completion(
-    skill, data, branch, active_branches=None, source_root=None
+    skill,
+    data,
+    branch,
+    active_branches=None,
+    source_root=None,
+    evidence=None,
+    require_receipt=False,
 ):
     # `branch` and `source_root` are both resolved by the caller, never here:
     # this runs inside update_store's mutator, and a git subprocess in there
@@ -134,16 +208,10 @@ def handle_skill_completion(
                 ),
                 "surprising": True,
             }
-        # Routed or not, this hook just watched the skill run.
-        invalidated = gs.record_gate_and_diff(
-            data, target_branch, gate, authorized=True
+        receipt, refusal = _receipt_gate(
+            skill, gate, target_branch, bd, evidence, require_receipt
         )
-        return {
-            "recorded": True,
-            "gate": gate,
-            "target": target_branch,
-            "invalidated": invalidated,
-        }
+        return refusal or _record(data, target_branch, gate, receipt)
 
     if not branch:
         # Distinct from detached HEAD so the message says which happened, but
@@ -210,22 +278,27 @@ def handle_skill_completion(
     if bd.get("gates", {}).get(gate):
         return {"recorded": False, "reason": f'"{gate}" already recorded'}
 
-    # This hook just watched the skill run — the one authorized recorder.
-    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
-    return {
-        "recorded": True,
-        "gate": gate,
-        "target": target_branch,
-        "invalidated": invalidated,
-    }
+    receipt, refusal = _receipt_gate(
+        skill, gate, target_branch, bd, evidence, require_receipt
+    )
+    return refusal or _record(data, target_branch, gate, receipt)
 
 
 def record_skill_completion(
-    *, skill, cwd, succeeded, host, host_version=None, invocation_id=None
+    *,
+    skill,
+    cwd,
+    succeeded,
+    host,
+    host_version=None,
+    invocation_id=None,
+    require_receipt=False,
 ):
     """Record a successful normalized host skill-completion event.
 
-    Host adapters must call this only from a trusted post-skill lifecycle event.
+    Callers: the Claude PostToolUse Skill hook (a trusted post-skill event),
+    and the receipt-only paths (`--verify`, the end-of-turn sweep), which pass
+    `require_receipt=True` so they can never stamp without a fresh receipt.
     `skill` is the canonical skill identifier, `cwd` identifies the invoking
     worktree, and `succeeded` must describe the invocation result. Optional host
     metadata is returned for adapter diagnostics but is not persisted as gate
@@ -266,15 +339,14 @@ def record_skill_completion(
     # Normalize paths at the adapter boundary so every subsequent git question
     # and cross-repo registry lookup identifies the same worktree spelling.
     cwd = os.path.realpath(cwd)
-    source_root = gs.canonical_worktree_root(cwd)
-    cross = gs.resolve_cross_repo_route(source_root, cwd=cwd)
-    if cross:
-        path = cross["store_path"]
-        git_cwd = cross["target_root"]
-    else:
-        path = gs.default_store_path(cwd)
-        git_cwd = cwd
-    active = active_worktree_branches(git_cwd)
+    source_root, path, git_cwd = _store_for(cwd)
+    heads = rc.worktree_heads(git_cwd)
+    active = set(heads) if heads is not None else None
+    # Ancestry needs git, and git never runs inside the store lock.
+    evidence = {
+        b: (root, sha, rc.receipt_heads(root, b, sha) if sha else frozenset())
+        for b, (root, sha) in (heads or {}).items()
+    }
     branch = gs.detect_branch(cwd)
     holder = {}
 
@@ -285,6 +357,8 @@ def record_skill_completion(
             branch=branch,
             active_branches=active,
             source_root=source_root,
+            evidence=evidence,
+            require_receipt=require_receipt,
         )
         holder.update(res)
         return res
@@ -312,3 +386,71 @@ def record_skill_completion(
             **result_metadata,
         }
     return {**holder, **result_metadata}
+
+
+# Chain order a sweep walks. grumpy:fix appears twice because it earns two
+# gates; each call records at most one, and the receipt freshness rule keeps
+# one fix receipt from earning both.
+SWEEP_ORDER = (
+    "grumpy:simplify",
+    "grumpy:review",
+    "grumpy:fix",
+    "grumpy:imagine",
+    "grumpy:fix",
+)
+
+
+def _store_for(cwd):
+    """(source_root, store_path, git_cwd) for a canonical cwd, following a
+    cross-repo route when one is registered."""
+    source_root = gs.canonical_worktree_root(cwd)
+    cross = gs.resolve_cross_repo_route(source_root, cwd=cwd)
+    if cross:
+        return source_root, cross["store_path"], cross["target_root"]
+    return source_root, gs.default_store_path(cwd), cwd
+
+
+def _any_receipt_cycle(cwd):
+    """False outside a repo, or when no cycle in the store is receipt-backed:
+    nothing a sweep could record, so skip the git work and the store lock."""
+    if not gs.canonical_worktree_root(cwd):
+        return False
+    _, path, _ = _store_for(cwd)
+    try:
+        data = gs.load_store(path)
+    except Exception:
+        return True  # let the real pass report the store problem
+    return any(rc.uses_receipts(bd) for bd in data.values())
+
+
+def sweep_receipts(*, cwd, host, host_version=None, quick=True):
+    """Record every skill gate whose receipt is already on disk, in chain
+    order. Used by end-of-turn hooks (Claude Stop, pi agent_end) and by
+    `record-gate.py --verify all`, so a pass whose own --verify was skipped
+    still records, as long as its receipt names HEAD or an ancestor of it.
+
+    Returns {"recorded": [results], "refused": [reasons for receipts that
+    exist but don't count], "error": str or None}."""
+    out = {"recorded": [], "refused": [], "error": None}
+    if quick and not _any_receipt_cycle(os.path.realpath(cwd)):
+        return out  # end-of-turn hooks: every turn, every repo, stay cheap
+    for skill in SWEEP_ORDER:
+        result = record_skill_completion(
+            skill=skill,
+            cwd=cwd,
+            succeeded=True,
+            host=host,
+            host_version=host_version,
+            require_receipt=True,
+        )
+        if result.get("recorded"):
+            out["recorded"].append(result)
+        elif result.get("error"):
+            out["error"] = result["error"]
+            break
+        elif result.get("legacy_cycle") or (
+            result.get("awaiting_receipt") and "no receipt yet" not in result["reason"]
+        ):
+            if result["reason"] not in out["refused"]:
+                out["refused"].append(result["reason"])
+    return out

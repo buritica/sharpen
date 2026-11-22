@@ -11,7 +11,7 @@ Run the quality gate chain on the current worktree. Gates enforce code quality b
 
 Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present, remove it from the arguments and set `WT` to that path. Otherwise `WT` is the current directory. **Run every git operation in this command against `WT`**: use `git -C "$WT" <subcommand>` for all diff/status/rev-parse/log calls, and resolve `BRANCH` and `ARTIFACT_DIR` from `WT`. With the flag absent, behavior is unchanged (cwd). This lets the command target a worktree even when the invoking session's cwd is elsewhere. When `--worktree` is set, resolve the branch from `$WT` (`git -C "$WT" rev-parse --abbrev-ref HEAD`) and pass it to `--branch` when calling `record-gate.py`.
 
-`--branch` covers the gates you record yourself (`tests`, `lint`, `typecheck`). The skill-gated ones (`simplify`, `grumpy-*`) are stamped by the `auto-record-skill-gate.py` PostToolUse hook, which never sees this command's arguments — it only knows the cwd the skill ran in, which is **this** session, not `$WT`. Passing `--route-from` at `--init` is what tells the hook otherwise, so **when `--worktree` is set, every `--init` in this command MUST carry `--route-from "$PWD"`**. Skip it and gates 2–6 land on the wrong branch (or nowhere) — silently, since skill-gated gates have no manual `--record` to correct them with. `--init` is also the post-gate reset, so this applies to every re-init in the chain, not just the first.
+`--branch` covers the gates you record yourself (`tests`, `lint`, `typecheck`). The skill-gated ones (`simplify`, `grumpy-*`) are stamped from receipts by `record-gate.py --verify` and the host hooks, none of which see this command's arguments — they only know the cwd they ran in, which is **this** session, not `$WT`. Passing `--route-from` at `--init` is what tells the hook otherwise, so **when `--worktree` is set, every `--init` in this command MUST carry `--route-from "$PWD"`**. Skip it and gates 2–6 land on the wrong branch (or nowhere) — silently, since skill-gated gates have no manual `--record` to correct them with. `--init` is also the post-gate reset, so this applies to every re-init in the chain, not just the first.
 
 The route lives in the shared store until it is replaced or dropped. It is dropped when this session next runs `--init` for its **own** branch, or explicitly:
 
@@ -21,74 +21,72 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --unroute
 
 Run `--unroute` when you finish gating `$WT` and keep working in this session — otherwise a later `/grumpy:review` here still records against `$WT`'s branch. `--status` prints `Driven from: <path>` whenever a route is active; check it if a gate lands somewhere unexpected. A worktree drives at most one branch, but two sessions may drive the same target and both record there.
 
-### A skill-gated gate that won't stamp in a long session
+### How skill gates record: receipts (every host)
 
-**(Claude Code specific.)** If a `/grumpy:*` skill genuinely ran
-— real findings, real artifacts written — but its gate never landed in
-`--status`, suspect Claude Code's Skill-tool instruction caching before
-assuming the hook is broken: re-invoking a skill already loaded earlier in a
-long session can make Claude Code's Skill tool return "already loaded above,
-instructions unchanged" instead of dispatching fresh. Reported behavior
-(sharpen#11) is that `auto-record-skill-gate.py`'s PostToolUse hook does not
-fire for that cached response, since it only fires on a genuine dispatch —
-but this hasn't been pinned down as fully reliable across sessions, so a
-stamp that lands anyway on a re-invocation isn't a sign the hook is
-misbehaving. This entire failure mode, and the fix below, is specific to how
-Claude Code's Skill tool caches instructions; it doesn't generalize to other
-hosts.
+A gate cycle started by `--init` or by auto-init is **receipt-backed**. Each
+grumpy pass ends by writing a small receipt into the gitignored
+`.claude/grumpy/<branch>/receipts/` directory, naming the commit it ran
+against. A skill gate records only from a receipt that names a commit on the branch
+(HEAD, or an ancestor when a later pass has already committed), was written
+after this cycle started, and (for a fix gate) was written after the receipt of
+the pass it follows, and whose report (`review.md`, ...) is still on disk. A
+report edited after its receipt still records, with a warning naming it. A pass commits its own edits and saves its report
+before writing its receipt; the writer refuses a dirty tree or a missing report. That is what makes a gate mean "the
+pass ran on this code" rather than "the skill was loaded" (sharpen#52, #53).
 
-Fix it forward, in order:
-
-1. **Re-run the skill from a fresh subagent.** A clean context has no cached
-   instructions to short-circuit, so Claude Code's Skill tool dispatches for
-   real and the hook fires normally. If that subagent isn't the worktree
-   driving the branch's cycle, route it first (`--route-from`, as above) so
-   its stamp lands on the right branch.
-2. **Last resort:** `record-gate.py --attest <gate> --reason "<text>"`.
-   This stamps the gate on human attestation instead of a hook observation —
-   it requires a reason and marks itself in `--status`/`--oneline` with `⚠`
-   rather than `✓`, so a reader can tell it apart from a hook-verified stamp.
-   That distinction is for the reader, not the enforcer: `gh pr create`
-   unblocks on an attested gate exactly as it would on a hook-verified one —
-   `enforce-sdlc-gates.py` only checks whether the gate is stamped, not how.
-   Use it only when re-dispatching genuinely isn't practical, and say in the
-   PR description that a gate was attested rather than hook-verified, and why.
-
-### Hosts with no `PostToolUse` support at all (sharpen#41)
-
-The section above is about a Claude Code-specific caching quirk on a host
-that otherwise has working hooks. A different, more basic gap: some hosts
-(fx is the reported case) can dispatch `/grumpy:simplify`, `/grumpy:review`,
-`/grumpy:imagine`, and `/grumpy:fix` — the skill genuinely runs, with real
-findings and real artifacts written to `.claude/grumpy/<branch>/` — but never
-fire a `PostToolUse` lifecycle event at all, so `auto-record-skill-gate.py`
-never runs and gates 2–6 can never auto-record. There is no host-specific
-adapter to write here: **the general recording path for exactly this case is
-the same `--attest` escape hatch**, one call per skill-gated gate actually
-run:
+The recording path is the same on Claude Code, Codex, pi, fx or anything
+else that can run a shell: **after each grumpy pass, run `--verify` for it.**
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --attest simplify \
-  --reason "ran via fx, which has no PostToolUse hook support (sharpen#41)"
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --attest grumpy-review \
-  --reason "ran via fx, which has no PostToolUse hook support (sharpen#41)"
-# ...grumpy-fix-post-review, grumpy-imagine, grumpy-fix-post-imagine likewise.
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify simplify   # after /grumpy:simplify
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify review     # after /grumpy:review
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify fix        # after each /grumpy:fix
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify imagine    # after /grumpy:imagine
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify all        # sweep every receipt on disk
 ```
 
-This is not a downgrade invented for fx: it is the same mechanism, the same
-`⚠` marker in `--status`, and the same treatment by `enforce-sdlc-gates.py`
-(a stamp is a stamp, however it was made) as the Claude-caching path above.
-Before arming a cycle at all, resolve which [portable capability
-profile](../../../docs/portable-core.md#capability-profiles) the host can
-actually complete — `baseline`/`review`/`adversarial`, declared via `--init
---profile <name> --capabilities-file <manifest>` — and do not arm
-`small-medium`/`significant` if the host cannot eventually attest every
-skill-gated gate a full chain requires; `--init tiny` for anything that
-doesn't warrant the full chain. Note the declared `--profile` is metadata for
-readers and CI (`--status`, an attached review report) — it does not itself
-reduce which gates a *tier* requires; `simplify` and the four `grumpy-*`
-gates are still required at `small-medium`/`significant` regardless of
-profile, and still need their own `--attest` call each.
+Claude Code substitutes the braced `${CLAUDE_PLUGIN_ROOT}` in this text but does
+not export it to the agent's shell, so keep the braces. A host that exports
+`SDLC_PLUGIN_ROOT` wins. If the path still comes out empty, use the installed
+sdlc plugin's path instead. Run it from the worktree being gated (`cd "$WT"` first when
+`--worktree` is set); routing set with `--route-from` applies exactly as it does to the
+hooks. `--verify` exits non-zero with the reason when the receipt is missing,
+names a commit that is no longer on the branch, or predates the cycle (an
+already-recorded gate exits 0): re-run the pass, don't work
+around it. Unlike `--record`, it is never refused for skill gates, because it
+only ever records on a receipt.
+
+Host hooks call the same recorder sooner, as a convenience:
+
+- **Claude Code:** the PostToolUse `Skill` hook tries when the skill loads
+  (too early on a receipt-backed cycle, so it quietly records nothing), and
+  the `Stop` hook sweeps receipts at the end of every turn. Skill-tool
+  instruction caching (sharpen#11, #52) no longer matters: recording doesn't
+  depend on whether a cached call fires a hook.
+- **pi:** the extension sweeps receipts on `agent_end`.
+- **Codex and others:** the explicit `--verify` above.
+
+A receipt is a record that the work ran, not a security boundary: anyone can
+write one by hand, just as anyone can edit `gates.json`. It stops an agent
+skipping its own steps; it is not meant to stop a person.
+
+**Staleness.** Every receipt-recorded gate stores the commit it saw. Earlier
+gates sitting on older commits is normal (fix passes commit); what counts is
+the last skill gate. If a commit lands after it, `enforce-sdlc-gates.py`
+blocks `gh pr create` and names the stale gates. Re-init and re-run the chain
+on the new HEAD (see **Reset** below). A rebase moves HEAD too, so rebase
+before running the chain, not after. An attested last gate (`--attest`) is not
+judged on staleness.
+
+**Legacy cycles** (started before receipts, no `evidence` key in the store)
+keep the old event-only recording until their next `--init`. Setting
+`SDLC_GATE_EVIDENCE=events` makes new cycles legacy too; that is a migration
+escape hatch, not a recommended mode.
+
+**Last resort:** `record-gate.py --attest <gate> --reason "<text>"` still
+stamps a skill gate on human attestation when a receipt genuinely can't be
+produced. It requires a reason, shows as `⚠` in `--status`/`--oneline`, and
+should be named in the PR description.
 
 ### Cross-repo routing (sharpen#10)
 
@@ -172,7 +170,7 @@ Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only wh
 - `/grumpy:review`, `/grumpy:fix`, and `/grumpy:imagine` all available → **grumpy mode** for gates 3–6, independent of gate 2's own check below.
 - `/grumpy:simplify` available → **grumpy mode** for gate 2, independent of the trio's own check above.
 - Whichever of the two checks fails → **self-review fallback** for that gate (or gates) only. Announce it loudly: `⚠️ grumpy incomplete — gate 2 uses the weaker self-review fallback` (or the equivalent for gates 3–6, or both), and note it in the PR description.
-  **The fallback cannot satisfy a skill-gated gate when the hooks are installed.** That gate is recorded only by the auto-record hook when the real skill runs; `record-gate.py --record grumpy-review` (or `--record simplify`) is refused by the store, by design. So with hooks registered and the corresponding skill absent, a `small-medium`/`significant` cycle never completes and `gh pr create` stays blocked.
+  **The fallback cannot satisfy a skill-gated gate when the hooks are installed.** That gate is recorded only from the receipt the real skill's pass leaves; `record-gate.py --record grumpy-review` (or `--record simplify`) is refused by the store, by design. So with hooks registered and the corresponding skill absent, a `small-medium`/`significant` cycle never completes and `gh pr create` stays blocked.
   **Say this before you initialize, not after the work is done.** If the tier you are about to init is `small-medium` or `significant` and any of the four skills is unavailable, stop and tell the user: the cycle cannot complete, and their options are to install the missing skill or (only if the change genuinely qualifies) run `tiny`. Failing at init costs them a sentence; failing at `gh pr create` costs them the whole chain. Do not present the self-review as having satisfied a gate it cannot record.
 - If you are genuinely unsure, **ask** rather than silently downgrading.
 
@@ -194,7 +192,7 @@ with no block at all is simply pre-4.11; mention it once.
 
 ## Gate tracking
 
-Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how the auto-record hook in this session finds `$WT`'s cycle.
+Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how `--verify`, the Stop sweep and the auto-record hook in this session find `$WT`'s cycle.
 
 ### Initialize
 
@@ -210,7 +208,7 @@ Replace `<tier>` with `tiny`, `small-medium`, or `significant`. Drop `--route-fr
 
 ### Record a gate
 
-After each gate passes (manual recording is only for the bash-verifiable gates — `tests`, `lint`, `typecheck`; the `simplify` and `grumpy-*` gates auto-record when the skill runs):
+After each gate passes (manual recording is only for the bash-verifiable gates — `tests`, `lint`, `typecheck`; the `simplify` and `grumpy-*` gates record from their receipts with `--verify`, see above):
 
 ```bash
 WT="${WT:-.}"
@@ -242,7 +240,7 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --status --branch "$BRANCH"
 
 The full chain for **Small-medium+**:
 
-The **Key** column is the exact gate name `record-gate.py` accepts and stores. `tests`/`lint`/`typecheck` are recorded manually; `simplify` and the `grumpy-*` gates auto-record when their skill runs.
+The **Key** column is the exact gate name `record-gate.py` accepts and stores. `tests`/`lint`/`typecheck` are recorded manually; `simplify` and the `grumpy-*` gates record from the receipt their pass leaves (`--verify <pass>`).
 
 | # | Gate | Key | How | Pass when |
 |---|------|-----|-----|-----------|
@@ -255,7 +253,7 @@ The **Key** column is the exact gate name `record-gate.py` accepts and stores. `
 | 7 | **Lint** | `lint` | Auto-detect linter (see below) | Exit 0 |
 | 8 | **Typecheck** | `typecheck` | Auto-detect checker (see below) | Exit 0 |
 
-Gates 2-6 are **skill-gated**: they are recorded only by the auto-record hook when the skill itself runs. `record-gate.py --record simplify` (or any `grumpy-*` gate) is refused — by the hook, and by the store behind it, however you spell it. The self-review in the "Otherwise" column is a quality practice, not a way to satisfy the gate.
+Gates 2-6 are **skill-gated**: they are recorded only from the receipt the skill's own pass leaves, by `--verify` or a host hook. `record-gate.py --record simplify` (or any `grumpy-*` gate) is refused — by the hook, and by the store behind it, however you spell it. The self-review in the "Otherwise" column is a quality practice, not a way to satisfy the gate.
 
 **"All critical findings resolved" (gates 4 and 6) allows one other outcome besides a fix:** a non-critical finding may instead be deferred with a `ponytail:` comment at its site, per `/grumpy:fix`'s eligibility table — Critical findings are never deferred, so this never weakens what "resolved" means for gates 4/6's own pass criterion.
 
@@ -367,13 +365,14 @@ Use your harness's task-tracking feature if it has one — one task per gate, cr
 
 Run each gate in order. After each gate passes:
 1. **For gates 1, 7, and 8 only** — record it using the **Record a gate** block above, always passing `--branch "$BRANCH"` (resolved from `$WT`) so the gate lands on the worktree's branch, not whatever branch the invoking cwd happens to be on. The store is shared per-repo, so the path resolves correctly from any cwd inside the repo. Do **not** run `--record` for gates 2–6: it is refused by the hook and again by the store, and the refusal is a hard tool-call denial, not a no-op.
-2. For the skill-gated gates (2–6) there is nothing to record by hand — but **check that the auto-record actually landed** before moving on (this hook mechanism is Claude Code specific; see the caveats below):
+2. **For gates 2–6** — run `--verify` for the pass that just finished, from the worktree being gated, and check that it recorded:
 
    ```bash
+   python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --verify <simplify|review|fix|imagine>
    python3 "$CLAUDE_PLUGIN_ROOT/scripts/record-gate.py" --oneline --branch "$BRANCH"
    ```
 
-   The hook records on a PostToolUse event. A skip it did not expect — an unreadable or unwritable store, an ambiguous cross-worktree match — exits 2 and says so, so you should see it. The one skip that stays quiet is the normal opt-out: **no cycle for this branch at all**, which looks identical to a clean run. Catching that here costs one command; discovering it at `gh pr create` costs a full re-run of the chain.
+   A non-zero `--verify` names the reason (no receipt yet, receipt for a commit no longer on the branch, receipt from before this cycle). Fix that before moving on — discovering it at `gh pr create` costs a full re-run of the chain. The hooks stay quiet when there is **no cycle for this branch at all**, the normal opt-out; an explicit `--verify` still says so.
 3. Mark the corresponding task complete (task-tracking feature or plain checklist, per the note above)
 
 On failure:

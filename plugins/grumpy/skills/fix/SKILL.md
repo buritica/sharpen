@@ -500,6 +500,40 @@ because no observable trigger could be named — ask using AskUserQuestion:
 
 If yes, repeat Steps 2–4 for the Optional bucket.
 
+## Step 6: Leave a Receipt
+
+Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
+gate chain record this pass. It names the commit this pass ran against, in
+the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+gate records only from a receipt that names a commit on the branch. The
+writer refuses uncommitted changes: commit the fixes, and `git stash` any
+uncertain or partial change Step 4 kept out of the commit (say so in the
+summary). Skip
+it and the pass earns no gate on any host; write it before the work is done
+and it records work that didn't happen.
+
+The receipt records the sha256 of `fix.md`, so it is refused unless this
+run saved that report under `.claude/grumpy/<branch>/` first. If the host
+would not let you write there and you printed the report instead, no receipt
+is written and no gate can be earned from this run: say so plainly, and don't
+write the report somewhere else to get one.
+
+```bash
+# Shell state doesn't persist between calls: set WT to the --worktree path
+# again if one was given, or the receipt lands on the wrong branch.
+WT="${WT:-.}"
+# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
+# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
+# shell. If neither is set, point RECEIPT at
+# <grumpy plugin root>/scripts/receipt.py yourself.
+RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
+if [ -f "$RECEIPT" ]; then
+  python3 "$RECEIPT" fix --worktree "$WT"
+else
+  echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
+fi
+```
+
 ## Personality Guidelines
 
 - Be direct and specific — name the file, name the problem
