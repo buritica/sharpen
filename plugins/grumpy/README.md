@@ -72,7 +72,8 @@ agent and escalating one tier on a failed `accept:` check:
 The role→model map lives in `models.yaml`. Each role has the Anthropic API id,
 the Claude Code alias passed to subagents (`opus`, `sonnet`, `haiku`), and the
 model to start a Codex session on, since Codex (like pi) can't pick a model per
-subagent. Review runs its finding passes on the `analysis` role; imagine stays
+subagent, plus the OpenAI API id the no-agent path calls (`openai`, see "No agent
+installed"). Review runs its finding passes on the `analysis` role; imagine stays
 on the session's model until a larger benchmark run settles which model suits
 it; fix routes by `exec:` tier; audit dispatches its dimension reviews on
 `analysis`. A repo can override single values in a committed
@@ -419,6 +420,103 @@ under Claude, and skill-gated gates record from the receipt each pass writes
 (see `docs/pi.md` and sdlc's `gate.md`). In the top-level bundle, grumpy's `audit` skill is
 excluded because pi skill names are flat and sdlc's `audit` wins the collision;
 install grumpy alone for its `audit` skill.
+
+## No agent installed (`scripts/oneshot.py`)
+
+With no coding agent at all, the review pass can still run against a chat API:
+
+```sh
+export OPENAI_API_KEY=...                      # read from the environment only
+python3 <grumpy>/scripts/oneshot.py review --provider openai
+
+export SHARPEN_LLM_URL=http://localhost:11434/v1   # Ollama, llama.cpp, vLLM, LM Studio
+export SHARPEN_LLM_API_KEY=...                     # only if the server wants a bearer token
+python3 <grumpy>/scripts/oneshot.py review --provider compatible --model <a model you pulled>
+```
+
+`<grumpy>` is the grumpy plugin folder: a clone of sharpen's `plugins/grumpy`, or the
+installed plugin's cache folder. Arm a gate cycle first if you want the gate
+(`python3 <sdlc>/scripts/record-gate.py --init small-medium`), or `--verify review` has
+nothing to record into. Commit first: the pass reviews `HEAD`, refuses a dirty tree, and
+refuses a detached HEAD or the default branch before it calls anything.
+
+`--provider` defaults to `SHARPEN_LLM_PROVIDER`, else `openai`: **a bare `oneshot.py review`
+sends your code to OpenAI.** Set `SHARPEN_LLM_PROVIDER=compatible` on a machine that should
+never do that. `--dry-run` prints the finding-pass prompts and a count of the calls it would
+make (not the aggregation prompt, which depends on the passes' answers) and calls nothing;
+`--aspects` picks review aspects; `--worktree` points it at another checkout; `--jobs` is how
+many finding passes run at once (4 for `openai`, 1 for `compatible`: a local single-GPU
+server serializes prompt evaluation, and parallel prompts only queue behind each other while
+every socket timeout keeps ticking); `--timeout` is the seconds per call (300). sdlc's
+`openai_adapter.py` and `local_llm_adapter.py` run the gate commands from a capability
+manifest and then this.
+
+**A local server needs a context window that fits the prompt.** Each finding pass is the
+diff (up to 200k characters) plus the changed files' text (up to another 200k) plus the
+command's own instructions. Only `model` and `messages` are sent, so the server's default
+context applies: Ollama's default `num_ctx` is a few thousand tokens and it truncates
+silently, which drops the instructions at the top and makes the pass answer in prose
+(reported as "errored", no receipt) or review a fragment. Raise the server's context (for
+Ollama, a `Modelfile` with `PARAMETER num_ctx`, or `OLLAMA_CONTEXT_LENGTH`) to cover the
+prompt, or narrow the review with `--aspects` and smaller diffs.
+
+**It is the same review, run differently.** The prompts are built from
+`commands/review.md` each run, not written separately: the persona, the aspect list, Step 3's
+finding-pass template and its `CRIT`/`WARN`/`NOTE` severities, the Audit discipline, Step 4
+with its settled-findings rules and report template, and the Personality Guidelines. It sends
+one finding call per aspect (in parallel), saves what they returned to
+`.sharpen/grumpy/<branch>/review-passes.jsonl`, then one aggregation call, saves
+`.sharpen/grumpy/<branch>/review.md` with `_Model:_` and `_Base:_` lines it writes itself
+(the model line names the aspects that ran), and leaves the same receipt an agent host
+leaves, plus an `executor` naming the path, provider, model and aspects. `record-gate.py
+--verify review` records gate 3 from it, and `--status` says the gate came from `oneshot`. If
+`review.md` changes in a way the extraction can't follow, the script stops with exit 2 and
+`tests/test_oneshot.py` fails; it never falls back to a prompt of its own.
+
+While it runs, stderr gets one line per finished pass (duration, finding lines, tokens when
+the server reports them, the served model if it differs, the request id) and one per retry,
+so a hung server and a slow model look different. A 429 or 5xx is retried once, after the
+server's `Retry-After` when it sends one (capped at 60 seconds) and a short backoff
+otherwise; a 400/401/403/404 stops the run and cancels the passes still queued.
+
+**What it can't do compared with an agent host:**
+
+- It sees only the diff and the changed files' text at `HEAD` (capped), never the rest of
+  the repo, so it can't follow a call site or check a caller it wasn't shown.
+- One model does every aspect: no per-pass model routing from `models.yaml`.
+- It doesn't append the review note to the sdlc plan (Step 6).
+- Simplify and fix edit code, so gates 2, 4 and 6 still need an agent or a person. Imagine
+  comes to this path in the next release; until then only gate 3 can be earned here.
+- Whether it reviews as well as an agent host is not measured yet. The benchmark host for
+  this path comes with imagine. The `openai` model in `models.yaml` stays marked unverified
+  until then.
+
+**Your code leaves the machine with `--provider openai`.** The diff and the changed files'
+full text are sent to OpenAI. To keep the code local, run a model on your own machine and
+use `--provider compatible`. The key is read from the environment only: it is never written
+to the report, the receipt or a log line, and provider error text is redacted before it is
+printed.
+
+**It earns the gate only for a complete review.** If any aspect's call fails or answers
+without finding lines (prose, or nothing at all: an empty answer is a provider that reviewed
+nothing, not a clean pass), the report is still saved so you can read it, stamped
+`_Incomplete: <aspects>_`, but no receipt is written: re-run to earn gate 3. Finding lines a
+pass got wrong (a missing `:line`, a four-field line) are dropped, counted on stderr and
+named to the aggregator, so the report says the aspect may be incomplete rather than
+passing the rest off as the whole truth. A diff or file cut at the context caps is marked
+where it was cut and said on stderr. The receipt names the commit that was diffed, and the
+run refuses it if `HEAD` moved meanwhile. If the aggregation call fails, the finding passes'
+lines are still in `review-passes.jsonl`; nothing paid for is lost.
+
+The model: `--model`, else `SHARPEN_LLM_MODEL`, else (from sdlc's adapters) the manifest's
+`provider.model`, else `models.yaml`'s `analysis.openai` for `--provider openai`.
+`compatible` has no default.
+
+Exit codes: 0 report and receipt written. 1 the pass earned nothing: a dirty tree, an empty
+diff, a git failure, an aspect that failed or answered without finding lines, an unusable aggregation,
+`HEAD` moving during the run, or a refused receipt. 2 setup: an unknown flag, provider or
+aspect, no key, no model, a detached `HEAD` or the default branch, a provider that rejects the
+request as unauthorized or unknown (400, 401, 403, 404), or an extraction error.
 
 ## Upgrading
 

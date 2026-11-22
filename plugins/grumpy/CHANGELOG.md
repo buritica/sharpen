@@ -3,6 +3,40 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.16.0 — review with no agent installed (`scripts/oneshot.py`)
+
+`python3 <grumpy>/scripts/oneshot.py review` runs the review pass against a chat API instead
+of a coding agent: OpenAI (`--provider openai`, key in `OPENAI_API_KEY`) or any
+OpenAI-compatible server such as Ollama (`--provider compatible`, `SHARPEN_LLM_URL`). It
+builds every prompt from `commands/review.md` at run time, one finding call per aspect plus
+one aggregation call, saves `.sharpen/grumpy/<branch>/review.md` and writes the usual
+receipt, so `record-gate.py --verify review` records gate 3. Simplify, fix and (until the
+next release) imagine still need an agent host. The diff and changed files go to the
+provider; see the README's "No agent installed".
+
+- It earns the gate only for a complete review: an aspect that fails or answers without
+  finding lines (prose, or an empty answer) leaves the report, stamped `_Incomplete:_`, but
+  no receipt (exit 1); the receipt names the commit that was diffed (`write_receipt` takes
+  the reviewed `head` and refuses any other); and a detached HEAD, the default branch, or a
+  provider rejecting the key or model (exit 2) stop it before anything more is spent, with
+  the passes still queued cancelled.
+- Nothing paid for is lost: the finding passes' lines are saved to
+  `.sharpen/grumpy/<branch>/review-passes.jsonl` before the aggregation call. Malformed
+  finding lines are counted and named to the aggregator; a diff or file cut at the caps is
+  marked. Each finished pass and each retry logs one line (duration, tokens, request id);
+  a 429 waits for `Retry-After`; git failures print git's reason. `--jobs` defaults to 1 for
+  `compatible` (local servers serialize anyway) and 4 for `openai`; `--provider` defaults to
+  `SHARPEN_LLM_PROVIDER`, else `openai`.
+- `receipt.py` gains `named_branch()` and `require_clean()` (shared with `oneshot.py`), and
+  refuses an `executor` without a non-empty `host`.
+- Receipts may carry an `executor` (`{host, provider, model, aspects}`); `oneshot.py` writes
+  it and sdlc 4.22's `--status` shows host, provider and model next to the gate. Agent hosts
+  don't write it.
+- `models.yaml` has an `openai` column (API ids). `oneshot.py` reads `analysis.openai`
+  when `--provider openai` gets no `--model`. Unverified until the benchmark measures it.
+- sdlc 4.22's `openai_adapter.py` and `local_llm_adapter.py` call `oneshot.py`, so upgrade
+  both plugins together.
+
 ## 2.15.0 — reports and receipts move to `.sharpen/grumpy/`
 
 Every pass now writes its report, and its receipt, to `.sharpen/grumpy/<branch>/` instead of

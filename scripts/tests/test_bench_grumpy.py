@@ -1097,7 +1097,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(set(roles), {"audit", "analysis", "exec", "exec-trivial"})
         for name, body in roles.items():
             cols = dict(re.findall(r"^    (\w+): (\S+)", body, re.M))
-            self.assertEqual(set(cols), {"claude", "native", "codex"}, name)
+            self.assertEqual(set(cols), {"claude", "native", "codex", "openai"}, name)
             self.assertIn(cols["native"], {"haiku", "sonnet", "opus"}, name)
         ladder = re.search(r"^escalation: \[(.*)\]", text, re.M).group(1)
         self.assertEqual(

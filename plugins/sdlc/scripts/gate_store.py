@@ -1030,6 +1030,8 @@ def format_status(branch_data, branch=None):
     lines.append("")
     gates = branch_data.get("gates", {})
     attestations = branch_data.get("attestations", {})
+    import gate_receipts as gr  # receipt evidence lives there; it imports this module
+
     for g in required_gates(branch_data):
         ts = gates.get(g)
         att = attestations.get(g)
@@ -1043,7 +1045,7 @@ def format_status(branch_data, branch=None):
             detail = f": {reason}" if reason else ""
             lines.append(f"  {mark} {g} — {ts} (attested, not hook-verified{detail})")
         elif ts:
-            lines.append(f"  {mark} {g} — {ts}")
+            lines.append(f"  {mark} {g} — {ts}{gr.executor_note(branch_data, g)}")
         else:
             cleared = branch_data.get("invalidated_by", {}).get(g)
             if cleared:

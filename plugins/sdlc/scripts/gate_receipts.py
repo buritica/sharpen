@@ -14,6 +14,9 @@ adds to a branch entry:
 
   "evidence": "receipts",                        # absent on a legacy cycle
   "evidence_heads": {"grumpy-review": "<sha>"}   # HEAD each gate was earned on
+  "evidence_executors": {"grumpy-review": {"host": "oneshot", ...}}
+                                                 # set only when the receipt names a
+                                                 # non-agent executor (grumpy oneshot.py)
 
 `--init` replaces the whole entry, so a reset clears `evidence_heads` too.
 """
@@ -31,6 +34,9 @@ from artifact_dirs import GRUMPY_ROOT, LEGACY_GRUMPY_ROOT
 EVIDENCE_KEY = "evidence"
 EVIDENCE_RECEIPTS = "receipts"
 EVIDENCE_HEADS_KEY = "evidence_heads"
+# gate -> the receipt's `executor` when a non-agent path ran the pass (grumpy's
+# oneshot.py); stamp_receipt sets it, executor_note renders it for --status.
+EVIDENCE_EXECUTORS_KEY = "evidence_executors"
 RECEIPT_PROTOCOL = "1"
 # Skill (as seen on the Skill tool) -> receipt file name. grumpy:fix writes
 # one `fix` receipt per run; which fix gate it earns is decided by
@@ -325,6 +331,18 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     bd = data[branch]
     stamp_head(data, branch, gate, receipt.get("head"))
     _stamp_receipt_identity(data, branch, gate, receipt)
+    executors = bd.setdefault(EVIDENCE_EXECUTORS_KEY, {})
+    executor = _executor_fields(receipt.get("executor"))
+    if executor:
+        executors[gate] = executor
+    else:
+        # ponytail: only 4.22+ pops this; a lagging 4.21 session that re-earns
+        # the gate from an agent receipt leaves an older oneshot note in place,
+        # so --status says "(via oneshot: ...)" for a gate an agent earned.
+        # Sweep stale notes against evidence_heads if that is ever reported.
+        executors.pop(gate, None)  # re-earned by an agent host
+    if not executors:
+        bd.pop(EVIDENCE_EXECUTORS_KEY, None)
     written = _parse_ts(receipt.get("written_at"))
     cleared = []
     for g in invalidated:
@@ -335,6 +353,33 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
         else:
             cleared.append(g)
     return cleared
+
+
+def _executor_fields(executor):
+    """The executor's `host`, `provider` and `model` as the receipt schema
+    defines them (non-empty strings), or {} when there is no usable host.
+    Anything else (a null model, a number, a list in a hand-edited store) is
+    dropped rather than rendered as the text "None" in gate evidence."""
+    if not isinstance(executor, dict):
+        return {}
+    fields = {
+        k: v
+        for k, v in executor.items()
+        if k in ("host", "provider", "model") and isinstance(v, str) and v
+    }
+    return fields if "host" in fields else {}
+
+
+def executor_note(branch_data, gate):
+    """` (via oneshot: openai gpt-6.2-astra)` when a non-agent receipt earned the gate."""
+    executors = branch_data.get(EVIDENCE_EXECUTORS_KEY)
+    executor = _executor_fields(
+        executors.get(gate) if isinstance(executors, dict) else None
+    )
+    if not executor:
+        return ""
+    detail = " ".join(executor[k] for k in ("provider", "model") if k in executor)
+    return f" (via {executor['host']}{': ' + detail if detail else ''})"
 
 
 def receipt_heads(worktree_root, branch, head, cwd=None):

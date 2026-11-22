@@ -55,6 +55,22 @@ that lacks grumpy still gets a `small-medium` cycle, and the arming message
 names the missing passes, so the choice to install grumpy or re-init as
 `tiny` stays with a person.
 
+## No agent at all
+
+With no coding agent, grumpy's `scripts/oneshot.py review` runs the review pass
+against a chat API: OpenAI, or any OpenAI-compatible server such as Ollama.
+It builds its prompts from `commands/review.md`, saves the report and leaves
+a normal receipt naming the provider and model, so gate 3 records through
+`record-gate.py --verify review` like any host and `--status` says it came
+from `oneshot`. Nothing arms a gate cycle on this path (auto-init is a host
+hook), so run `record-gate.py --init small-medium` before the pass, or
+`--verify` has no cycle to record into. It can't earn simplify or fix (they
+edit code), it sees only the diff and the changed files, and with OpenAI the
+code leaves the machine. Nothing blocks a PR on this path: the git pre-push
+hook, when installed, warns about a pushed branch with missing or stale gates
+and refuses the push only with `git config sharpen.prePush block`. See
+grumpy's README, "No agent installed".
+
 ## Which host is running
 
 The session-start adapter (`plugins/sdlc/scripts/session-start.py`) names the

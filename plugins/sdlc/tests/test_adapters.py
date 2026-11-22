@@ -1,306 +1,223 @@
 #!/usr/bin/env python3
-"""Tests for OpenAI and local LLM adapters."""
+"""Tests for openai_adapter.py and local_llm_adapter.py.
 
-import importlib.util
+Both run the manifest's gate commands and then hand the review to grumpy's
+oneshot.py. The real oneshot.py is grumpy's to test (plugins/grumpy/tests/
+test_oneshot.py); here a stub stands in for it and records how it was called.
+"""
+
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
-sys.path.insert(0, SCRIPTS)
 
-import gate_store as gs  # noqa: E402
-
-
-def _load(name):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(SCRIPTS, f"{name}.py")
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-ga = _load("generic_adapter")
-oa = _load("openai_adapter")
-la = _load("local_llm_adapter")
+STUB = """import json, os, signal, sys
+with open(os.environ["STUB_OUT"], "w") as f:
+    json.dump({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items()
+               if k.startswith(("SHARPEN_LLM", "OPENAI"))}}, f)
+code = os.environ.get("STUB_EXIT", "0")
+if code == "kill":
+    os.kill(os.getpid(), signal.SIGKILL)
+sys.exit(int(code))
+"""
 
 
 def git(repo, *args):
     subprocess.run(["git", "-C", repo, *args], capture_output=True, check=True)
 
 
-def make_repo(branch="feat/x"):
-    repo = tempfile.mkdtemp()
-    git(repo, "init", "-q", "-b", branch)
-    git(repo, "config", "user.email", "t@t")
-    git(repo, "config", "user.name", "t")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
-    return repo
-
-
-def make_manifest(adapter_name, capabilities_list, model=None):
-    return {
-        "protocol_version": "1",
-        "provider": {
-            "name": adapter_name,
-            "agent": f"{adapter_name}-adapter",
-            "model": model or "test-model",
-        },
-        "capabilities": capabilities_list,
-    }
-
-
-def write_manifest(path, manifest):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(manifest, f)
-
-
-class MockLLMHandler(BaseHTTPRequestHandler):
-    response_body = b'{"choices":[{"message":{"content":"[]"}}]}'
-    status_code = 200
-    received_body = None
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        MockLLMHandler.received_body = self.rfile.read(length)
-        self.send_response(self.status_code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(self.response_body)
-
-    def log_message(self, *args):
-        pass
-
-
-class MockLLMServer(unittest.TestCase):
+class AdapterTest(unittest.TestCase):
     def setUp(self):
-        self.server = HTTPServer(("127.0.0.1", 0), MockLLMHandler)
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
-        self.url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
-
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-
-class OpenAIAdapterTest(unittest.TestCase):
-    def setUp(self):
-        self.repo = make_repo()
+        self.repo = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        git(self.repo, "init", "-q", "-b", "feat/x")
+        self.grumpy = os.path.join(self.repo, "grumpy")
+        os.makedirs(os.path.join(self.grumpy, "scripts"))
+        with open(os.path.join(self.grumpy, "scripts", "oneshot.py"), "w") as f:
+            f.write(STUB)
+        self.out = os.path.join(self.repo, "stub.json")
 
-    def test_no_key_falls_back_to_generic(self):
-        manifest = make_manifest("openai", ["test", "lint", "typecheck"])
-        results = [
-            {
-                "capability": "test",
-                "command": "true",
-                "exit_code": 0,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "",
-            }
-        ]
-        # Remove key to force fallback
-        old = os.environ.pop("OPENAI_API_KEY", None)
-        try:
-            report = oa.build_review_report(manifest, results, cwd=self.repo)
-            self.assertEqual(report["status"], "fail")
-            self.assertEqual(len(report["findings"]), 1)
-            self.assertIn("OPENAI_API_KEY", report["findings"][0]["consequence"])
-        finally:
-            if old:
-                os.environ["OPENAI_API_KEY"] = old
+    def manifest(
+        self, commands=None, caps=("test", "lint", "typecheck", "review"), model=None
+    ):
+        m = {
+            "protocol_version": "1",
+            "provider": {"name": "x", **({"model": model} if model else {})},
+            "capabilities": list(caps),
+            "x-host-command-map": commands
+            or {"test": "true", "lint": "true", "typecheck": "true"},
+        }
+        path = os.path.join(self.repo, "caps.json")
+        with open(path, "w") as f:
+            json.dump(m, f)
+        return path
 
-    def test_gate_failure_skips_review(self):
-        manifest = make_manifest("openai", ["test", "lint", "typecheck"])
-        results = [
-            {
-                "capability": "test",
-                "command": "false",
-                "exit_code": 1,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "boom",
-            }
-        ]
-        report = oa.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "fail")
-        self.assertIn("test", report["findings"][0]["summary"])
-
-
-class LocalLLMAdapterTest(MockLLMServer):
-    def setUp(self):
-        super().setUp()
-        self.repo = make_repo()
-        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
-        self.old_url = os.environ.get("LOCAL_LLM_URL")
-        os.environ["LOCAL_LLM_URL"] = self.url
-        MockLLMHandler.received_body = None
-
-    def tearDown(self):
-        super().tearDown()
-        if self.old_url:
-            os.environ["LOCAL_LLM_URL"] = self.old_url
-        else:
-            os.environ.pop("LOCAL_LLM_URL", None)
-        MockLLMHandler.received_body = None
-
-    def test_passing_review(self):
-        manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
-        results = [
-            {
-                "capability": "test",
-                "command": "true",
-                "exit_code": 0,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "",
-            }
-        ]
-        self.assertIsNone(MockLLMHandler.received_body)
-        report = la.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "pass")
-        self.assertEqual(report["executor"]["adapter"], "local-llm")
-        sent = json.loads(MockLLMHandler.received_body)
-        self.assertEqual(sent["model"], "test-model")
-        self.assertEqual(len(sent["messages"]), 1)
-        user_content = sent["messages"][0]["content"]
-        self.assertEqual(sent["messages"][0]["role"], "user")
-        self.assertIn("You are a code reviewer", user_content)
-        # The prompt must actually carry the diff section (not just the
-        # instructions preamble) — this is what proves the request sent over
-        # the wire is built from the real manifest/gate-results context
-        # rather than a stubbed-out or truncated payload.
-        self.assertIn("```diff", user_content)
-        self.assertIn("Diff:", user_content)
-        # make_repo() creates a fresh repo with a single empty commit, so
-        # there is no real base...head range to diff against — the adapter's
-        # diff extraction falls through to an empty diff. Assert that empty
-        # case explicitly so a future change to the fallback message doesn't
-        # silently swap in something else unnoticed.
-        self.assertIn("(no diff)", user_content)
-
-    def test_server_error_falls_back(self):
-        self.server.shutdown()
-        self.server.server_close()
-        # Point at a dead port
-        os.environ["LOCAL_LLM_URL"] = "http://127.0.0.1:1/v1/chat/completions"
-        manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
-        results = [
-            {
-                "capability": "test",
-                "command": "true",
-                "exit_code": 0,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "",
-            }
-        ]
-        report = la.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "fail")
-        self.assertIn("delegated review failed", report["findings"][0]["summary"])
-
-    def test_no_url_falls_back(self):
-        os.environ.pop("LOCAL_LLM_URL", None)
-        manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
-        results = [
-            {
-                "capability": "test",
-                "command": "true",
-                "exit_code": 0,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "",
-            }
-        ]
-        report = la.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "fail")
-        self.assertIn("LOCAL_LLM_URL", report["findings"][0]["consequence"])
-
-
-class CliTest(unittest.TestCase):
-    def setUp(self):
-        self.repo = make_repo()
-        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
-        self.store_path = gs.default_store_path(self.repo)
-
-    def run_cli(self, script, manifest_path):
+    def run_adapter(self, script, *args, env=None):
+        full = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("SHARPEN_LLM", "OPENAI", "LOCAL_LLM", "GRUMPY"))
+        }
+        full.update({"STUB_OUT": self.out}, **(env or {}))
         return subprocess.run(
-            ["python3", os.path.join(SCRIPTS, script), manifest_path],
+            [sys.executable, os.path.join(SCRIPTS, script), *args],
             capture_output=True,
+            text=True,
             cwd=self.repo,
+            env=full,
         )
 
-    def test_openai_adapter_no_key_still_runs_gates(self):
-        manifest = make_manifest(
-            "openai",
-            ["test", "lint", "typecheck"],
-        )
-        manifest["x-host-command-map"] = {
-            "test": "true",
-            "lint": "true",
-            "typecheck": "true",
-        }
-        path = os.path.join(self.repo, "caps.json")
-        write_manifest(path, manifest)
-        data = {}
-        gs.init_gates(data, "feat/x", "tiny")
-        os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
-        with open(self.store_path, "w") as f:
-            json.dump(data, f)
-        old = os.environ.pop("OPENAI_API_KEY", None)
-        try:
-            r = self.run_cli("openai_adapter.py", path)
-            self.assertEqual(r.returncode, 0, r.stderr.decode())
-            with open(self.store_path) as f:
-                store = json.load(f)
-            # Review should have fallen back and marked as fail
-            self.assertEqual(store["feat/x"]["review_report"]["status"], "fail")
-        finally:
-            if old:
-                os.environ["OPENAI_API_KEY"] = old
+    def called(self):
+        if not os.path.exists(self.out):
+            return None
+        with open(self.out) as f:
+            return json.load(f)
 
-    def test_local_llm_adapter_with_mock_server(self):
-        old_url = os.environ.get("LOCAL_LLM_URL")
-        os.environ["LOCAL_LLM_URL"] = "http://127.0.0.1:1/v1/chat/completions"  # dead
-        manifest = make_manifest("local-llm", ["test", "lint", "typecheck"])
-        manifest["x-host-command-map"] = {
-            "test": "true",
-            "lint": "true",
-            "typecheck": "true",
-        }
-        path = os.path.join(self.repo, "caps.json")
-        write_manifest(path, manifest)
-        data = {}
-        gs.init_gates(data, "feat/x", "tiny")
-        os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
-        with open(self.store_path, "w") as f:
-            json.dump(data, f)
-        try:
-            r = self.run_cli("local_llm_adapter.py", path)
-            # A delegated-review failure is attached for evidence but must fail
-            # the adapter rather than reporting a false successful gate run.
-            self.assertEqual(r.returncode, 1, r.stderr.decode())
-            with open(self.store_path) as f:
-                store = json.load(f)
-            self.assertEqual(store["feat/x"]["review_report"]["status"], "fail")
-        finally:
-            if old_url:
-                os.environ["LOCAL_LLM_URL"] = old_url
-            else:
-                os.environ.pop("LOCAL_LLM_URL", None)
+    def test_openai_hands_review_to_oneshot(self):
+        r = self.run_adapter(
+            "openai_adapter.py", self.manifest(), "--grumpy", self.grumpy
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.called()["argv"], ["review", "--provider", "openai"])
+
+    def test_local_uses_compatible_and_maps_legacy_env(self):
+        r = self.run_adapter(
+            "local_llm_adapter.py",
+            self.manifest(),
+            env={
+                "GRUMPY_PLUGIN_ROOT": self.grumpy,
+                "LOCAL_LLM_URL": "http://127.0.0.1:1/v1/chat/completions",
+                "LOCAL_LLM_MODEL": "qwen",
+            },
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        call = self.called()
+        self.assertEqual(call["argv"], ["review", "--provider", "compatible"])
+        self.assertEqual(
+            call["env"]["SHARPEN_LLM_URL"], "http://127.0.0.1:1/v1/chat/completions"
+        )
+        self.assertEqual(call["env"]["SHARPEN_LLM_MODEL"], "qwen")
+        self.assertIn("LOCAL_LLM_URL is deprecated", r.stderr)
+
+    def test_manifest_model_is_passed_on(self):
+        r = self.run_adapter(
+            "openai_adapter.py", self.manifest(model="gpt-x"), "--grumpy", self.grumpy
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.called()["argv"][-2:], ["--model", "gpt-x"])
+        self.assertNotIn("overrides", r.stderr)
+
+    def test_variable_beating_the_manifest_model_is_said(self):
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(model="gpt-x"),
+            "--grumpy",
+            self.grumpy,
+            env={"SHARPEN_LLM_MODEL": "gpt-env"},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("--model", self.called()["argv"])
+        self.assertIn(
+            "SHARPEN_LLM_MODEL=gpt-env overrides the manifest's provider.model (gpt-x)",
+            r.stderr,
+        )
+
+    def test_gate_failure_skips_review_and_shows_the_output(self):
+        path = self.manifest(
+            {"test": "true", "lint": "echo nope >&2; exit 3", "typecheck": "true"}
+        )
+        r = self.run_adapter("openai_adapter.py", path, "--grumpy", self.grumpy)
+        self.assertEqual(r.returncode, 1)
+        self.assertIsNone(self.called())
+        # The FAIL line carries the command, its exit code and its stderr, all
+        # under the adapter's own tag.
+        self.assertIn("[openai-adapter] FAIL lint", r.stderr)
+        self.assertIn(
+            "[openai-adapter]     $ echo nope >&2; exit 3 -> exit 3", r.stderr
+        )
+        self.assertIn("[openai-adapter]     nope", r.stderr)
+        self.assertNotIn("[generic-adapter]", r.stderr)
+
+    def test_review_failure_is_the_exit_code(self):
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(),
+            "--grumpy",
+            self.grumpy,
+            env={"STUB_EXIT": "1"},
+        )
+        self.assertEqual(r.returncode, 1)
+
+    def test_missing_grumpy_is_a_setup_error(self):
+        r = self.run_adapter("openai_adapter.py", self.manifest())
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("GRUMPY_PLUGIN_ROOT", r.stderr)
+        self.assertIn("grumpy 2.16 or newer", r.stderr)
+        self.assertIsNone(self.called())
+
+    def test_old_grumpy_is_named_by_path_not_called_missing(self):
+        # A grumpy before 2.16 has no scripts/oneshot.py; the error names the
+        # folder that was tried and the version it needs, so the operator
+        # upgrades instead of re-setting a variable that was already right.
+        old = os.path.join(self.repo, "grumpy-2.15")
+        os.makedirs(os.path.join(old, "scripts"))
+        r = self.run_adapter("openai_adapter.py", self.manifest(), "--grumpy", old)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(
+            os.path.join(old, "scripts", "oneshot.py") + " not found", r.stderr
+        )
+        self.assertIn("grumpy 2.16 or newer", r.stderr)
+        self.assertNotIn("grumpy not found", r.stderr)
+        self.assertIsNone(self.called())
+
+    def test_no_review_capability_runs_no_review(self):
+        path = self.manifest(caps=("test", "lint", "typecheck"))
+        r = self.run_adapter("openai_adapter.py", path, "--grumpy", self.grumpy)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIsNone(self.called())
+        # Exit 0 with no review is said out loud, so the sdlc README's example
+        # manifest (which declares review) and this one can't be confused.
+        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertIn("no receipt was written", r.stderr)
+
+    def test_no_review_capability_needs_no_grumpy(self):
+        # The README promises exit 0 without `review`; a box with no grumpy
+        # installed used to get "grumpy not found" first.
+        path = self.manifest(caps=("test", "lint", "typecheck"))
+        r = self.run_adapter("local_llm_adapter.py", path)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertNotIn("grumpy", r.stderr.replace("grumpy's", ""))
+
+    def test_trailing_grumpy_flag_is_a_usage_error(self):
+        # A bare `--grumpy` used to read as root=None and override a valid
+        # GRUMPY_PLUGIN_ROOT, failing as "grumpy not found".
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(),
+            "--grumpy",
+            env={"GRUMPY_PLUGIN_ROOT": self.grumpy},
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--grumpy needs a path", r.stderr)
+        self.assertIsNone(self.called())
+
+    def test_a_killed_review_is_exit_1_not_a_negative_code(self):
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(),
+            "--grumpy",
+            self.grumpy,
+            env={"STUB_EXIT": "kill"},
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("killed by signal 9", r.stderr)
 
 
 if __name__ == "__main__":
