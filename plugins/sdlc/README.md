@@ -54,7 +54,7 @@ claude /plugin install sdlc-guardrails@sharpen
 | `/sdlc:test-critique` | Assertions that can't fail, over-mocking, unjustified skips |
 | `/sdlc:test-flake` | Rerun the suite N times to surface intermittent failures |
 
-## CI pipeline: `init` / `audit` (the enforcement surface)
+## CI pipeline: `init` / `audit` (the code's required check)
 
 `/sdlc:init` detects the stack(s), derives the idiomatic toolchain (researching
 when unfamiliar), and instantiates the language-agnostic patterns in

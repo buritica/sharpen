@@ -10,15 +10,14 @@ The portable core owns policy and durable data:
 - review artifacts and change provenance;
 - capability discovery;
 - artifact validation; and
-- the decision a CI or forge adapter uses to allow a merge.
+- the decision a host adapter uses to allow opening a pull request.
 
 An adapter owns host mechanics:
 
 - command syntax and user interaction;
 - tool invocation, subagent delegation, and lifecycle hooks;
-- model routing;
-- forge APIs such as GitHub, GitLab, or a manual fallback; and
-- CI-specific publication of a required check.
+- model routing; and
+- forge APIs such as GitHub, GitLab, or a manual fallback.
 
 Claude commands, `Skill` lifecycle events, `Task` dispatch, Claude Code's `CLAUDE_PLUGIN_ROOT` substitution, and `PreToolUse`/`PostToolUse` hooks are therefore adapter features, not portable-core requirements.
 

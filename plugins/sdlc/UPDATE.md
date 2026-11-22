@@ -14,9 +14,8 @@ gates, plus the pre-push floor); CI checks the code through `ci-pass`, and never
 evidence.
 
 - **If your CI has a `gates` job** that runs `plugins/sdlc/scripts/ci-validate.py`, delete
-  the job and drop it from `ci-pass`'s `needs`. `/sdlc:init` never scaffolded one, so most
-  repos have nothing to do. A job left in place now fails, because the script no longer
-  exists.
+  the job and drop it from `ci-pass`'s `needs`. `/sdlc:init` never scaffolded one and the
+  script only ever existed in sharpen's own checkout, so most repos have nothing to do.
 - `record-gate.py --attach-review` and `--status` are unchanged: an attached review report is
   still shown locally.
 - The README, this plugin's README, `docs/portable-core.md` and `/sdlc:gate` now describe

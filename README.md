@@ -64,7 +64,7 @@ Review happens before the pull request, in the agent's own session. The chain re
 
 The limit is stated plainly in the code: enforcement is opt-out per branch, and it's not an adversarial control. It stops an agent talking itself past its own process; it doesn't stop a person who edits the store or opens the PR from somewhere the hooks don't run. That's deliberate. The people and agents using it are coworkers, not attackers.
 
-CI does a different job. `/sdlc:init` scaffolds your pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, build), so merge safety for the code never depends on a git hook someone skipped. It doesn't read gate state, and it doesn't need to.
+CI does a different job. `/sdlc:init` scaffolds your pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, typecheck, build), so merge safety for the code never depends on a git hook someone skipped. It doesn't read gate state, and it doesn't need to.
 
 ## Capabilities, not templates
 
