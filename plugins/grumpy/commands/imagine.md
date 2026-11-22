@@ -663,9 +663,9 @@ write the report somewhere else to get one.
 # Shell state doesn't persist between calls: set WT to the --worktree path
 # again if one was given, or the receipt lands on the wrong branch.
 WT="${WT:-.}"
-# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
-# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
-# shell. If neither is set, point RECEIPT at
+# pi exports GRUMPY_PLUGIN_ROOT; Claude Code fills in the braced
+# CLAUDE_PLUGIN_ROOT name when it loads this skill (see https://github.com/buritica/sharpen/blob/main/docs/hosts.md).
+# If the path is still empty, point RECEIPT at
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then

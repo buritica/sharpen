@@ -5,6 +5,8 @@ description: "Scaffold a repo's CI and deploy pipeline tailored to its stack —
 
 # /sdlc:init
 
+**Plugin paths.** A path written `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `SDLC_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 Scaffold the CI pipeline for **this** repo. CI is the *automated enforcement
 surface* of the SDLC loop (plan → build → gate → ship → CI → deploy): it is the
 **one authoritative point** that blocks bad code from reaching `main`. The job is
@@ -13,19 +15,19 @@ instantiate the language-agnostic patterns — **not** to drop a fixed template.
 There is no default language.
 
 Read these first; they are the spec:
-- `${CLAUDE_PLUGIN_ROOT}/templates/spec.md` — what every generated pipeline must
+- `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/spec.md` — what every generated pipeline must
   do, including the enforcement/feedback split and the `ci-pass` required-check
   pattern.
-- `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` — toolchain reference + the
+- `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` — toolchain reference + the
   research protocol for stacks not listed.
 
-The files under `${CLAUDE_PLUGIN_ROOT}/templates/examples/node-bun/` are **one
+The files under `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/examples/node-bun/` are **one
 worked example** (bun/biome). Reuse them only if this repo actually is a
 bun/Node repo; otherwise generate the stack-correct equivalent.
 
 ## 0. Read UPDATE.md
 
-Before anything else, read `${CLAUDE_PLUGIN_ROOT}/UPDATE.md`. It describes what this version of sdlc adds and what an existing repo may need to upgrade. Use it to understand what new things to wire up if this repo already has sdlc scaffolding.
+Before anything else, read `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/UPDATE.md`. It describes what this version of sdlc adds and what an existing repo may need to upgrade. Use it to understand what new things to wire up if this repo already has sdlc scaffolding.
 
 ## 0b. Check grumpy availability
 
@@ -132,8 +134,8 @@ Generate, don't blind-copy — the bun example is a shape reference:
   cache + self-hosted hygiene.
 
 Universal pieces (copy as-is unless `--minimal`):
-- `${CLAUDE_PLUGIN_ROOT}/templates/workflows/secret-scan.yml` → `.github/workflows/secret-scan.yml`.
-- `${CLAUDE_PLUGIN_ROOT}/templates/dependabot.yml` → `.github/dependabot.yml`
+- `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/workflows/secret-scan.yml` → `.github/workflows/secret-scan.yml`.
+- `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/dependabot.yml` → `.github/dependabot.yml`
   (add the stack's package ecosystem alongside `github-actions` if the user wants dep PRs).
 
 When a target file already exists, Read it and present a diff before overwriting
@@ -148,7 +150,7 @@ Keep them cheap and changed-files-scoped.
   (biome for Node, ruff for Python, gofmt+golangci-lint for Go, etc.) with its
   config + `lint`/`format` scripts, then run it once and show the user the scope
   of changes. If one already exists, leave it.
-- Copy `${CLAUDE_PLUGIN_ROOT}/templates/editorconfig` → `.editorconfig` if absent.
+- Copy `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/editorconfig` → `.editorconfig` if absent.
 - **Ignore the agent scratch directories.** These commands write per-branch
   artifacts and gate state under `.claude/`; none of it belongs in git. Append
   whichever are missing from `.gitignore` (create it if absent):
@@ -334,7 +336,7 @@ renders it from `templates/agents-sdlc.md` and upserts it between
 exactly its own block and nothing a human wrote:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/agents_md.py" --root . \
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/agents_md.py" --root . \
   --test-cmd "<test command from step 3>" \
   --lint-cmd "<lint command>" \
   --format-cmd "<format command>" \
@@ -371,12 +373,13 @@ other flags only compares the version stamped inside the block against the
 installed sdlc, which is how `/sdlc:gate` notices a block that predates an
 upgrade without re-deriving the toolchain.
 
-If `${CLAUDE_PLUGIN_ROOT}` is unset on this host (Codex, Gemini, Cursor
-reading this as a SKILL.md), the script still exists on disk — it is at
-`<sdlc plugin root>/scripts/agents_md.py`, two directories above this
-SKILL.md. When the plugin was installed through Claude Code's marketplace,
+If that path comes out empty on this host (an instructions-only host such
+as Gemini, Cursor or Copilot reading this as a SKILL.md; see
+<https://github.com/buritica/sharpen/blob/main/docs/hosts.md>), the script still exists wherever the sdlc plugin is
+installed — it is at `<sdlc plugin root>/scripts/agents_md.py`, two
+directories above this SKILL.md. On a Claude Code marketplace install,
 `ls -d ~/.claude/plugins/cache/*/sdlc/*/scripts/agents_md.py | sort -V | tail -1`
-finds the newest copy. If you genuinely cannot locate it, say so and stop
+finds the newest copy; other hosts keep their own plugin cache. If you genuinely cannot locate it, say so and stop
 here rather than writing the block by hand — a hand-written block drifts
 from the template on the next run.
 

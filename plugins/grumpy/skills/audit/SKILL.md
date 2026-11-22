@@ -18,6 +18,8 @@ plan. Its job is understanding and direction, not cheap execution. It names
 complexity where it exists; it does not flatten a hard refactor into a fake
 easy task to look productive.
 
+**Plugin paths.** A path written `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/…` below means the `GRUMPY_PLUGIN_ROOT` variable when your shell has it set, otherwise the path after `:-` (Claude Code fills that one in when it loads this command). Resolve it before handing it to a file-reading tool, for example with `echo "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"`.
+
 ## Grumpy Level
 
 Detect `--level <value>` from `$ARGUMENTS` (case-insensitive). Valid values:
@@ -41,7 +43,7 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 This command is the heaviest reasoning grumpy does. Run the synthesis and
 planning (Phases 1, 3, 4) on the strongest available model. Read
-`${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a repo-relative
+`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` for the role→model map — a repo-relative
 `plugins/grumpy/models.yaml` spelling resolves against the consumer repo's cwd
 in an installed plugin, not this plugin's own directory, and silently fails to
 exist there. If it isn't readable from where you're running, **say so in the

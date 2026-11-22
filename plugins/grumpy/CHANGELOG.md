@@ -3,6 +3,17 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.10.0 — plugin paths resolve on every host
+
+Every path a pass reads from its own plugin (`scripts/receipt.py`,
+`scripts/simplify_policy.py`, `models.yaml`) is now spelled
+`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`. Under pi, simplify and fix used to read
+sdlc's directory (sdlc's extension set the shared variable for the whole process), so
+simplify always reported lines of code as unmeasured and fix never read `models.yaml`.
+`/grumpy:fix` and `/grumpy:cleanup` no longer assume Claude Code's AskUserQuestion: they
+use a structured question tool when the host has one and ask in chat otherwise. sdlc 4.15.0
+reads `scripts/receipt.py`'s presence to tell whether this grumpy writes receipts.
+
 ## 2.9.0 — every pass leaves a receipt
 
 `/grumpy:simplify`, `/grumpy:review`, `/grumpy:fix` and `/grumpy:imagine` now end by running

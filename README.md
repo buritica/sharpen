@@ -88,7 +88,7 @@ pi install git:https://github.com/your-org/sharpen
 pi install git:https://github.com/your-org/sharpen --dir plugins/sdlc
 ```
 
-Under pi the gate confirmations are **replicated**, not dropped: when a hook denies (e.g. an ungated `gh pr create`), pi shows an interactive confirmation with the reason, and only an interactive human in the TUI can override. Headless (print/rpc) mode has no human to ask, so it fails closed and blocks. `$CLAUDE_PLUGIN_ROOT` in the shared SKILL.md instructions is injected into the process env by the extension, so the existing cross-host skill bodies run unchanged.
+Under pi the gate confirmations are **replicated**, not dropped: when a hook denies (e.g. an ungated `gh pr create`), pi shows an interactive confirmation with the reason, and only an interactive human in the TUI can override. Headless (print/rpc) mode has no human to ask, so it fails closed and blocks. Each extension exports its own plugin root (`SDLC_PLUGIN_ROOT`, `GRUMPY_PLUGIN_ROOT`, `GUARDRAILS_PLUGIN_ROOT`), which the shared SKILL.md bodies read first, so they run unchanged. [`docs/hosts.md`](docs/hosts.md) has what every host supports.
 
 Two gaps are inherent to pi, documented in [`docs/pi.md`](docs/pi.md): pi has no `Skill` tool, so skill-gated gates record from grumpy receipts via `record-gate.py --verify` (and the extension's `agent_end` sweep), the same path every non-Claude host uses; and pi skills are flat-named, so the top-level bundle keeps sdlc's `audit` and drops grumpy's (install grumpy alone for it).
 

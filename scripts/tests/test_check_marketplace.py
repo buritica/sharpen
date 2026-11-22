@@ -457,5 +457,138 @@ class PiManifestTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout.decode())
 
 
+class PluginRootSpellingTest(unittest.TestCase):
+    """check_plugin_roots: every plugin path leads with the plugin's own
+    variable and falls back to the BRACED shared name (docs/hosts.md)."""
+
+    def _run_with(self, plugin, body):
+        source = '---\ndescription: "Does foo."\n---\n\n' + body + "\n"
+        root = make_marketplace({plugin: {"commands": {"bar.md": source}}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        subprocess.run(
+            [
+                sys.executable,
+                os.path.join(root, "scripts", "generate-skill.py"),
+                "--write-all-in",
+                os.path.join(root, "plugins", plugin),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return run(root)
+
+    def test_own_variable_with_braced_fallback_passes(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_unbraced_shared_variable_is_an_error(self):
+        # Empty in Claude Code's agent shell: the bug this check exists for.
+        r = self._run_with("sdlc", 'python3 "$CLAUDE_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("SDLC_PLUGIN_ROOT", out)
+
+    def test_bare_braced_shared_variable_is_an_error(self):
+        # Fine on Claude Code, wrong on pi, which sets no shared value.
+        r = self._run_with("sdlc", "Read `${CLAUDE_PLUGIN_ROOT}/templates/x.md`.")
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
+    def test_unbraced_fallback_inside_own_variable_is_an_error(self):
+        # The sdlc-guardrails guard command shipped exactly this.
+        r = self._run_with(
+            "sdlc-guardrails",
+            'PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"',
+        )
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
+    def test_own_variable_without_fallback_is_an_error(self):
+        # Empty on Claude Code and Codex: resolves to /scripts/x.py.
+        r = self._run_with("sdlc", 'python3 "$SDLC_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}", out)
+
+    def test_braced_own_variable_without_fallback_is_an_error(self):
+        r = self._run_with("sdlc", 'cat "${SDLC_PLUGIN_ROOT}/x"')
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
+    def test_another_plugins_variable_is_an_error(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("another plugin", out)
+
+    def test_multi_word_prefix_without_fallback_is_an_error(self):
+        # `foo-bar` -> FOO_BAR: the prefix carries an underscore.
+        r = self._run_with("foo-bar", 'python3 "$FOO_BAR_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}", out)
+
+    def test_multi_word_prefix_with_braced_fallback_passes(self):
+        r = self._run_with(
+            "foo-bar",
+            'python3 "${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_another_plugins_multi_word_variable_is_an_error(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("another plugin's root variable $FOO_BAR_PLUGIN_ROOT", out)
+
+    def test_prose_naming_the_variable_without_dollar_is_fine(self):
+        r = self._run_with(
+            "sdlc", "Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT` name."
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_this_repo_passes(self):
+        r = subprocess.run([sys.executable, CHECKER], capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+
+class HostsMatrixTest(unittest.TestCase):
+    """check_hosts_matrix: docs/hosts.md's generated table must match
+    plugins/sdlc/scripts/hosts.py, the only staleness check for it."""
+
+    def _root_with_doc(self, doc_text):
+        root = make_marketplace({"sdlc": {}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        scripts = os.path.join(root, "plugins", "sdlc", "scripts")
+        os.makedirs(scripts)
+        shutil.copy(
+            os.path.join(HERE, "..", "..", "plugins", "sdlc", "scripts", "hosts.py"),
+            scripts,
+        )
+        os.makedirs(os.path.join(root, "docs"))
+        with open(os.path.join(root, "docs", "hosts.md"), "w", encoding="utf-8") as f:
+            f.write(doc_text)
+        return root
+
+    def test_stale_matrix_is_an_error(self):
+        begin = "<!-- hosts:begin (generated by plugins/sdlc/scripts/hosts.py; do not edit) -->"
+        r = run(self._root_with_doc(f"x\n{begin}\nold\n<!-- hosts:end -->\n"))
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("support matrix is stale", out)
+
+    def test_missing_markers_is_an_error(self):
+        r = run(self._root_with_doc("# no markers\n"))
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("markers not found", out)
+
+
 if __name__ == "__main__":
     unittest.main()

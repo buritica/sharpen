@@ -23,7 +23,7 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {
-        "enum": ["plan", "review", "imagine", "fix", "test", "lint", "typecheck", "ship"]
+        "enum": ["plan", "simplify", "review", "imagine", "fix", "test", "lint", "typecheck", "ship"]
       }
     }
   },
