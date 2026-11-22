@@ -104,11 +104,9 @@ def _report_digest(report, previous_receipts):
     return hashlib.sha256(data).hexdigest()
 
 
-def write_receipt(pass_name, worktree=".", stage=None):
-    if pass_name not in PASSES:
-        raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
-    if stage is not None and (pass_name != "fix" or stage not in FIX_STAGES):
-        raise ValueError("--stage is review or imagine, and only for fix")
+def named_branch(worktree="."):
+    """The branch a receipt can name, or ValueError. Also called by
+    oneshot.py before it spends anything on a provider."""
     branch = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
     if branch == "HEAD":
         raise ValueError("detached HEAD: a receipt needs a named branch")
@@ -116,13 +114,49 @@ def write_receipt(pass_name, worktree=".", stage=None):
         # Gates track feature branches. A pass that lands here was most likely
         # pointed at the wrong worktree (a lost --worktree).
         raise ValueError(f'"{branch}" has no gate cycle; is --worktree right?')
+    return branch
+
+
+def require_clean(worktree="."):
+    """ValueError on uncommitted changes to tracked files. The receipt names
+    HEAD. Uncommitted edits (simplify's applied fixes, fix's leftovers) would
+    land in a later commit the pass never saw, and that commit would make
+    every gate stale at PR time."""
     if _git(worktree, "status", "--porcelain", "--untracked-files=no"):
-        # The receipt names HEAD. Uncommitted edits (simplify's applied fixes,
-        # fix's leftovers) would land in a later commit the pass never saw,
-        # and that commit would make every gate stale at PR time.
         raise ValueError("uncommitted changes: commit the pass's edits first")
+
+
+def _checked_executor(executor):
+    """`executor` with only non-empty string fields, or ValueError when it
+    names no host. None stays None (an agent host's receipt)."""
+    if executor is None:
+        return None
+    if not isinstance(executor, dict):
+        raise ValueError("executor must be a mapping")
+    clean = {k: v for k, v in executor.items() if isinstance(v, str) and v}
+    if "host" not in clean:
+        raise ValueError("executor needs a non-empty host")
+    return clean
+
+
+def write_receipt(pass_name, worktree=".", stage=None, executor=None, head=None):
+    """`head`, when given, is the commit the pass reviewed: the receipt is
+    refused (ValueError) if HEAD is anything else, so a commit landing
+    between the review and this write can't be named as reviewed."""
+    if pass_name not in PASSES:
+        raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
+    if stage is not None and (pass_name != "fix" or stage not in FIX_STAGES):
+        raise ValueError("--stage is review or imagine, and only for fix")
+    branch = named_branch(worktree)
+    require_clean(worktree)
+    executor = _checked_executor(executor)
     root = _git(worktree, "rev-parse", "--show-toplevel")
-    head = _git(worktree, "rev-parse", "HEAD")
+    now = _git(worktree, "rev-parse", "HEAD")
+    if head is not None and now != head:
+        raise ValueError(
+            f"HEAD moved during the run (reviewed {head[:12]}, now {now[:12]})"
+        )
+    head = now
     artifacts = os.path.join(root, *GRUMPY_ROOT, branch)
     directory = os.path.join(artifacts, "receipts")
     name = f"fix-{stage}" if stage else pass_name
@@ -152,6 +186,11 @@ def write_receipt(pass_name, worktree=".", stage=None):
     }
     if stage:
         receipt["stage"] = stage
+    if executor:
+        # Which path ran the pass, when it wasn't an agent host following the
+        # command (oneshot.py: {"host": "oneshot", "provider", "model"}).
+        # sdlc shows it next to the gate in --status.
+        receipt["executor"] = executor
     # A stage receipt also refreshes fix.json, the one name sdlc before 4.17
     # reads, so a newer grumpy with an older installed sdlc still records the
     # fix gates. sdlc 4.17+ prefers the stage file.

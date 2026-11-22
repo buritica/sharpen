@@ -108,8 +108,8 @@ Non-Claude hosts can use the same gate evidence with a v1 capability manifest. T
 ```json
 {
   "protocol_version": "1",
-  "provider": {"name": "my-agent", "agent": "my-agent", "model": "model-id"},
-  "capabilities": ["test", "lint", "typecheck"],
+  "provider": {"name": "my-agent", "agent": "my-agent"},
+  "capabilities": ["test", "lint", "typecheck", "review"],
   "x-host-command-map": {
     "test": "python3 -m unittest",
     "lint": "ruff check .",
@@ -118,7 +118,7 @@ Non-Claude hosts can use the same gate evidence with a v1 capability manifest. T
 }
 ```
 
-On a named feature branch with an initialized gate cycle, run `python3 plugins/sdlc/scripts/generic_adapter.py capabilities.json`. It executes the selected profile's commands and attaches a validated, synthetic review report to the gate store. `local_llm_adapter.py` uses the same manifest and gates, then delegates a diff review to an OpenAI-compatible local endpoint; set `LOCAL_LLM_URL` and optionally `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`. For this adapter, declared `review` is fulfilled by the delegated LLM rather than an `x-host-command-map.review` command. A failed gate, invalid or failed delegated review, or inability to attach the report exits non-zero; attaching a report never marks a gate complete.
+`python3 plugins/sdlc/scripts/generic_adapter.py capabilities.json` runs the selected profile's commands (test, lint, typecheck) and prints PASS/FAIL; it reviews nothing and records nothing. For a review with no coding agent installed, `openai_adapter.py` (OpenAI's API, `OPENAI_API_KEY`) and `local_llm_adapter.py` (any OpenAI-compatible server such as Ollama, `SHARPEN_LLM_URL`) run the same commands and then, when the manifest declares `review` as above, grumpy's `scripts/oneshot.py review`, found through `GRUMPY_PLUGIN_ROOT` or `--grumpy <path>` (grumpy 2.16 or newer; an older grumpy there is named by path, exit 2, before any gate command runs). Without `review` in the manifest they run no review, need no grumpy, say so and exit 0. The model is `SHARPEN_LLM_MODEL`, else the manifest's `provider.model`, else (OpenAI only) grumpy's `models.yaml`; whatever is named is sent to the provider as its model id, so a local server always needs one and a placeholder fails the call. That is grumpy's own review built from `commands/review.md`, not a separate prompt: it saves `.sharpen/grumpy/<branch>/review.md` and a receipt, so `record-gate.py --verify review` records gate 3, and `--status` shows `(via oneshot: <provider> <model>)` next to it. Nothing arms a gate cycle on this path (auto-init is a host hook), so run `record-gate.py --init small-medium` on the branch before the pass; without a cycle `--verify` has nothing to record into, and a `tiny` cycle has no review gate. With `openai_adapter.py` the diff leaves the machine. See grumpy's README, "No agent installed", for what this path can't do that an agent host can. Exit codes: 2 setup error, 1 a gate command failed or the review earned nothing, 0 every gate command passed and (with `review` declared) the report and receipt were written.
 
 The `scripts/` are stdlib python (`gate_store.py`, `gate_receipts.py`, `gate_convergence.py`, `shell_parse.py`, `pr_paths.py` and the hook/CLI scripts), so tracking **and** enforcement run on any box with `python3` 3.9 or newer:
 

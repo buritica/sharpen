@@ -109,49 +109,6 @@ class RunGatesTest(unittest.TestCase):
             ga.DEFAULT_COMMANDS["lint"] = "python3 -m py_compile"
 
 
-class BuildReviewReportTest(unittest.TestCase):
-    def setUp(self):
-        self.repo = make_repo()
-        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
-
-    def test_pass_report(self):
-        manifest = make_manifest(["test"])
-        results = [
-            {
-                "capability": "test",
-                "command": "true",
-                "exit_code": 0,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "",
-            }
-        ]
-        report = ga.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "pass")
-        self.assertEqual(len(report["findings"]), 0)
-        self.assertEqual(report["provenance"]["kind"], "git-range")
-        self.assertIn("base", report["provenance"])
-        self.assertIn("head", report["provenance"])
-        self.assertEqual(report["executor"]["adapter"], "generic")
-
-    def test_fail_report(self):
-        manifest = make_manifest(["test"])
-        results = [
-            {
-                "capability": "test",
-                "command": "false",
-                "exit_code": 1,
-                "duration_s": 0.01,
-                "stdout": "",
-                "stderr": "command failed",
-            }
-        ]
-        report = ga.build_review_report(manifest, results, cwd=self.repo)
-        self.assertEqual(report["status"], "fail")
-        self.assertEqual(len(report["findings"]), 1)
-        self.assertEqual(report["findings"][0]["severity"], "serious")
-
-
 class CliTest(unittest.TestCase):
     def setUp(self):
         self.repo = make_repo()
@@ -177,27 +134,18 @@ class CliTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("no complete baseline", r.stderr.decode())
 
-    def test_passing_run_exits_0(self):
+    def test_passing_run_exits_0_and_attaches_nothing(self):
+        # A gate summary is not a review: nothing lands in the store.
         manifest = make_manifest(
             ["test", "lint", "typecheck"],
             {"test": "true", "lint": "true", "typecheck": "true"},
         )
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
-        # Need a gate cycle for attach_report to succeed
-        data = {}
-        gs.init_gates(data, "feat/x", "tiny")
-        os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
-        with open(self.store_path, "w") as f:
-            json.dump(data, f)
         r = self.run_cli(path)
         self.assertEqual(r.returncode, 0, r.stderr.decode())
-        self.assertIn("all gates passed", r.stderr.decode())
-        # Verify the review report was attached
-        with open(self.store_path) as f:
-            store = json.load(f)
-        self.assertIn("review_report", store["feat/x"])
-        self.assertEqual(store["feat/x"]["review_report"]["status"], "pass")
+        self.assertIn("all gate commands passed", r.stderr.decode())
+        self.assertFalse(os.path.exists(self.store_path))
 
     def test_failing_run_exits_1(self):
         manifest = make_manifest(
@@ -206,28 +154,68 @@ class CliTest(unittest.TestCase):
         )
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
-        data = {}
-        gs.init_gates(data, "feat/x", "tiny")
-        os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
-        with open(self.store_path, "w") as f:
-            json.dump(data, f)
         r = self.run_cli(path)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("1 gate(s) or review failed", r.stderr.decode())
-        with open(self.store_path) as f:
-            store = json.load(f)
-        self.assertEqual(store["feat/x"]["review_report"]["status"], "fail")
+        self.assertIn("1 gate command(s) failed", r.stderr.decode())
+        # The FAIL line names the command and its exit code, so a failing
+        # lint doesn't leave the operator with no reason at all.
+        self.assertIn("[generic-adapter]     $ false -> exit 1", r.stderr.decode())
+        self.assertIn("[generic-adapter]     (no output)", r.stderr.decode())
 
-    def test_no_cycle_fails_when_report_cannot_attach(self):
+    def test_unmapped_gate_failure_prints_its_reason(self):
+        failures = ga.summarize(
+            [
+                {
+                    "capability": "lint",
+                    "command": None,
+                    "exit_code": 1,
+                    "duration_s": 0,
+                    "stdout": "",
+                    "stderr": "no command mapped for capability 'lint'",
+                }
+            ],
+            name="x-adapter",
+        )
+        self.assertEqual(len(failures), 1)
+        failures = ga.summarize(
+            [
+                {
+                    "capability": "test",
+                    "command": "pytest",
+                    "exit_code": 1,
+                    "duration_s": 0,
+                    "stdout": "many\nlines\nof\nstdout",
+                    "stderr": "",
+                }
+            ],
+            tail=2,
+        )
+        self.assertEqual(len(failures), 1)
+
+    def test_review_capability_runs_no_command(self):
         manifest = make_manifest(
-            ["test", "lint", "typecheck"],
-            {"test": "true", "lint": "true", "typecheck": "true"},
+            ["test", "lint", "typecheck", "review"],
+            {"test": "true", "lint": "true", "typecheck": "true", "review": "false"},
         )
         path = os.path.join(self.repo, "caps.json")
         write_manifest(path, manifest)
         r = self.run_cli(path)
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("could not attach review report", r.stderr.decode())
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn("PASS review", r.stderr.decode())
+        self.assertNotIn("FAIL review", r.stderr.decode())
+        # Skipped out loud, not silently: a declared review that never ran.
+        self.assertIn("`review` is declared but not run here", r.stderr.decode())
+
+
+class NoManifestTest(unittest.TestCase):
+    def test_no_manifest_and_no_env_is_a_setup_error(self):
+        old = os.environ.pop("SHARPEN_CAPABILITIES", None)
+        try:
+            self.assertEqual(ga.resolve_manifest([], "x"), 2)
+            self.assertEqual(ga.run_with_oneshot([], "x", "openai", env={}), 2)
+        finally:
+            if old is not None:
+                os.environ["SHARPEN_CAPABILITIES"] = old
 
 
 if __name__ == "__main__":

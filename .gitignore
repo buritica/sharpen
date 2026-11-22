@@ -2,6 +2,9 @@ node_modules/
 .env
 *.log
 __pycache__/
+# coverage.py data (local measurement, never committed)
+.coverage
+.coverage.*
 
 # SDLC gate state (per-worktree JSON, generated locally by plugins/sdlc/scripts)
 .sharpen/data/
