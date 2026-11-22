@@ -105,19 +105,21 @@ class SupportMatrixTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             hosts.splice_matrix("# no markers here\n")
 
-    def test_check_flag_reports_a_stale_doc(self):
+    def test_write_flag_refreshes_a_stale_doc(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         doc = os.path.join(tmp, "hosts.md")
         with open(doc, "w", encoding="utf-8") as f:
             f.write(f"x\n{hosts.MATRIX_BEGIN}\nold\n{hosts.MATRIX_END}\n")
-        run = lambda flag: subprocess.run(  # noqa: E731
-            [sys.executable, os.path.join(SCRIPTS, "hosts.py"), flag, doc],
+        r = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "hosts.py"), "--write", doc],
             capture_output=True,
         )
-        self.assertEqual(run("--check").returncode, 1)
-        self.assertEqual(run("--write").returncode, 0)
-        self.assertEqual(run("--check").returncode, 0)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        with open(doc, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(hosts.splice_matrix(text), text)
+        self.assertNotIn("\nold\n", text)
 
 
 class AutoInitHostTest(unittest.TestCase):

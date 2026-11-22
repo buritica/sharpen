@@ -57,7 +57,6 @@ UNVERIFIED = "unverified"
 HOSTS = {
     "claude-code": {
         "label": "Claude Code",
-        "tier": "native",
         "recording": RECORDING_AUTOMATIC,
         "install": "Plugin marketplace",
         "pr_block": "PreToolUse hook",
@@ -67,7 +66,6 @@ HOSTS = {
     },
     "codex": {
         "label": "Codex CLI",
-        "tier": "native",
         "recording": RECORDING_MANUAL,
         "install": "Reads the same `hooks/hooks.json`",
         "pr_block": "PreToolUse hook, verified live",
@@ -77,7 +75,6 @@ HOSTS = {
     },
     "pi": {
         "label": "pi",
-        "tier": "native",
         "recording": RECORDING_AUTOMATIC,
         "install": "`pi install` (TS extensions)",
         "pr_block": "`tool_call`; a TUI human can override, headless fails closed",
@@ -87,7 +84,6 @@ HOSTS = {
     },
     "instructions-only": {
         "label": "Gemini CLI, Cursor, Copilot, `npx skills add`",
-        "tier": "instructions-only",
         "recording": None,
         "install": "Generated SKILL.md only",
         "pr_block": "None",
@@ -164,18 +160,13 @@ def splice_matrix(text):
 
 
 def main(argv):
-    if len(argv) == 2 and argv[0] in ("--write", "--check"):
+    # No --check: scripts/check-marketplace.py (check_hosts_matrix) is the one
+    # staleness check, and CI runs it.
+    if len(argv) == 2 and argv[0] == "--write":
         path = argv[1]
         with open(path, encoding="utf-8") as f:
             text = f.read()
         fresh = splice_matrix(text)
-        if argv[0] == "--check":
-            if fresh != text:
-                sys.stderr.write(
-                    f"{path}: support matrix is stale; run hosts.py --write\n"
-                )
-                return 1
-            return 0
         if fresh != text:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(fresh)
@@ -183,7 +174,7 @@ def main(argv):
     if not argv:
         print(detect_host())
         return 0
-    sys.stderr.write("usage: hosts.py [--write|--check <docs/hosts.md>]\n")
+    sys.stderr.write("usage: hosts.py [--write <docs/hosts.md>]\n")
     return 2
 
 

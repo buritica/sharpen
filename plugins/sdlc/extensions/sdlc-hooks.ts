@@ -44,7 +44,7 @@ import type {
   ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { PLUGIN_ROOT, SCRIPTS_DIR, runHook } from "./lib/run-hook";
+import { PLUGIN_ROOT, runHook } from "./lib/run-hook";
 
 // Let SKILL.md `${SDLC_PLUGIN_ROOT:-...}/scripts/...` references run under
 // pi's bash tool (its spawned shells inherit process.env), and declare the host.
