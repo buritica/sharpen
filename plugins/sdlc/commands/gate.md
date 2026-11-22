@@ -175,7 +175,15 @@ Gate 2 is skill-gated exactly like 3–6: the `simplify` gate is stamped only wh
   **Say this before you initialize, not after the work is done.** If the tier you are about to init is `small-medium` or `significant` and any of the four skills is unavailable, stop and tell the user: the cycle cannot complete, and their options are to install the missing skill or (only if the change genuinely qualifies) run `tiny`. Failing at init costs them a sentence; failing at `gh pr create` costs them the whole chain. Do not present the self-review as having satisfied a gate it cannot record.
 - If you are genuinely unsure, **ask** rather than silently downgrading.
 
-Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no external runtime. So enforcement works on any box: the `enforce-sdlc-gates.py` hook blocks `gh pr create` when gates are incomplete. State the mode in one line, e.g. `Mode: grumpy + enforced gates`.
+Gate tracking + enforcement are **pure python (stdlib)** — no `bun`, no external runtime. So enforcement works on any box: the `enforce-sdlc-gates.py` hook blocks opening a PR (`gh pr create`/`new`, `gh api` to `/pulls`, `glab`, `hub`, or an MCP `create_pull_request` tool) when gates are incomplete, and the optional git pre-push hook covers the rest. State the mode in one line, e.g. `Mode: grumpy + enforced gates`.
+
+**Refresh the git pre-push floor on every run**, not only at Initialize. It is idempotent and quiet when nothing changed, and it is what re-points the hook at this plugin's scripts after a plugin update moved the cache (no `--init`, so no gates are reset):
+
+```bash
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/install-pre-push.py" --root "${WT:-.}"
+```
+
+It warns on a push of a branch whose gates are missing or stale and never blocks unless the repo opted in with `git config sharpen.prePush block`. If it reports that hooks are managed elsewhere (husky, lefthook, `core.hooksPath`), pass its chain line (or, for lefthook, its `lefthook.yml` snippet) on to the user rather than editing their hook yourself. Auto-init runs the same installer whenever it arms a cycle.
 
 ## Is AGENTS.md current?
 
@@ -193,7 +201,7 @@ with no block at all is simply pre-4.11; mention it once.
 
 ## Gate tracking
 
-Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the `gh pr create` command's `--head` if it has one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key) and otherwise from its `cd`/`git -C` working directory. Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how `--verify`, the Stop sweep and the auto-record hook in this session find `$WT`'s cycle.
+Gates are tracked in a single JSON file **shared across every worktree of the repo**, keyed by branch. `scripts/record-gate.py` writes it at `<main-checkout>/.sharpen/data/gates.json` — the path is resolved via `git rev-parse --git-common-dir`, which points at the main checkout's `.git` from any linked worktree, so every worktree (and any cwd inside the repo) reads and writes the same file (override with `$SDLC_GATES_PATH`). Existing installs that only have `<main-checkout>/.claude/data/gates.json` keep using that file until `.sharpen/data/` exists, so an upgrade does not hide active cycles. The `enforce-sdlc-gates.py` hook reads that same shared file, taking the branch from the PR's head if it names one (normalized, so `owner:branch`, `refs/heads/branch` and the clustered `-Hbranch` resolve to the same key, while a shell-expanded head or `HEAD` means the checked-out branch) and otherwise from its `cd`/`git -C` working directory. An MCP call, or `-R owner/repo` from outside the checkout, is judged against the checkout whose remote matches; when none does, the cwd's checkout is judged instead, and only a cwd that is not a checkout allows (with a note). Because the store is shared and branch-keyed: a cycle recorded in one worktree is visible when the PR is created from another, while two branches checked out in two worktrees stay isolated by their branch key. (Worktree targeting assumes the invoking session is in the same repo as `$WT`.) The `routed_from` entry described above rides in that same shared file, which is how `--verify`, the Stop sweep and the auto-record hook in this session find `$WT`'s cycle.
 
 ### Initialize
 
@@ -206,6 +214,8 @@ python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --in
 ```
 
 Replace `<tier>` with `tiny`, `small-medium`, or `significant`. Drop `--route-from "$PWD"` when you are gating the current worktree.
+
+The git pre-push floor was already installed or refreshed in the prerequisites step above; Initialize does not need to run it again.
 
 ### Record a gate
 

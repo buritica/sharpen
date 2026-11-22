@@ -14,7 +14,7 @@ to catch, and it marks its own stamp as unverified in `--status`/`--oneline`
 rather than looking like a hook-verified one.
 Bash-verifiable gates (tests/lint/typecheck) stay manually recordable.
 
-Pure stdlib. @fires-on Bash tool, @blocking
+Pure stdlib. @fires-on Bash and Monitor tools, @blocking
 """
 
 import json
@@ -87,7 +87,8 @@ def recorded_gates(command):
 
 
 def check_direct_record(tool, tool_input):
-    if tool != "Bash":
+    # Monitor runs a shell `command` too, outside the Bash matcher.
+    if tool not in ("Bash", "Monitor"):
         return True, None
     recorded, drives_auto_record = recorded_gates(tool_input.get("command", ""))
     if not recorded and not drives_auto_record:

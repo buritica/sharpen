@@ -43,7 +43,8 @@ _HOST_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
 # Column order of the rendered matrix, with header labels.
 MATRIX_COLUMNS = (
     ("install", "Install"),
-    ("pr_block", "Blocks ungated `gh pr create`"),
+    ("pr_block", "Blocks an ungated PR"),
+    ("pre_push", "git pre-push floor"),
     ("auto_arm", "Arms a cycle on first commit"),
     ("recording", "Records gates 2-6"),
     ("plugin_root", "Plugin root in skills"),
@@ -59,7 +60,8 @@ HOSTS = {
         "label": "Claude Code",
         "recording": RECORDING_AUTOMATIC,
         "install": "Plugin marketplace",
-        "pr_block": "PreToolUse hook",
+        "pr_block": "PreToolUse hook on Bash, Monitor and MCP PR tools (every `pr_paths` path)",
+        "pre_push": "Installed by auto-init and `/sdlc:gate`",
         "auto_arm": "PostToolUse hook",
         "recording_cell": "Automatic: `Stop` hook sweeps receipts",
         "plugin_root": "`${CLAUDE_PLUGIN_ROOT}` filled in at load (braced only)",
@@ -68,7 +70,9 @@ HOSTS = {
         "label": "Codex CLI",
         "recording": RECORDING_MANUAL,
         "install": "Reads the same `hooks/hooks.json`",
-        "pr_block": "PreToolUse hook, verified live",
+        "pr_block": "PreToolUse hook on every `pr_paths` path; Bash verified live, MCP "
+        + UNVERIFIED,
+        "pre_push": "Installed by auto-init and `/sdlc:gate`",
         "auto_arm": "PostToolUse hook, verified live",
         "recording_cell": "`--verify` after each pass; `Stop` hook " + UNVERIFIED,
         "plugin_root": "Substitution in skill text " + UNVERIFIED,
@@ -77,7 +81,9 @@ HOSTS = {
         "label": "pi",
         "recording": RECORDING_AUTOMATIC,
         "install": "`pi install` (TS extensions)",
-        "pr_block": "`tool_call`; a TUI human can override, headless fails closed",
+        "pr_block": "`tool_call` on bash and MCP PR tools (every `pr_paths` path); "
+        "a TUI human can override, headless fails closed",
+        "pre_push": "Installed by auto-init and `/sdlc:gate`",
         "auto_arm": "`tool_result`",
         "recording_cell": "Automatic: `agent_end` sweeps receipts",
         "plugin_root": "Each extension exports `<PLUGIN>_PLUGIN_ROOT`",
@@ -87,6 +93,8 @@ HOSTS = {
         "recording": None,
         "install": "Generated SKILL.md only",
         "pr_block": "None",
+        "pre_push": "Only if the sdlc scripts are on the machine and a native host "
+        "installed the shim in the repo",
         "auto_arm": "None",
         "recording_cell": "None (no scripts ship)",
         "plugin_root": "Unset; skills that run scripts can't",
