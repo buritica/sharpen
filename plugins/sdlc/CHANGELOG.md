@@ -5,6 +5,49 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.17.0 — a finished chain stops re-running (sharpen#37)
+
+A two-line fix once took 13 gate rounds. Five changes cut the rounds that review nothing new:
+
+- **The chain is done when every gate shows recorded.** `gate.md` used to list "fixes from
+  review/imagine" as changes that reset the chain, though those fixes are gates 4 and 6
+  of it. It now says plainly: don't re-run review to check gate 4's or gate 6's own fixes.
+- **`record-gate.py --carry`.** When a commit after the last review gate makes the chain
+  stale, `--carry` checks whether it could have changed what the review saw. It carries
+  the review gates over a clean rebase (the branch's own changed lines are unchanged; context a lower
+  layer rewrote around them doesn't count),
+  release bookkeeping (version fields and release notes renumbered while restacking), a
+  change to trailing whitespace or blank lines only, safe docs (READMEs, changelogs, prose under `docs/`, images,
+  never a command, skill, template, hook or other file an agent executes), or a small
+  comment, docstring or wording fix with `--reason` (at most 30 changed lines, no new files). A carry
+  is recorded as a carry and shown in `--status`, and it re-opens tests, lint and
+  typecheck. Anything else still needs a reset. `/sdlc:ship`'s rebase note now points
+  at it.
+- **A review base for stacked branches.** The chain resolves the base your branch's
+  review covers: `record-gate.py --set-base <branch>` (a branch name, never `HEAD` or the
+  branch itself; `--set-base auto` unpins it), else the open PR's base (via `gh`),
+  else the branch's local upstream parent, else main. `--carry`, the round counter and
+  `--status` use it, and grumpy 2.11+ passes read it from `.claude/sdlc/<branch>/base.json`,
+  so a stacked branch no longer reviews (or edits) the layers below it. With an older
+  grumpy the passes still diff against the default branch. `--carry` takes the reviewed
+  patch against the base it was reviewed on, so a parent that moved between review and
+  restack is not read as the branch's own change (`--carry --reviewed-base <ref>` names
+  that base for a cycle armed before 4.17).
+- **One fix run earns one fix gate.** A fix receipt that earned one fix gate can't earn
+  the other; grumpy 2.11+ writes `fix-review.json` and `fix-imagine.json` separately.
+- **An advisory round counter.** Each `--init` that replaces a cycle with earned skill
+  gates is a new round. From round 2, `--init` and `--status` say which round it is and
+  how much the branch grew since round 1; from round 3 they suggest shipping and filing
+  the rest, or splitting. It never blocks. `--init <tier> --new-rounds` starts the count
+  over (a reused branch name, say).
+
+**What an existing repo needs to do:** re-run `/sdlc:init` to refresh the managed
+`AGENTS.md` block, which now carries the completion rule and `--carry`. Nothing else: the
+store gains a `rounds` key on the next `--init` (or auto-init) and a `carries` key on
+the first `--carry`, and older cycles read fine. Only 4.17.0 and later read carries: restart sessions,
+update pi, and run `/sdlc:gate` once to refresh the pre-push hook, or an older copy will
+still call a carried chain stale.
+
 ## 4.16.0 — every way to open a PR is gated, plus a git pre-push floor
 
 The PR gate used to recognize one thing: a Bash call that ran `gh pr create`. Now one

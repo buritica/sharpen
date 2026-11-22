@@ -72,14 +72,16 @@ failure becomes the one required context.
 
 Default order for Small-medium+ changes:
 
-1. **Test** — auto-detects runner (bun/npm/pytest/cargo/go)
+1. **Test** — the `test` command AGENTS.md declares, else auto-detects the runner (bun/npm/pytest/cargo/go)
 2. **Simplify** — review for dead code, over-abstraction, complexity — thresholds are judged against the merge base, so pre-existing debt is reported rather than failed
 3. **Review** — correctness bugs, edge cases, security (uses grumpy if installed)
 4. **Fix** — resolve review findings (a non-critical finding may instead be deferred with a `ponytail:` comment, per `/grumpy:fix`'s eligibility table; critical findings are never deferred)
 5. **Imagine** — mental production walkthrough (uses grumpy if installed)
 6. **Fix** — resolve imagination findings (same deferral option as step 4)
-7. **Lint** — auto-detects linter (biome/eslint/ruff/clippy)
-8. **Typecheck** — auto-detects checker (tsc/pyright/mypy)
+7. **Lint** — the declared `lint` command, else auto-detects the linter (biome/eslint/ruff/clippy)
+8. **Typecheck** — the declared `typecheck` command, else auto-detects the checker (tsc/pyright/mypy)
+
+The declared commands are the ones `/sdlc:init` writes into the AGENTS.md managed block (`scripts/declared_commands.py` reads them back). When they and the detection table disagree, AGENTS.md wins, and the gate says which source each command came from.
 
 Tiny changes (≤3 lines of code): test + lint + typecheck.
 
@@ -318,7 +320,7 @@ bundle.
 - **grumpy** installed? Gates 3-6 use `/grumpy:review`, `/grumpy:fix`, `/grumpy:imagine`. Without grumpy, the agent performs self-review and announces the fallback at the start of the gate — but note that self-review **cannot record** gates 3-6: they record only from the receipt a real grumpy pass leaves. With the hooks registered and grumpy absent, a `small-medium`/`significant` cycle cannot complete, so install grumpy or use the `tiny` cycle where it genuinely applies.
 - **sdlc hooks registered** (from `hooks/hooks.json`)? Opening a PR (any path in `pr_paths.py`) is blocked until all required gates pass for the branch. Without hooks, the gate chain is advisory apart from the git pre-push floor.
 - **sdlc-guardrails** installed? Adds opt-in main-branch commit protection (independent of gate tracking, which this plugin owns).
-- Works with any language/framework — auto-detects toolchain from lock files and config.
+- Works with any language/framework — runs the commands AGENTS.md declares, and auto-detects the toolchain from lock files and config for anything it doesn't.
 
 ## Worktree targeting
 
