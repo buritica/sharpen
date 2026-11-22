@@ -278,7 +278,7 @@ class StackTest(ReceiptTestBase):
 
     def test_an_unwritable_base_file_is_reported(self):
         # A file where the directory should be blocks the write, even as root.
-        sdlc = os.path.join(self.repo, ".claude", "sdlc")
+        sdlc = os.path.join(self.repo, ".sharpen", "sdlc")
         os.makedirs(sdlc, exist_ok=True)
         blocker = os.path.join(sdlc, BRANCH.split("/")[0])
         if os.path.isdir(blocker):

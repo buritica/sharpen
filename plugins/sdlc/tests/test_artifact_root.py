@@ -233,16 +233,35 @@ class WriterReaderTest(unittest.TestCase):
     def test_grumpy_reads_the_base_file_sdlc_writes(self):
         git(self.repo, "branch", "parent")
         head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
-        path = gate_base.write_base_file(
+        warning = gate_base.write_base_file(
             BRANCH, {"ref": "parent", "commit": head}, self.repo
         )
+        self.assertIsNone(warning)
         self.assertTrue(
-            path.startswith(os.path.join(self.repo, *artifact_dirs.SDLC_ROOT))
+            os.path.isfile(
+                os.path.join(
+                    self.repo, *artifact_dirs.SDLC_ROOT, BRANCH, gate_base.BASE_FILE
+                )
+            )
         )
         self.assertEqual(diff_base._from_sdlc(self.repo, self.repo, BRANCH), "parent")
         self.assertTrue(
             os.path.isfile(os.path.join(self.repo, ".sharpen", "sdlc", ".gitignore"))
         )
+
+    def test_no_base_removes_a_stale_legacy_base_file_too(self):
+        # grumpy falls back to the legacy file when the new one is missing, so
+        # clearing only the new one would hand the passes the old base.
+        git(self.repo, "branch", "parent")
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        legacy = os.path.join(self.repo, *artifact_dirs.LEGACY_SDLC_ROOT, BRANCH)
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, gate_base.BASE_FILE), "w") as f:
+            json.dump({"ref": "parent", "commit": head}, f)
+        gate_base.write_base_file(BRANCH, {"ref": "parent", "commit": head}, self.repo)
+        self.assertIsNone(gate_base.write_base_file(BRANCH, None, self.repo))
+        self.assertIsNone(diff_base._from_sdlc(self.repo, self.repo, BRANCH))
+        self.assertFalse(os.path.exists(os.path.join(legacy, gate_base.BASE_FILE)))
 
     def test_sdlc_and_grumpy_folders_ignore_themselves(self):
         for name in ("sdlc", "grumpy"):
