@@ -67,17 +67,18 @@ where it can, strong where it must), passing the resolved model to each fix
 agent and escalating one tier on a failed `accept:` check:
 
 - `exec: trivial` → Haiku · `exec: standard` → Sonnet · large/unverifiable → Opus
-- `--max-tier <role>` clamps the ceiling (native dispatch tops at `opus`: `exec-trivial < exec < analysis`)
+- `--max-tier <role>` clamps the ceiling (fix's ladder tops at the `analysis` role: `exec-trivial < exec < analysis`)
 
-The role→model map lives in `models.yaml` (single switch point). Each role has
-a column per host: the Anthropic API id, the Claude Code alias passed to
-subagents (`opus`, `sonnet`, `haiku`, `fable`), and the model to start a Codex
-or pi session on, since those hosts can't pick a model per subagent. Review runs
-its finding passes on the `analysis` role; imagine stays on the session's model
-until a larger benchmark run settles which model suits it; fix routes by `exec:`
-tier; audit synthesizes on the `audit` role (Fable). A repo can override
-entries in its own `.sharpen/models.yaml`. The Codex column is unverified
-until the benchmark below has measured it.
+The role→model map lives in `models.yaml`. Each role has the Anthropic API id,
+the Claude Code alias passed to subagents (`opus`, `sonnet`, `haiku`), and the
+model to start a Codex session on, since Codex (like pi) can't pick a model per
+subagent. Review runs its finding passes on the `analysis` role; imagine stays
+on the session's model until a larger benchmark run settles which model suits
+it; fix routes by `exec:` tier; audit dispatches its dimension reviews on
+`analysis`. A repo can override single values in a committed
+`.sharpen/models.yaml`; the lookup and merge rules are at the top of
+`models.yaml`, and every report names the model that ran. Lowering `analysis`
+there lowers review's passes, audit's dimensions and fix's ceiling together.
 
 ## Measuring review quality
 

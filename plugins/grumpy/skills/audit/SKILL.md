@@ -41,24 +41,20 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 ## Model routing
 
-This command is the heaviest reasoning grumpy does. Run the synthesis and
-planning (Phases 1, 3, 4) on the strongest available model. Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
-(it overrides individual entries), then from `models.yaml` in grumpy's plugin
-root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — a
-repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
-consumer repo's cwd in an installed plugin, not this plugin's own directory,
-and silently fails to exist there. If neither is readable, **say so in the
-report's run header** ("models.yaml unreadable — used native defaults") and
-use these native defaults directly rather than guessing: `audit` role →
-`fable`, `analysis` role → `opus`. A user routed by defaults because the
-config failed to load should learn that from the report, not discover it
-later. Use the `audit` role for synthesis/planning and `analysis` for the
-composed reviews. If your harness lets you choose a model per dispatched
-subagent (Claude Code's takes `sonnet`/`opus`/`haiku`/`fable`), pass the
-role's `native` value. If it doesn't (Codex and pi run every dimension on the
-session's model), run every dimension at your own model and say so in the run
-header, naming the model the map suggests for this host (its `codex`/`pi`
-column) so the user can start the session on it next time. **Never silently
+This command is the heaviest reasoning grumpy does. The synthesis and
+planning (Phases 1, 3, 4) run in this session, on its model; the map's `audit`
+role names the model to start an audit session on. Read the role→model map
+from `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override, following the lookup rules at the top of that
+file. If it can't be read, **say so in the report's run header**
+("models.yaml unreadable — used `opus`") and use `opus` for the composed
+reviews. If your harness lets you choose a model per dispatched subagent
+(Claude Code's Agent tool takes `sonnet`/`opus`/`haiku`), dispatch the
+composed reviews (Phase 2) on the `analysis` role's `native` value. If it
+doesn't (Codex and pi), run every dimension on the session's model, and on
+Codex name the `audit` role's `codex` model in the run header so the user can
+start the session on it next time. If a dispatch is rejected for its model,
+run that dimension on the session's model and say so. The run header names
+the session's model and the model each dimension ran on. **Never silently
 downgrade** — say which model actually ran.
 
 ## Phase 1 — Discovery & Mapping (read before judging)

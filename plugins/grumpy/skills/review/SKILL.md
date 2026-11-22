@@ -156,13 +156,15 @@ The only thing that changes is *who* runs the pass, not what it does or what
 it returns.
 
 **Model:** these are finding passes, so they run on the `analysis` role.
-Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
-(it overrides individual entries), then from `models.yaml` in grumpy's plugin
-root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`). When your dispatch primitive takes a
-per-subagent model (Claude Code's Agent tool takes
-`sonnet`/`opus`/`haiku`/`fable`), pass the role's `native` value. When it doesn't, or you're running the passes yourself, they run on the
-session's model. Either way, name the model in the report's opening line, and
-if the map couldn't be read say so ("models.yaml unreadable — used `opus`").
+Read the role→model map from `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override, following the lookup
+rules at the top of that file. When your dispatch primitive takes a
+per-subagent model (Claude Code's Agent tool takes `sonnet`/`opus`/`haiku`),
+pass the role's `native` value; if the map can't be read, pass `opus` and say
+so. When it doesn't, or you run the passes yourself, they run on the
+session's model. If a pass fails because its model was rejected or
+rate-limited, rerun it once on the session's model and say so. The report's
+`_Model:_` line names the model the passes ran on, and the override if one
+changed it.
 
 For each applicable review aspect, the pass needs:
 
@@ -272,6 +274,8 @@ Once all agents complete, combine their findings into one unified review:
 
 ```markdown
 # Code Review: [Brief Description]
+
+_Model: [the model the passes ran on; the override file and entries, if one changed it]_
 
 _[One grumpy sentence summarizing your overall impression]_
 

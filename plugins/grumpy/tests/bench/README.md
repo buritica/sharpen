@@ -95,6 +95,11 @@ Before you run it:
   and settings run in the bench session too. Bench where grumpy isn't installed, or
   compare only runs made on the same machine with the same installs.
 - `--invoke native` exists only for Claude Code; Codex and pi always run inline.
+- **On Claude Code, `--model` sets the session, not review's passes.** Review
+  dispatches its passes on `models.yaml`'s `analysis` role. To compare models for
+  review, pin it: `run --host claude --pass review --analysis sonnet`, then
+  `--analysis opus`. The run records the pin as `analysis` in `results.json`. Imagine
+  runs on the session's model, so `--model` is what changes it.
 - The fixture code is excluded from ruff (`pyproject.toml`) and from `/grumpy:simplify`
   (`.sharpen/simplify.json`), because it plants bugs on purpose. Check a new case by
   running the unit tests, which validate every key against its files.

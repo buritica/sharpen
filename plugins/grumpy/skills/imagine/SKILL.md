@@ -138,8 +138,9 @@ The only thing that changes is *who* runs the pass, not what it does or what
 it returns.
 
 **Model:** these passes run on the session's model; don't pass a model to
-the subagents. `models.yaml` doesn't route imagine yet (its note says why).
-Name the model in the report's opening line.
+the subagents. grumpy's `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml`
+doesn't route imagine yet (its closing note says why). The report's `_Model:_`
+line names the model.
 
 ### Agent 1: Happy Path Simulation (per transport)
 
@@ -529,6 +530,8 @@ Once all agents complete, combine findings into one report:
 # Production Imagination: [Brief Description]
 
 _Analyzed: [DIFF_BASE], from [the source the `base:` line named, or "the default branch fallback"] — HEAD at [HEAD_SHA]_
+
+_Model: [the session's model, which every pass ran on]_
 
 _[One grumpy sentence about what you found overall]_
 

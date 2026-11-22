@@ -440,30 +440,25 @@ rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
 strong tier, not a mix. The thrifty split is real, just conditional on going
 through `/grumpy:audit` first.
 
-Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
-(it overrides individual entries), then from `models.yaml` in grumpy's plugin
-root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — a
-repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
-target repo's cwd in an installed plugin, not this plugin's own directory. If
-neither is readable from where you're running, **say so in the summary**
-("models.yaml unreadable — used native defaults") and use the native
-defaults below directly — they are the source of truth for dispatch, but a
-user routed by defaults instead of the configured map should learn that from
-the output, not discover it later. Route
-each task by its `exec:` tier hint, passing the resolved model as the
-subagent dispatch's per-model argument:
+Read the role→model map from
+`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override,
+following the lookup rules at the top of that file. Route each task by its
+`exec:` tier hint to a role, and pass that role's `native` value (from the map,
+override included) as the dispatch's model argument:
 
-- `exec: trivial` → `exec-trivial` role → **`haiku`**
-- `exec: standard` → `exec` role → **`sonnet`**
-- `exec: strong`, no hint, or `L`/`XL`/no `accept:` → `analysis` role → **`opus`**
+- `exec: trivial` → `exec-trivial` role
+- `exec: standard` → `exec` role
+- `exec: strong`, no hint, or `L`/`XL`/no `accept:` → `analysis` role
 
-Use the ladder's role names everywhere so escalation and clamping line up:
-`exec-trivial < exec < analysis`. `opus` (the `analysis` role) is the top of
-the ladder, so it is the ceiling. The `audit` role (`fable`) is grumpy:audit's
-synthesis model, not a rung a failed fix escalates to.
+The map decides the model. Only if it can't be read, **say so in the
+summary** ("models.yaml unreadable — used fallbacks") and use these fallback
+aliases: `exec-trivial` → `haiku`, `exec` → `sonnet`, `analysis` → `opus`.
 
-Pass the role's `native` value as the dispatch's model argument (Claude Code
-accepts `sonnet`/`opus`/`haiku`/`fable`).
+The ladder is the map's `escalation` list, `exec-trivial < exec < analysis`;
+`analysis` is the ceiling. The `audit` role is not a rung. If two rungs
+resolve to the same alias (an override pinned `analysis` to `sonnet`, say),
+escalating between them changes nothing: treat it as having no higher rung,
+and report the task as blocked instead of spending the escalation.
 
 `--max-tier <role>` **clamps** routing to that ceiling (order:
 `exec-trivial < exec < analysis`). `--max-tier exec` forces everything to
@@ -564,8 +559,8 @@ Summarise what was fixed in grumpy voice:
 ```
 Fixed [N] issues. Here's what your code needed to survive contact with reality:
 
-- [task subject]: [one grumpy sentence about what was wrong]
-- [task subject]: [one grumpy sentence about what was wrong]
+- [task subject] ([model it ran on][, escalated from <model>]): [one grumpy sentence about what was wrong]
+- [task subject] ([model it ran on][, escalated from <model>]): [one grumpy sentence about what was wrong]
 ...
 
 Deferred [N]: [marked, not fixed — the ceiling is documented, not ignored]
