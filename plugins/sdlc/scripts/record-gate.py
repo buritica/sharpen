@@ -20,7 +20,7 @@ Usage:
                                         # find this repo's store from <path>'s
                                         # cwd (see gate.md's "cross-repo
                                         # routing" section, sharpen#10)
-  record-gate.py --set-base <ref|auto>  # pin the base the review round
+  record-gate.py --set-base <branch|auto>  # pin the base the review round
                                       # covers (a stacked branch's parent);
                                       # `auto` resolves it again: open PR's
                                       # base, then upstream, then main
@@ -40,6 +40,10 @@ Usage:
                                       # imagine, simplify, or grumpy:<name>);
                                       # `all` sweeps every receipt on disk
   record-gate.py --carry [--reason "<text>"] [--reviewed-base <ref>]
+                                      # (--reviewed-base names the base a
+                                      # cycle armed before 4.17 was
+                                      # reviewed on, when the fork point
+                                      # can't be found)
                                       # carry the skill gates over commits
                                       # that can't change what the review
                                       # saw (clean rebase, release
@@ -296,8 +300,10 @@ def _convergence_suffix(branch_data):
 
 
 def _set_base(path, branch, ref):
-    """`--set-base <ref|auto>`: pin (or unpin) the review round's base and
-    refresh the cycle's stored base and the passes' base.json."""
+    """`--set-base <branch|auto>`: pin (or unpin) the review round's base.
+    Before any review gate is earned it also refreshes the cycle's stored
+    base and the passes' base.json; after, both stay on the base the gates
+    were earned on until --carry or a re-init moves them."""
     # Read the store first: a corrupt store must fail before git config moves.
     bd = gs.load_store(path).get(branch)
     err = gb.set_configured(branch, None if ref == "auto" else ref)
@@ -317,15 +323,19 @@ def _set_base(path, branch, ref):
 
         gs.update_store(path, mutate)
     if base:
-        gb.write_base_file(branch, base)
+        if not earned:
+            # Not after gates are earned: the passes still to run must see
+            # the same base the earned gates and --carry use.
+            gb.write_base_file(branch, base)
         _log(f"[gate] {gb.describe(base)}")
     else:
         _log("[gate] no base resolves for this branch")
     if earned:
         _log(
-            "[gate] the recorded review gates stay on the base they were "
-            "earned on; --carry moves them onto this one when the branch's "
-            "own patch is unchanged, otherwise re-init"
+            "[gate] the recorded review gates, and the passes still to run, "
+            "stay on the base they were earned on; --carry moves them onto "
+            "this one when the branch's own patch is unchanged, otherwise "
+            "re-init"
         )
     return 0
 
@@ -367,7 +377,19 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
         # doesn't count every lower layer.
         named = gb.base_commit(reviewed_base_ref, old)
         if not named:
-            _log(f'[gate] error: "{reviewed_base_ref}" is not a commit here')
+            _log(
+                f'[gate] error: "{reviewed_base_ref}" is not a commit here, '
+                f"or shares no history with {old[:12]}"
+            )
+            return 1
+        if stored and gc.is_ancestor(stored, named) is not True:
+            # Below the recorded base, the reviewed patch would take in lower
+            # layers this chain never reviewed (base.json left them out).
+            _log(
+                f"[gate] error: --reviewed-base {reviewed_base_ref} is below "
+                f"the base the gates were earned on ({stored[:12]}); it can "
+                "only name that base or one above it"
+            )
             return 1
         stored = old_base = named
     else:
@@ -382,10 +404,16 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
     )
     if not klass:
         if old_base and old_base != stored:
+            ref = (base or {}).get("ref")
             why += (
-                f" (the base {old[:12]} was reviewed on was not recorded; "
-                f"taken as {old_base[:12]}, where it forked from "
-                f"{(base or {}).get('ref')})"
+                f" (the reviewed base was taken as {old_base[:12]}, where "
+                f"{old[:12]} forked from {ref}, "
+                + (
+                    f"not the recorded {stored[:12]})"
+                    if stored
+                    else "since the cycle recorded none; --reviewed-base "
+                    "<ref> names it)"
+                )
             )
         if why.startswith("git could not"):
             _log(f"[gate] cannot carry: {why}.")
@@ -470,7 +498,10 @@ def main(argv):
             attach_review_file = argv[i + 1]
             i += 2
             continue
-        if argv[i] == "--reviewed-base" and i + 1 < len(argv):
+        if argv[i] == "--reviewed-base":
+            if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+                _log("[gate] error: --reviewed-base needs a ref")
+                return 1
             reviewed_base_ref = argv[i + 1]
             i += 2
             continue
@@ -828,7 +859,7 @@ def main(argv):
                 "--record <gate> | "
                 "--attest <gate> --reason <text> | --verify <skill|all> | "
                 "--carry [--reason <text>] [--reviewed-base <ref>] | "
-                "--set-base <ref|auto> | "
+                "--set-base <branch|auto> | "
                 "--status | --oneline | "
                 "--unroute] [--branch <name>] [--route-from <path>] "
                 "[--profile <name> --capabilities-file <path>] "

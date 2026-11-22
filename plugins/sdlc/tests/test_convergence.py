@@ -207,6 +207,45 @@ class StackTest(ReceiptTestBase):
         self.assertEqual(self.carry().returncode, 1)
         self.assert_carried(self.carry("--reviewed-base", old_b), "rebase")
 
+    def test_reviewed_base_below_the_recorded_base_is_refused(self):
+        # Folding the lower layers into the branch, then naming main as the
+        # reviewed base, would carry lines this chain never reviewed.
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        git(self.repo, "reset", "-q", "--soft", "main")
+        git(self.repo, "commit", "-q", "-m", "fold the stack")
+        self.cli("--set-base", "auto")
+        r = self.carry("--reviewed-base", "main")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("below", r.stderr)
+        self.assertEqual(self.carry("--reviewed-base").returncode, 1)
+
+    def test_set_base_after_gates_keeps_base_json_on_the_earned_base(self):
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        earned = self.base_file()["commit"]
+        self.assertEqual(self.cli("--set-base", "layer-a").returncode, 0)
+        self.assertEqual(self.base_file()["commit"], earned)
+
+    def test_remote_fallback_takes_branch_names_only(self):
+        git(self.repo, "remote", "add", "origin", self.repo)
+        head = git(self.repo, "rev-parse", "layer-b").strip()
+        git(self.repo, "update-ref", "refs/remotes/origin/parent-x", head)
+        for ref in ("parent-x~1", "parent-x^{commit}"):
+            self.assertEqual(self.cli("--set-base", ref).returncode, 1, ref)
+
+    def test_an_upstream_that_holds_head_is_the_branch_s_own_copy(self):
+        # Pushed under another name: `push -u origin HEAD:other-name`.
+        git(self.repo, "remote", "add", "origin", self.repo)
+        head = git(self.repo, "rev-parse", "HEAD").strip()
+        git(self.repo, "update-ref", "refs/remotes/origin/other-name", head)
+        git(self.repo, "config", f"branch.{BRANCH}.remote", "origin")
+        git(self.repo, "config", f"branch.{BRANCH}.merge", "refs/heads/other-name")
+        self.start()
+        self.assertEqual(self.bd()["base"]["source"], "default")
+
     def test_reviewed_base_is_only_for_carry(self):
         r = self.cli("--status", "--reviewed-base", "layer-b")
         self.assertEqual(r.returncode, 1)

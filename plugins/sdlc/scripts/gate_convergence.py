@@ -350,16 +350,16 @@ def is_ancestor(old, new, cwd=None):
 
 
 def reviewed_base(old, stored=None, ref=None, cwd=None):
-    """The base commit `old` was reviewed on, or None. The cycle's stored
-    base wins when it is in `old`'s history, unless the fork point below is
-    newer (the branch was rebased between arming and the chain). A cycle
-    that has none (armed
-    before 4.17), or one a later `--set-base` moved, falls back to where
-    `old` forked from `ref` (the base it is restacked onto) by that ref's
-    reflog, as `git rebase` does, then to their plain merge-base. Without
-    this, the reviewed patch is taken against the default branch and a
-    lower layer that moved between review and restack reads as the branch's
-    own change."""
+    """The base commit `old` was reviewed on, or None.
+
+    The cycle's stored base wins when it is in `old`'s history, unless the
+    fork point below is newer (the branch was rebased between arming and
+    the chain). A cycle that has none (armed before 4.17) falls back to
+    where `old` forked from `ref` (the base it is restacked onto) by that
+    ref's reflog, as `git rebase` does, then to their plain merge-base.
+    Without this, the reviewed patch is taken against the default branch
+    and a lower layer that moved between review and restack reads as the
+    branch's own change."""
     fork = None
     if ref:
         for args in (["--fork-point", ref, old], [ref, old]):
@@ -404,11 +404,13 @@ def change_size(old, new, cwd=None):
 
 def _clean_replay(old, new, cwd=None, old_base=None, new_base=None):
     """True when HEAD is exactly what git produces by merging the reviewed
-    commit onto HEAD's base with no conflicts and no hand edits; False when it
-    is not; None when this git can't tell (merge-tree --write-tree needs git
-    2.40 for `--merge-base`). This is what a clean rebase is, including a restack after a parent
-    branch squash-merged: the parent's changes are on both sides and merge
-    away. It is the same textual merge the PR's own merge would make."""
+    commit onto HEAD's base with no conflicts and no hand edits; False when
+    it is not; None when this git can't tell (`merge-tree --write-tree`
+    needs git 2.38, and 2.40 when the reviewed base is pinned with
+    `--merge-base`). This is what a clean rebase is, including a restack
+    after a parent branch squash-merged: the parent's changes are on both
+    sides and merge away. It is the same textual merge the PR's own merge
+    would make."""
     base = new_base or merge_base(new, cwd)
     if not base:
         return None
@@ -467,15 +469,21 @@ def classify_carry(
     ancestor = is_ancestor(old, new, cwd)
     if ancestor is None:
         return None, _git_failure(f"tell whether {old[:12]} is in HEAD's history")
-    for base, head in ((old_base, old), (new_base, new)):
+    sides = ((old_base, old, "--reviewed-base"), (new_base, new, "--set-base"))
+    for base, head, flag in sides:
         # A base at or past the head it measures (`--set-base HEAD`, the
         # branch itself) makes the branch's patch empty on both sides, which
         # would compare equal over any change at all.
-        if base and (base == head or is_ancestor(head, base, cwd) is not False):
+        if not base:
+            continue
+        past = base == head or is_ancestor(head, base, cwd)
+        if past is None:
+            return None, _git_failure(f"tell whether {base[:12]} is below {head[:12]}")
+        if past:
             return None, (
                 f"the review base {base[:12]} is not below {head[:12]}, so the "
-                "branch's own patch can't be measured; point --set-base at "
-                "the parent branch"
+                f"branch's own patch can't be measured; point {flag} at the "
+                "parent branch"
             )
     bases = (old_base, new_base)
     if not ancestor:

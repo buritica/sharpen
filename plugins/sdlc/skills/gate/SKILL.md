@@ -258,7 +258,7 @@ review base (below), and carries the gates only for one of these:
 
 | Class | When | Needs |
 |---|---|---|
-| `rebase` | HEAD is exactly what git produces replaying the reviewed commits onto the new base with no conflicts and no hand edits (`git merge-tree`), or the branch's own changed lines are byte-for-byte unchanged, each side taken against its own base (context lines don't count). A clean restack after the layer below was rewritten or squash-merged qualifies | nothing |
+| `rebase` | HEAD is exactly what git produces replaying the reviewed commits onto the new base with no conflicts and no hand edits (`git merge-tree`), or the branch's own changed lines are byte-for-byte unchanged and in the same order, file by file, each side taken against its own base. Context lines, and so a line's position within its file, are not compared. A clean restack after the layer below was rewritten or squash-merged qualifies | nothing |
 | `format` | Only trailing whitespace and blank lines changed; re-indenting, whitespace inside a line, and renames are not format | nothing |
 | `docs` | Every changed file is on the docs safe list: README, CHANGELOG, CHANGES, HISTORY, LICENSE, NOTICE, COPYING, CONTRIBUTING or AUTHORS by name, a prose file under `docs/`, or a raster image. `UPDATE.md` is not on it: the sdlc commands read it | nothing |
 | `bookkeeping` | The patch differs only in release bookkeeping: the `"version"` field of `.claude-plugin/marketplace.json`, `package.json`, `plugins/*/.claude-plugin/plugin.json` and `plugins/*/package.json`; the render stamp in `AGENTS.md`/`CLAUDE.md`; and `plugins/*/UPDATE.md`/`CHANGELOG.md`, which may renumber and pick up text already on the review base but must keep every reviewed line. Everything else is compared exactly | nothing |
@@ -302,7 +302,7 @@ an older grumpy still diffs against the default branch),
 `--carry`, the round counter and `--status` (`Base: <ref> at <commit> (why)`).
 First hit wins:
 
-1. `--set-base <ref>` (stored as `git config branch.<branch>.sdlcBase`);
+1. `--set-base <branch>`, a local or remote branch name (stored as `git config branch.<branch>.sdlcBase`);
    `--set-base auto` removes it.
 2. The open PR's base branch, from `gh pr view`, when `gh` is installed
    (`--init`, `--carry` and `--set-base` only; hooks never call the network).
@@ -314,20 +314,22 @@ First hit wins:
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --set-base <parent-branch> --branch "$BRANCH"
 ```
 
-Set it before the branch's first commit: auto-init arms the cycle on that commit
-and records the base it resolves then. When the layer below is rewritten or squash-merged,
+Set it before the first review pass: until a review gate is earned, `--set-base`
+also updates the cycle's stored base (auto-init records the base it resolves at
+the first commit). When the layer below is rewritten or squash-merged,
 restack with `git rebase --onto <new-base> <old-base>` and run `--carry`: it
 replays only your layer's commits onto the new base, so a clean restack
 carries as `rebase`. `--carry` takes the reviewed patch against the base it
 was reviewed on and the current patch against the base resolved now, so a
 parent that moved in between is not read as your change. Once a review gate is
-recorded, `--set-base` leaves the cycle's base alone and only `--carry` (or a
-re-init) moves it; a cycle with no recorded base uses where the reviewed commit
+recorded, `--set-base` leaves the cycle's base and base.json alone (the passes
+still to run stay on it) and only `--carry` (or a re-init) moves them; a cycle with no recorded base uses where the reviewed commit
 forked from the new base. When that guess is wrong (a cycle armed before 4.17
 on a parent since rewritten, with no reflog of the old parent), name the base
 the review ran on: `--carry --reviewed-base <old-parent-sha>`. `--set-base`
 accepts a parent that exists here only as `origin/<name>`. After the parent merges, `--set-base auto` (or the
-PR's new base) moves you back to main.
+PR's new base) moves you back to main; the cycle's base follows on the next
+`--carry`.
 
 ### Check status
 

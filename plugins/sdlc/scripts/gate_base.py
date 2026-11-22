@@ -11,8 +11,9 @@ tier pick and `--status`.
 
 Resolution order, first hit wins:
 
-  config    `git config branch.<branch>.sdlcBase <ref>`, set with
-            `record-gate.py --set-base <ref>` (`--set-base auto` unsets it)
+  config    `git config branch.<branch>.sdlcBase <branch>`, set with
+            `record-gate.py --set-base <branch>`, a local or remote branch
+            name (`--set-base auto` unsets it)
   pr        the open PR's base branch, from `gh pr view`, when the host has
             `gh` and the caller allows a network call (never from a hook)
   upstream  the branch's configured upstream, when it is another branch
@@ -69,9 +70,10 @@ def set_configured(branch, ref, cwd=None):
     # (`HEAD`, `HEAD~2`, `@{u}` is stored as the branch it names), and never
     # the branch itself: a base at HEAD measures an empty patch.
     full = _git(["rev-parse", "--symbolic-full-name", ref], cwd)
-    if not full:
+    if not full and gc._git(["check-ref-format", "--branch", ref], cwd=cwd)[0] == 0:
         # A parent that exists here only as a remote-tracking branch
-        # (`origin/<ref>`), with no local branch of that name.
+        # (`origin/<ref>`), with no local branch of that name. A plain branch
+        # name only: `x~1` or `x^{commit}` must not slip through here.
         for remote in _git(["remote"], cwd).split():
             candidate = f"refs/remotes/{remote}/{ref}"
             if _exists(candidate, cwd):
@@ -115,9 +117,13 @@ def _upstream(branch, cwd=None):
     if not up or up == branch:
         return None
     local = _git(["config", "--get", f"branch.{branch}.remote"], cwd) == "."
-    if not local and up.split("/", 1)[-1] == branch:
-        # A remote-tracking upstream with the branch's own name is its pushed
-        # copy, not a parent. A local upstream is always another branch.
+    if not local and (
+        up.split("/", 1)[-1] == branch
+        or gc.is_ancestor(_git(["rev-parse", branch], cwd), up, cwd)
+    ):
+        # A remote-tracking upstream with the branch's own name, or one that
+        # already holds the branch's head (pushed under another name), is its
+        # pushed copy, not a parent. A local upstream is always another branch.
         return None
     return up if _exists(up, cwd) else None
 
