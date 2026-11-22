@@ -149,6 +149,7 @@ def load_key(case, cases_dir=CASES_DIR):
         key = json.load(f)
     key.setdefault("planted", [])
     key.setdefault("acceptable", [])
+    key.setdefault("expect_absent", [])
     key.setdefault("passes", list(PASSES))
     return key
 
@@ -220,6 +221,13 @@ def build_repo(case, dest, cases_dir=CASES_DIR):
     shutil.copytree(os.path.join(base, "after"), dest, dirs_exist_ok=True)
     git("add", "-A")
     git("commit", "-q", "-m", key.get("description", case)[:72])
+    # Prior pass output the case starts from (e.g. a fix report whose settled
+    # list review must honor) goes where grumpy reads it. .claude/ is ignored,
+    # so it leaves the worktree clean.
+    art_dir = os.path.join(dest, ".claude", "grumpy", *branch.split("/"))
+    for name, src in key.get("artifacts", {}).items():
+        os.makedirs(art_dir, exist_ok=True)
+        shutil.copyfile(os.path.join(base, src), os.path.join(art_dir, name))
     return branch
 
 
@@ -455,12 +463,15 @@ def _pair_findings(findings, planted, acceptable, window):
     return matched, p_edges
 
 
-def _rate_matches(matched, findings, planted, acceptable):
-    """(planted ids hit, planted ids underrated, acceptable ids overrated)."""
-    hits, underrated, overrated = [], [], []
+def _rate_matches(matched, findings, planted, acceptable, absent=()):
+    """(planted ids hit, planted ids underrated, acceptable ids overrated,
+    [(expect_absent id, finding index)] that showed up anyway)."""
+    hits, underrated, overrated, present = [], [], [], []
     for i, (kind, j) in matched.items():
         sev = findings[i].get("severity", "NOTE")
-        if kind == "planted":
+        if kind == "planted" and planted[j]["id"] in absent:
+            present.append((planted[j]["id"], i))
+        elif kind == "planted":
             hits.append(planted[j]["id"])
             if RANK.get(sev, 1) < RANK.get(planted[j].get("severity", "NOTE"), 1):
                 underrated.append(planted[j]["id"])
@@ -468,7 +479,7 @@ def _rate_matches(matched, findings, planted, acceptable):
             cap = acceptable[j].get("max_severity")
             if cap and RANK.get(sev, 1) > RANK[cap]:
                 overrated.append(acceptable[j]["id"])
-    return hits, underrated, overrated
+    return hits, underrated, overrated, present
 
 
 def _classify_unmatched(findings, matched, p_edges, acceptable, window):
@@ -495,13 +506,22 @@ def _classify_unmatched(findings, matched, p_edges, acceptable, window):
 
 
 def score(key, findings, window=WINDOW):
-    """Score findings against a case key. Planted issues are matched first."""
+    """Score findings against a case key. Planted issues are matched first.
+
+    A planted id listed in `expect_absent` is one the pass must hold back
+    (e.g. settled by an earlier fix): it is left out of recall, and a finding
+    that raises it anyway fails the case.
+    """
     planted = key.get("planted", [])
     acceptable = key.get("acceptable", [])
+    absent = set(key.get("expect_absent", []))
+    scored = [t for t in planted if t["id"] not in absent]
     n = len(findings)
 
     matched, p_edges = _pair_findings(findings, planted, acceptable, window)
-    hits, underrated, overrated = _rate_matches(matched, findings, planted, acceptable)
+    hits, underrated, overrated, present = _rate_matches(
+        matched, findings, planted, acceptable, absent
+    )
     duplicates, unlocated, noise = _classify_unmatched(
         findings, matched, p_edges, acceptable, window
     )
@@ -511,10 +531,11 @@ def score(key, findings, window=WINDOW):
         if findings[i].get("severity") in BLOCKING and i not in unlocated
     ]
     noise_blocking = [i for i in noise if i in blocking]
-    false_blocking = len(noise_blocking) + len(overrated)
+    present_blocking = [i for _, i in present if i in blocking]
+    false_blocking = len(noise_blocking) + len(overrated) + len(present_blocking)
     hit_set = set(hits)
     return {
-        "recall": (len(hit_set) / len(planted)) if planted else None,
+        "recall": (len(hit_set) / len(scored)) if scored else None,
         "precision": ((len(blocking) - false_blocking) / len(blocking))
         if blocking
         else None,
@@ -527,9 +548,10 @@ def score(key, findings, window=WINDOW):
         "overrated": sorted(overrated),
         "underrated": sorted(underrated),
         "hits": sorted(hit_set),
-        "misses": [t["id"] for t in planted if t["id"] not in hit_set],
+        "misses": [t["id"] for t in scored if t["id"] not in hit_set],
+        "present": sorted(pid for pid, _ in present),
         "noise_text": [findings[i]["text"][:160] for i in noise_blocking],
-        "clean": false_blocking == 0,
+        "clean": false_blocking == 0 and not present,
     }
 
 
@@ -560,6 +582,7 @@ def summarize(runs):
             "unlocated": _mean(s.get("unlocated", 0) for s in scored),
             "findings": _mean(s["findings"] for s in scored),
             "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
+            "held_back_failures": sum(1 for s in scored if s.get("present")),
         }
     return out
 
@@ -579,6 +602,11 @@ def compare(baseline, candidate, recall_drop=0.0, noise_rise=0.0, precision_drop
         if cs["failed_runs"] > bs["failed_runs"]:
             problems.append(
                 f"{name}: {cs['failed_runs']} run(s) wrote no report (baseline {bs['failed_runs']})"
+            )
+        if cs.get("held_back_failures", 0) > bs.get("held_back_failures", 0):
+            problems.append(
+                f"{name}: {cs['held_back_failures']} run(s) re-raised a settled finding"
+                f" (baseline {bs.get('held_back_failures', 0)})"
             )
         if (
             bs["recall"] is not None

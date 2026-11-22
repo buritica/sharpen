@@ -12,8 +12,9 @@ numbers, and let one finding claim several issues, so its 100% could be earned b
 about something else. It also scored raw sub-agent lines rather than the rendered report
 `/grumpy:fix` reads, and had no imagine fixture.
 
-`scripts/bench-grumpy.py` replaces it: six fixture repos under `tests/bench/` (planted
-issues for review and imagine, plus clean, comment-only and capability-bait cases), a
+`scripts/bench-grumpy.py` replaces it: seven fixture repos under `tests/bench/` (planted
+issues for review and imagine, plus clean, comment-only and capability-bait cases, and `billing-settled`, which carries
+the old eval's `--expect-absent` settled-list check), a
 line-aware one-to-one scorer that reports recall, precision and blocking noise, a headless
 runner for Claude Code, Codex and pi, and `compare` for before/after runs. Results are
 written to the gitignored `.sharpen/bench/`. No skill or command behavior changed, so an

@@ -369,6 +369,37 @@ class ScoreTest(unittest.TestCase):
         self.assertIsNone(s["recall"])
         self.assertTrue(s["clean"])
 
+    def test_expect_absent_is_left_out_of_recall(self):
+        key = dict(KEY, expect_absent=["undefined"])
+        s = bench.score(
+            key,
+            [
+                F("WARN", "except swallows", line=10),
+                F("WARN", "returns None silently", line=14),
+            ],
+        )
+        self.assertEqual(s["recall"], 1.0)
+        self.assertEqual(s["misses"], [])
+        self.assertEqual(s["present"], [])
+        self.assertTrue(s["clean"])
+
+    def test_expect_absent_finding_that_shows_up_fails(self):
+        key = dict(KEY, expect_absent=["undefined"])
+        s = bench.score(
+            key,
+            [
+                F("WARN", "except swallows", line=10),
+                F("WARN", "returns None silently", line=14),
+                F("CRIT", "undefined name", line=30),
+            ],
+        )
+        self.assertEqual(s["recall"], 1.0)
+        self.assertEqual(s["present"], ["undefined"])
+        self.assertEqual(s["precision"], 2 / 3)
+        self.assertFalse(s["clean"])
+        summary = bench.summarize([{"case": "c", "pass": "review", "score": s}])
+        self.assertEqual(summary["c/review"]["held_back_failures"], 1)
+
 
 def _results(summary_overrides):
     base = {
@@ -422,6 +453,14 @@ class SummaryCompareTest(unittest.TestCase):
             _results({"a/review": {}}), _results({"a/review": {"failed_runs": 1}})
         )
         self.assertEqual(len(problems), 1)
+
+    def test_re_raised_settled_finding_is_a_regression(self):
+        problems, _ = bench.compare(
+            _results({"a/review": {}}),
+            _results({"a/review": {"held_back_failures": 1}}),
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("settled", problems[0])
 
     def test_missing_case_is_a_note(self):
         problems, notes = bench.compare(
@@ -510,6 +549,8 @@ class FixtureTest(unittest.TestCase):
             key = bench.load_key(case)
             bullets = {"CRIT": [], "WARN": [], "NOTE": []}
             for t in key["planted"]:
+                if t["id"] in key["expect_absent"]:
+                    continue
                 bullets[t["severity"]].append(
                     f"- [x]: {t['keywords'][0]} [{t['file']}:{t['lines'][0]}]"
                 )
@@ -541,6 +582,20 @@ class FixtureTest(unittest.TestCase):
             self.assertEqual(
                 sorted(names), ["src/billing/charge.py", "src/billing/test_charge.py"]
             )
+            status = subprocess.run(
+                ["git", "-C", d, "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(status, "")
+
+    def test_artifacts_land_in_the_branch_report_folder(self):
+        case = "billing-settled"
+        with tempfile.TemporaryDirectory() as d:
+            branch = bench.build_repo(case, d)
+            fix = os.path.join(d, ".claude", "grumpy", *branch.split("/"), "fix.md")
+            with open(fix, encoding="utf-8") as f:
+                self.assertIn("## Settled", f.read())
             status = subprocess.run(
                 ["git", "-C", d, "status", "--porcelain"],
                 capture_output=True,

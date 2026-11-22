@@ -61,6 +61,7 @@ quick check.
 | Case | Pass | What it measures |
 | --- | --- | --- |
 | `billing-planted` | review | Seven planted defects (swallowed exception, silent `None`, undefined name, pointless factory, stale comment, unhandled refund, fake test). The old eval's fixture with line ranges. |
+| `billing-settled` | review | `billing-planted` plus a `/grumpy:fix` report whose `## Settled` list holds one valid entry (the fake test) and two invalid ones (no reason; a whole file). The fake test must stay out of the report and the other six must stay in. Replaces the old eval's `--expect-absent` check. |
 | `clean-refactor` | review | A behavior-preserving rename. Any CRIT or WARN is noise. |
 | `comment-only` | review | A docstring and comment fix with no executable change, the commit type issue #37 paid full rounds for. Any CRIT or WARN is noise. |
 | `capability-bait` | review | A correct two-line fix with tests, in code with no logging or transactions. Missing capabilities are fine as NOTEs and noise as CRIT/WARN. |
@@ -91,6 +92,11 @@ refer to files in `after/`. File basenames must be unique within a case.
   as right; a lower one is reported as `underrated`.
 - **acceptable**: real issues that aren't planted, so finding them is not noise. With
   `max_severity`, a finding rated above it counts as `overrated` and against precision.
+- **expect_absent**: planted ids the pass must hold back, such as one an earlier fix
+  settled. They are left out of recall, and a finding that raises one anyway makes the
+  run unclean and counts against precision; `compare` flags a rise in such runs.
+- **artifacts**: `{"fix.md": "artifacts/fix.md"}` copies earlier pass output into the
+  case's `.claude/grumpy/<branch>/` folder before the pass runs.
 - **keywords**: a finding matches when it names the file, cites a line within 3 of the
   range (or no line at all), and contains one keyword. Pick words a reviewer would use
   for this issue and not for its neighbours.
