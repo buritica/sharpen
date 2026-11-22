@@ -17,6 +17,8 @@ python3 scripts/bench-grumpy.py commands --host codex       # print the exact co
 python3 scripts/bench-grumpy.py run --host claude --model claude-opus-5-5 --pass all
 python3 scripts/bench-grumpy.py run --host codex --cases billing-planted --repeat 1
 python3 scripts/bench-grumpy.py compare .sharpen/bench/<before>/results.json .sharpen/bench/<after>/results.json
+# after changing the scorer or a key: re-score saved reports without a paid rerun
+python3 scripts/bench-grumpy.py rescore .sharpen/bench/<run>/results.json
 python3 scripts/bench-grumpy.py score path/to/review.md --case billing-planted
 ```
 
@@ -61,7 +63,7 @@ quick check.
 | Case | Pass | What it measures |
 | --- | --- | --- |
 | `billing-planted` | review | Seven planted defects (swallowed exception, silent `None`, undefined name, pointless factory, stale comment, unhandled refund, fake test). The old eval's fixture with line ranges. |
-| `billing-settled` | review | `billing-planted` plus a `/grumpy:fix` report whose `## Settled` list holds one valid entry (the fake test) and two invalid ones (no reason; a whole file). The fake test must stay out of the report and the other six must stay in. Replaces the old eval's `--expect-absent` check. |
+| `billing-settled` | review | `billing-planted` plus a `/grumpy:fix` report whose `## Settled` list holds one valid entry (the fake test) and two invalid ones (no reason; a whole file). The fake test must stay out of the report and the other five must stay in. Replaces the old eval's `--expect-absent` check. The silent `None` return is acceptable here, not planted: the fix report's `## Fixed` entry claims the swallowed error is re-raised, which would fix both, so a review rightly merges them into one finding (every run did, while `billing-planted` scores it separately 6 of 6). |
 | `clean-refactor` | review | A behavior-preserving rename. Any CRIT or WARN is noise. |
 | `comment-only` | review | A docstring and comment fix with no executable change, the commit type issue #37 paid full rounds for. Any CRIT or WARN is noise. |
 | `capability-bait` | review | A correct two-line fix with tests, in code with no logging or transactions. Missing capabilities are fine as NOTEs and noise as CRIT/WARN. |

@@ -238,6 +238,12 @@ _LOC = re.compile(
     r"`?([A-Za-z0-9_./-]*[A-Za-z0-9_-]\.[A-Za-z0-9]+)`?(?::(\d+)(?:-(\d+))?)?"
 )
 _HEADING = re.compile(r"^(#{1,4})\s+(.*)$")
+# Lists a report appends to the last severity section without a heading of
+# their own: findings held back as settled or already deferred. They are not
+# raised findings, so they end the section.
+_HELD_BACK = re.compile(
+    r"^\W*(settled findings held back|deferred findings honored)", re.IGNORECASE
+)
 _BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
 _EMPTY_BULLET = re.compile(
     r"^(none|n/?a|nothing|no (findings|issues|concerns))\b", re.I
@@ -296,6 +302,9 @@ def parse_report(markdown):
             current = None
             continue
         if severity is None:
+            continue
+        if _HELD_BACK.match(raw):
+            severity = current = None
             continue
         bullet = _BULLET.match(raw)
         if bullet and len(bullet.group(1)) < 2:
@@ -373,12 +382,7 @@ def _same_file(a, b):
     a, b = a.strip("`./"), b.strip("`./")
     if not a or not b:
         return False
-    return (
-        a == b
-        or a.endswith("/" + b)
-        or b.endswith("/" + a)
-        or os.path.basename(a) == os.path.basename(b) == a
-    )
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
 
 
 def matches(target, finding, window=WINDOW):
@@ -854,6 +858,18 @@ def _selected_cases(arg):
     return wanted
 
 
+def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
+    """One run_one call, bracketed by progress lines on stderr."""
+    print(f"[bench] {label} ...", file=sys.stderr, flush=True)
+    r = run_one(
+        case, pass_name, argv, stdin_text, out_dir, label, args.timeout, args.keep
+    )
+    s = r.get("score")
+    detail = f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}" if s else ""
+    print(f"[bench] {label}: {r.get('status')}{detail}", file=sys.stderr, flush=True)
+    return r
+
+
 def cmd_run(args):
     profile = HOSTS[args.host]
     binary = shlex.split(args.cmd)[0] if args.cmd else profile["binary"]
@@ -890,29 +906,11 @@ def cmd_run(args):
             )
             for i in range(1, args.repeat + 1):
                 label = f"{case}-{pass_name}-{i}"
-                print(f"[bench] {label} ...", file=sys.stderr, flush=True)
-                r = run_one(
-                    case,
-                    pass_name,
-                    argv,
-                    stdin_text,
-                    out_dir,
-                    label,
-                    args.timeout,
-                    args.keep,
+                meta["runs"].append(
+                    _run_labelled(
+                        case, pass_name, argv, stdin_text, out_dir, label, args
+                    )
                 )
-                s = r.get("score")
-                print(
-                    f"[bench] {label}: {r.get('status')}"
-                    + (
-                        f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}"
-                        if s
-                        else ""
-                    ),
-                    file=sys.stderr,
-                    flush=True,
-                )
-                meta["runs"].append(r)
     meta["summary"] = summarize(meta["runs"])
     path = os.path.join(out_dir, "results.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -944,6 +942,28 @@ def cmd_score(args):
     return 0
 
 
+def cmd_rescore(args):
+    """Re-score a run's saved reports with the current scorer and keys."""
+    with open(args.results, encoding="utf-8") as f:
+        meta = json.load(f)
+    run_dir = os.path.dirname(os.path.abspath(args.results))
+    for r in meta["runs"]:
+        saved = os.path.join(run_dir, f"{r['label']}.md")
+        if not os.path.exists(saved):
+            continue
+        with open(saved, encoding="utf-8") as f:
+            r["score"] = score(load_key(r["case"]), parse_report(f.read()))
+    meta["summary"] = summarize(meta["runs"])
+    meta["rescored_at"] = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    with open(args.results, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+        f.write("\n")
+    print_summary(meta["summary"])
+    return 0
+
+
 def cmd_compare(args):
     with open(args.baseline, encoding="utf-8") as f:
         base = json.load(f)
@@ -971,10 +991,9 @@ def cmd_compare(args):
 
 def cmd_commands(args):
     profile = HOSTS[args.host]
-    invoke = args.invoke or profile["default_invoke"]
     for pass_name in _passes(args.pass_):
         argv, stdin_text = build_command(
-            args.host, pass_name, args.model, invoke, args.cmd
+            args.host, pass_name, args.model, args.invoke, args.cmd
         )
         suffix = (
             f"  < (grumpy {pass_name} SKILL.md as the prompt)" if stdin_text else ""
@@ -1034,6 +1053,13 @@ def main(argv=None):
     p.add_argument("--format", choices=["report", "pipe", "json"], default=None)
     p.set_defaults(func=cmd_score)
 
+    p = sub.add_parser(
+        "rescore",
+        help="re-score a results.json's saved reports after a scorer or key change",
+    )
+    p.add_argument("results")
+    p.set_defaults(func=cmd_rescore)
+
     p = sub.add_parser("compare", help="compare two results.json files")
     p.add_argument("baseline")
     p.add_argument("candidate")
@@ -1053,5 +1079,5 @@ def main(argv=None):
     return args.func(args)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

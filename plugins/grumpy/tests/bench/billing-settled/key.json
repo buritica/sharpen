@@ -2,7 +2,7 @@
   "passes": [
     "review"
   ],
-  "description": "billing-planted with a /grumpy:fix report whose ## Settled list holds three entries: a valid one for the fake test, one with no reason (the factory) and one naming a whole file (stale comments). Only the first may hold anything back; the rendered report must still list the other six and must not list the fake test.",
+  "description": "billing-planted with a /grumpy:fix report whose ## Settled list holds three entries: a valid one for the fake test, one with no reason (the factory) and one naming a whole file (stale comments). Only the first may hold anything back; the rendered report must still list the other five and must not list the fake test.",
   "planted": [
     {
       "id": "swallowed-exception",
@@ -21,22 +21,6 @@
         "except",
         "lost",
         "hid"
-      ]
-    },
-    {
-      "id": "silent-none-return",
-      "severity": "WARN",
-      "file": "src/billing/charge.py",
-      "lines": [
-        22,
-        22
-      ],
-      "keywords": [
-        "none",
-        "exhaust",
-        "caller",
-        "distinguish",
-        "failure"
       ]
     },
     {
@@ -188,6 +172,63 @@
         "double charge",
         "duplicate charge",
         "charged twice"
+      ]
+    },
+    {
+      "id": "docstring-says-record",
+      "file": "src/billing/charge.py",
+      "lines": [
+        14,
+        14
+      ],
+      "keywords": [
+        "record",
+        "docstring"
+      ]
+    },
+    {
+      "id": "amount-not-validated",
+      "file": "src/billing/charge.py",
+      "lines": [
+        13,
+        27
+      ],
+      "keywords": [
+        "validat",
+        "negative",
+        "amount_cents"
+      ]
+    },
+    {
+      "id": "money-paths-untested",
+      "file": "src/billing/test_charge.py",
+      "lines": [
+        1,
+        7
+      ],
+      "keywords": [
+        "refund",
+        "retry",
+        "retries",
+        "coverage",
+        "no test",
+        "nothing covers",
+        "untested"
+      ]
+    },
+    {
+      "id": "silent-none-return",
+      "file": "src/billing/charge.py",
+      "lines": [
+        22,
+        22
+      ],
+      "keywords": [
+        "none",
+        "exhaust",
+        "caller",
+        "distinguish",
+        "failure"
       ]
     }
   ],

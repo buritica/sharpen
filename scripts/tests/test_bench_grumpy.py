@@ -166,6 +166,19 @@ class ParseReportTest(unittest.TestCase):
         findings = bench.parse_report(report)
         self.assertEqual([f["severity"] for f in findings], ["CRIT", "WARN"])
 
+    def test_held_back_lists_are_not_findings(self):
+        report = (
+            "## Simplify This\n\n"
+            "- [simplify]: delete the factory [src/a.py:3]\n\n"
+            "Settled findings held back: 1\n"
+            "- src/a_test.py:6: the smoke test tests nothing \u2014 settled as declined: later\n\n"
+            "**Deferred findings honored: 1** \u2014 already marked at the line.\n"
+            "- src/b.py:9: not raised\n\n"
+            "## Strengths\n"
+        )
+        findings = bench.parse_report(report)
+        self.assertEqual([f["text"][:10] for f in findings], ["[simplify]"])
+
     def test_fenced_blocks_are_skipped(self):
         report = "## Critical Issues\n\n```\n- not a finding [a.py:1]\n```\n- real one [a.py:2]\n"
         findings = bench.parse_report(report)
@@ -192,6 +205,11 @@ class ParsePipeAndJsonTest(unittest.TestCase):
         self.assertEqual(findings[0]["locations"][0]["line"], 30)
         self.assertIn("| really", findings[0]["text"])
 
+    def test_pipe_skips_lines_without_pipes_or_with_unknown_severity(self):
+        raw = "just prose\nBOGUS|src/a.py:1|text|fact|code\nWARN|src/a.py:3|real|fact|code\n"
+        findings = bench.parse_pipe(raw)
+        self.assertEqual([f["text"] for f in findings], ["real"])
+
     def test_json_old_shape(self):
         findings = bench.normalize_json(
             [{"severity": "WARN", "file": "src/a.py", "text": "swallows"}]
@@ -199,6 +217,13 @@ class ParsePipeAndJsonTest(unittest.TestCase):
         self.assertEqual(
             findings[0]["locations"][0], {"file": "src/a.py", "line": None, "end": None}
         )
+
+    def test_json_locations_shape_passes_through(self):
+        locs = [{"file": "src/a.py", "line": 4, "end": 5}]
+        findings = bench.normalize_json(
+            [{"severity": "WARN", "text": "t", "locations": locs}]
+        )
+        self.assertEqual(findings[0]["locations"], locs)
 
 
 class MatchTest(unittest.TestCase):
@@ -462,12 +487,48 @@ class SummaryCompareTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("settled", problems[0])
 
+    def test_rescore_rewrites_scores_from_saved_reports(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = os.path.join(d, "billing-planted-review-1.md")
+            with open(report, "w", encoding="utf-8") as f:
+                f.write(
+                    "## Serious Concerns\n\n"
+                    "- except swallows the error [src/billing/charge.py:18]\n"
+                )
+            results = os.path.join(d, "results.json")
+            run = {"case": "billing-planted", "pass": "review"}
+            run["label"] = "billing-planted-review-1"
+            unsaved = dict(run, label="billing-planted-review-2", status="no-report")
+            with open(results, "w", encoding="utf-8") as f:
+                json.dump({"runs": [run, unsaved], "summary": {}}, f)
+            with contextlib.redirect_stdout(io.StringIO()):
+                bench.main(["rescore", results])
+            with open(results, encoding="utf-8") as f:
+                meta = json.load(f)
+            self.assertEqual(meta["runs"][0]["score"]["hits"], ["swallowed-exception"])
+            self.assertNotIn("score", meta["runs"][1])
+            self.assertIn("billing-planted/review", meta["summary"])
+
     def test_missing_case_is_a_note(self):
         problems, notes = bench.compare(
             _results({"a/review": {}, "b/review": {}}), _results({"a/review": {}})
         )
         self.assertEqual(problems, [])
         self.assertEqual(notes, ["b/review: not in candidate"])
+
+    def test_new_case_in_candidate_is_a_note(self):
+        problems, notes = bench.compare(
+            _results({"a/review": {}}), _results({"a/review": {}, "b/review": {}})
+        )
+        self.assertEqual(problems, [])
+        self.assertEqual(notes, ["b/review: new in candidate"])
+
+    def test_precision_drop_is_a_regression(self):
+        problems, _ = bench.compare(
+            _results({"a/review": {}}), _results({"a/review": {"precision": 0.5}})
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("precision 90% -> 50%", problems[0])
 
 
 class CommandTest(unittest.TestCase):
@@ -568,6 +629,21 @@ class FixtureTest(unittest.TestCase):
                 self.assertEqual(s["recall"], 1.0, f"{case}: {s['misses']}")
             self.assertTrue(s["clean"], case)
 
+    def assert_clean_worktree(self, repo):
+        status = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertEqual(status, "")
+
+    def test_list_cases_without_a_cases_dir_is_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(bench.list_cases(os.path.join(d, "missing")), [])
+
+    def test_no_cases_flag_selects_every_case(self):
+        self.assertEqual(bench._selected_cases(None), bench.list_cases())
+
     def test_build_repo_commits_the_change_on_a_branch(self):
         case = "billing-planted"
         with tempfile.TemporaryDirectory() as d:
@@ -582,12 +658,25 @@ class FixtureTest(unittest.TestCase):
             self.assertEqual(
                 sorted(names), ["src/billing/charge.py", "src/billing/test_charge.py"]
             )
-            status = subprocess.run(
-                ["git", "-C", d, "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-            ).stdout
-            self.assertEqual(status, "")
+            self.assert_clean_worktree(d)
+
+    def test_build_repo_deletes_files_the_change_removed(self):
+        with tempfile.TemporaryDirectory() as cases, tempfile.TemporaryDirectory() as d:
+            case = os.path.join(cases, "drop")
+            for side, names in (
+                ("before", ["keep.py", "gone.py"]),
+                ("after", ["keep.py"]),
+            ):
+                os.makedirs(os.path.join(case, side))
+                for name in names:
+                    with open(os.path.join(case, side, name), "w") as f:
+                        f.write(f"# {side}\n")
+            with open(os.path.join(case, "key.json"), "w") as f:
+                json.dump({"planted": []}, f)
+            bench.build_repo("drop", d, cases)
+            self.assertFalse(os.path.exists(os.path.join(d, "gone.py")))
+            self.assertTrue(os.path.exists(os.path.join(d, "keep.py")))
+            self.assert_clean_worktree(d)
 
     def test_artifacts_land_in_the_branch_report_folder(self):
         case = "billing-settled"
@@ -596,12 +685,22 @@ class FixtureTest(unittest.TestCase):
             fix = os.path.join(d, ".claude", "grumpy", *branch.split("/"), "fix.md")
             with open(fix, encoding="utf-8") as f:
                 self.assertIn("## Settled", f.read())
-            status = subprocess.run(
-                ["git", "-C", d, "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-            ).stdout
-            self.assertEqual(status, "")
+            self.assert_clean_worktree(d)
+
+    def test_find_report_falls_back_to_a_walk(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(bench.find_report(d, "bench/x", "review"))
+            odd = os.path.join(d, ".claude", "grumpy", "elsewhere")
+            os.makedirs(odd)
+            with open(os.path.join(odd, "review.md"), "w") as f:
+                f.write("# Code Review\n")
+            self.assertEqual(
+                bench.find_report(d, "bench/x", "review"),
+                os.path.join(odd, "review.md"),
+            )
+
+    def test_cli_version_of_a_missing_binary_is_none(self):
+        self.assertIsNone(bench.cli_version("definitely-not-a-binary-xyz"))
 
 
 FAKE_CLI = """#!/usr/bin/env python3
@@ -656,6 +755,12 @@ class RunnerTest(unittest.TestCase):
             code = bench.main(list(args))
         return code, out.getvalue()
 
+    def results(self, out):
+        """(run_dir, parsed results.json) of the single run under `out`."""
+        (run_dir,) = os.listdir(out)
+        with open(os.path.join(out, run_dir, "results.json")) as f:
+            return os.path.join(out, run_dir), json.load(f)
+
     def test_run_scores_the_written_report(self):
         out = os.path.join(self.tmp, "results")
         code, stdout = self.run_cli(
@@ -672,9 +777,7 @@ class RunnerTest(unittest.TestCase):
             out,
         )
         self.assertEqual(code, 0, stdout)
-        (run_dir,) = os.listdir(out)
-        with open(os.path.join(out, run_dir, "results.json")) as f:
-            results = json.load(f)
+        run_dir, results = self.results(out)
         self.assertEqual(results["host"], "codex")
         self.assertFalse(results["flags_verified"])
         self.assertEqual(len(results["runs"]), 2)
@@ -683,7 +786,7 @@ class RunnerTest(unittest.TestCase):
             results["summary"]["billing-planted/review"]["recall"], 1 / 7
         )
         self.assertTrue(
-            os.path.exists(os.path.join(out, run_dir, "billing-planted-review-1.md"))
+            os.path.exists(os.path.join(run_dir, "billing-planted-review-1.md"))
         )
         with open(self.log) as f:
             self.assertIn("exec --model m1", f.read())
@@ -719,11 +822,9 @@ class RunnerTest(unittest.TestCase):
             out,
         )
         self.assertEqual(code, 1)
-        (run_dir,) = os.listdir(out)
-        with open(os.path.join(out, run_dir, "results.json")) as f:
-            run = json.load(f)["runs"][0]
-        self.assertEqual(run["status"], "no-report")
-        with open(os.path.join(out, run_dir, "clean-refactor-review-1.log")) as f:
+        run_dir, results = self.results(out)
+        self.assertEqual(results["runs"][0]["status"], "no-report")
+        with open(os.path.join(run_dir, "clean-refactor-review-1.log")) as f:
             self.assertIn("done", f.read())
 
     def test_report_printed_but_not_saved_is_scored_from_output(self):
@@ -741,11 +842,40 @@ class RunnerTest(unittest.TestCase):
             out,
         )
         self.assertEqual(code, 0)
-        (run_dir,) = os.listdir(out)
-        with open(os.path.join(out, run_dir, "results.json")) as f:
-            run = json.load(f)["runs"][0]
+        run = self.results(out)[1]["runs"][0]
         self.assertEqual(run["status"], "scored-from-output")
         self.assertEqual(run["score"]["hits"], ["undefined-formatter"])
+
+    def test_timeout_and_missing_binary_are_recorded(self):
+        hang = [sys.executable, "-c", "import time; time.sleep(10)"]
+        r = bench.run_one(
+            "clean-refactor", "review", hang, None, self.tmp, "t", 0.5, False
+        )
+        self.assertEqual(r["status"], "timeout")
+        self.assertIsNone(r["exit_code"])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "t.log")))
+        r = bench.run_one(
+            "clean-refactor",
+            "review",
+            ["definitely-not-a-binary-xyz"],
+            None,
+            self.tmp,
+            "m",
+            5,
+            False,
+        )
+        self.assertEqual(r["status"], "cli-missing")
+        self.assertIn("not found on PATH", r["error"])
+
+    def test_keep_leaves_the_repo_behind(self):
+        quiet = [sys.executable, "-c", "pass"]
+        r = bench.run_one(
+            "clean-refactor", "review", quiet, None, self.tmp, "k", 5, True
+        )
+        try:
+            self.assertTrue(os.path.isdir(os.path.join(r["repo"], ".git")))
+        finally:
+            shutil.rmtree(r["repo"], ignore_errors=True)
 
     def test_missing_cli(self):
         os.environ["PATH"] = self.tmp
@@ -777,6 +907,69 @@ class RunnerTest(unittest.TestCase):
         code, stdout = self.run_cli("compare", a, b)
         self.assertEqual(code, 1)
         self.assertIn("REGRESSION", stdout)
+
+    def test_score_accepts_pipe_and_json_formats(self):
+        pipe = os.path.join(self.tmp, "r.txt")
+        with open(pipe, "w") as f:
+            f.write(
+                "WARN|src/billing/charge.py:18|bare except swallows errors|fact|errors\n"
+            )
+        code, stdout = self.run_cli(
+            "score", pipe, "--case", "billing-planted", "--format", "pipe"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout)["hits"], ["swallowed-exception"])
+        js = os.path.join(self.tmp, "r.json")
+        with open(js, "w") as f:
+            json.dump(
+                [
+                    {
+                        "severity": "WARN",
+                        "file": "src/billing/charge.py",
+                        "line": 18,
+                        "text": "bare except swallows errors",
+                    }
+                ],
+                f,
+            )
+        code, stdout = self.run_cli("score", js, "--case", "billing-planted")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout)["hits"], ["swallowed-exception"])
+
+    def test_compare_prints_notes_and_prompt_drift(self):
+        a, b = os.path.join(self.tmp, "a.json"), os.path.join(self.tmp, "b.json")
+        with open(a, "w") as f:
+            json.dump(
+                dict(_results({"x/review": {}}), prompt_hashes={"review": "1"}), f
+            )
+        with open(b, "w") as f:
+            json.dump(
+                dict(
+                    _results({"x/review": {}, "y/review": {}}),
+                    prompt_hashes={"review": "2"},
+                ),
+                f,
+            )
+        code, stdout = self.run_cli("compare", a, b)
+        self.assertEqual(code, 0)
+        self.assertIn("prompts differ", stdout)
+        self.assertIn("note: y/review: new in candidate", stdout)
+        self.assertIn("no regressions", stdout)
+
+    def test_commands_and_cases_subcommands(self):
+        code, stdout = self.run_cli("commands", "--host", "claude", "--pass", "review")
+        self.assertEqual(code, 0)
+        self.assertTrue(stdout.startswith("review: claude -p"), stdout)
+        self.assertNotIn("unverified", stdout)
+        code, stdout = self.run_cli("commands", "--host", "codex")
+        self.assertEqual(code, 0)
+        self.assertIn("imagine: codex exec", stdout)
+        self.assertIn("SKILL.md as the prompt", stdout)
+        self.assertIn("unverified", stdout)
+        code, stdout = self.run_cli("cases")
+        self.assertEqual(code, 0)
+        self.assertIn("billing-planted", stdout)
+        self.assertIn("planted=", stdout)
 
 
 if __name__ == "__main__":

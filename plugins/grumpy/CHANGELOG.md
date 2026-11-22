@@ -16,7 +16,8 @@ about something else. It also scored raw sub-agent lines rather than the rendere
 issues for review and imagine, plus clean, comment-only and capability-bait cases, and `billing-settled`, which carries
 the old eval's `--expect-absent` settled-list check), a
 line-aware one-to-one scorer that reports recall, precision and blocking noise, a headless
-runner for Claude Code, Codex and pi, and `compare` for before/after runs. Results are
+runner for Claude Code, Codex and pi, `compare` for before/after runs, and `rescore` to
+re-score saved reports after a scorer or key change. Results are
 written to the gitignored `.sharpen/bench/`. No skill or command behavior changed, so an
 in-flight gate cycle is unaffected.
 
