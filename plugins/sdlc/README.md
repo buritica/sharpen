@@ -1,14 +1,21 @@
 # sdlc
 
 The full single-repo software lifecycle: new → spec → plan → build → **gate** →
-ship → **CI** → **deploy**. The TDD workflow, the quality gate chain, and the
-pipeline scaffolding/audit that makes CI the one authoritative enforcement point.
+ship → **CI** → **deploy**. The TDD workflow, the local quality gate chain, and
+the pipeline scaffolding/audit for the repo's own CI.
 
-CI is the *automated enforcement surface* of the SDLC loop, not a sibling tool —
-so `init` / `audit` / `secrets` (formerly the standalone `ci` plugin) live here,
-reading one canonical spec at [`templates/spec.md`](templates/spec.md). The
-governing idea: **enforcement is exactly one required CI check; hooks and the
-gate chain are fast local *echoes*, never the source of truth.**
+Two layers, two jobs, and they never swap:
+
+- **The gate chain is local, and it is sharpen's product.** It runs on the
+  developer's machine before a PR exists, records to a gitignored store, and
+  blocks `gh pr create` until review is done. It is opt-out per branch and not
+  an adversarial control: it stops an agent talking itself past its process,
+  not a person editing the store. Nothing about it is sent to CI.
+- **CI checks the code.** `init` / `audit` / `secrets` (formerly the
+  standalone `ci` plugin) scaffold and grade a pipeline against one canonical
+  spec at [`templates/spec.md`](templates/spec.md), with exactly one required
+  check, `ci-pass`, for tests, lint, typecheck and build. It never reads gate
+  state.
 
 That spec is a statement of **capabilities, not templates** — it says what a
 pipeline must do, never how to lint Python or which host to deploy to. Every

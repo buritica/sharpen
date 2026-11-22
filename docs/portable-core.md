@@ -121,4 +121,12 @@ The gate store and capability-manifest adapter now resolve shared data in this o
 
 ## Enforcement model
 
-Local hooks are useful feedback, but they cannot be the cross-clone authority: forked pull requests and agents without equivalent hooks do not share local state. The portable CI adapter is [`plugins/sdlc/scripts/ci-validate.py`](../plugins/sdlc/scripts/ci-validate.py): it reads the gate store for the PR head branch, verifies all required gates are complete, and checks that any attached review report's provenance matches the PR head SHA. It runs as a `gates` job in the repository's CI workflow and is part of the one required check (`ci-pass`). Forked PRs and agents without local hooks are held to the same standard here.
+The gate is local, and it is the product. Everything runs on the developer's machine, inside the agent's session, before a pull request exists: the hooks and the CLI read and write a gitignored gate store, and `gh pr create` stays blocked until the branch's cycle is complete. Nothing is sent to CI, and no CI job checks gate evidence.
+
+Its limits, stated plainly:
+
+- **Opt-out, per branch.** A branch with no cycle is not gated (auto-init arms one on the first commit where the host supports it). `--attest` stamps a gate on a human's word, with a required reason, and shows as unverified.
+- **Not adversarial.** It stops an agent talking itself past its own process. It does not stop someone who edits the store, skips the hooks, or pushes from another clone. The people and agents using it are coworkers, not attackers.
+- **One machine.** A fork's pull request, or an agent running without the host hooks, has no cycle in this checkout's store and is not covered. A repository that needs to hold outside contributions to a review standard needs its own review policy for them; sharpen does not supply a CI-side substitute.
+
+CI still matters, for a different job. `/sdlc:init` scaffolds a consumer repository's pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, typecheck, build). That check never reads gate state. Earlier versions shipped `ci-validate.py` and a `gates` job that did; because the store is gitignored, the job could only ever pass, and it was removed in sdlc 4.15.0.
