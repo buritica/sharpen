@@ -356,5 +356,7 @@ What sharpen writes inside a repo stays out of git without any setup:
 `.sharpen/data/`, `.claude/sdlc/`, `.claude/grumpy/` and `.claude/worktrees/` each get
 a `.gitignore` holding `*` the moment they are created, on every host. `/sdlc:init` also
 lists them in the repo's `.gitignore`. The one exception is a repo still on the legacy
-`.claude/data/` store, a folder sharpen shares and never marks; init's block covers it. `.sharpen/simplify.json` is config and stays
-tracked, so never ignore `.sharpen/` as a whole.
+`.claude/data/` store, a folder sharpen shares and never marks; init's block covers it.
+`.sharpen/simplify.json` is config and stays tracked, so never ignore `.sharpen/` as a
+whole. A team that commits its plans replaces `.claude/sdlc/.gitignore`'s contents with
+`!*` (deleting it doesn't last: the next command writes it back).

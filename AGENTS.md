@@ -68,12 +68,15 @@ parts of it that are easy to get wrong here:
   findings resolved" never accepts a deferral for a Critical finding, on this repo or any
   other. See the grumpy plugin README for the full eligibility table.
 
-## Plugin changes need a version bump in two places
+## Plugin changes need a version bump in every manifest
 
 A fix doesn't reach installed copies unless you bump the version in **both**:
 
 1. `plugins/<name>/.claude-plugin/plugin.json`
 2. `.claude-plugin/marketplace.json` (the matching entry)
+
+and, for pi, in `plugins/<name>/package.json`; an `sdlc` bump also moves the top-level
+bundle `package.json` (see pi support below).
 
 **The bump must be in the same PR as the change, never a follow-up.** A merged PR without
 it is live in the repo and undelivered to users. `scripts/check-marketplace.py` catches the

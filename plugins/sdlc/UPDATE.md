@@ -30,6 +30,11 @@ grumpy runs without sdlc) had nothing ignored at all.
 `git status` already shows `.sharpen/data/` as untracked, it clears on the next write.
 A repo whose live gate state is still in the legacy `.claude/data/` gets no self-ignore
 there (sharpen shares that folder and never marks it); keep its `.gitignore` line.
+A repo that already *committed* any of these folders has to untrack them once: an
+ignore file never untracks anything, so a tracked `gates.json` or `review.md` keeps
+showing as modified, and a grumpy receipt refuses a dirty tree. Run
+`git rm -r --cached .sharpen/data .claude/sdlc .claude/grumpy` (whichever exist) and
+commit that.
 Also dropped from this repo's own `.gitignore`: `.pr-body.md`, which nothing writes any more.
 
 Two side effects of the folders now being *ignored* rather than merely untracked:
@@ -40,6 +45,10 @@ Two side effects of the folders now being *ignored* rather than merely untracked
 - A team that commits plans under `.claude/sdlc/` keeps the ones already tracked, but new
   ones are skipped by `git add -A`. Deleting `.claude/sdlc/.gitignore` doesn't last (the
   next command puts it back); replace its contents with `!*` instead, or `git add -f`.
+- A plain `git worktree remove` (what `/sdlc:ship` runs) used to refuse a worktree
+  holding untracked plans and reports. Now that they're ignored, it succeeds and deletes
+  them with the worktree. Copy anything worth keeping out of `.claude/sdlc/<branch>/` or
+  `.claude/grumpy/<branch>/` before shipping.
 
 Update grumpy alongside (2.12.0+) so its report folder ignores itself too.
 
