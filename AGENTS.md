@@ -176,7 +176,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.19.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.20.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
@@ -199,7 +199,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - lint: `ruff format --check . && ruff check .`
 - format: `ruff format .`
 - typecheck: not configured — wire one and re-run `/sdlc:init`
-- CI runs the same commands; `ci-pass` is the single required check on `main`.
+- CI runs these commands, and may run more; `ci-pass` is the single required check on `main`. CI checks the code; it never reads gate state.
 
 ### Pull requests
 - Title: conventional-commit prefix (`feat`, `fix`, `chore`, `docs`, `refactor`) with a scope, under 70 characters.

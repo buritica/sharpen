@@ -75,7 +75,7 @@ A profile summarizes a manifest's capabilities:
 
 | Profile | Required outcomes | Use case |
 |---|---|---|
-| `baseline` | `test`, `lint`, `typecheck` | Any agent or CI environment |
+| `baseline` | `test`, `lint`, `typecheck` | Any agent |
 | `review` | baseline + `review` | A structured independent review is available |
 | `adversarial` | review + `imagine`, `fix` | A capable delegated-agent workflow |
 
@@ -85,7 +85,7 @@ A profile is a declaration, recorded on the cycle for diagnostics. It does not d
 
 A normal portable review uses `provenance.kind: "git-range"` and records both `base` and `head`. Every finding has a severity, summary, location, and concrete consequence. An empty `findings` list is valid for a passing clean review.
 
-`provenance.kind: "legacy"` is allowed during migration for adapters that cannot recover a range. It is explicitly lower fidelity and should not be used by new CI enforcement.
+`provenance.kind: "legacy"` is allowed during migration for adapters that cannot recover a range. It is explicitly lower fidelity; new adapters should record a range.
 
 The report records the executing agent/model only when the host can supply it. Identity metadata helps auditability but is not needed to make a report portable.
 
@@ -121,12 +121,17 @@ The gate store and capability-manifest adapter now resolve shared data in this o
 
 ## Enforcement model
 
-The gate is local, and it is the product. Everything runs on the developer's machine, inside the agent's session, before a pull request exists: the hooks and the CLI read and write a gitignored gate store, and `gh pr create` stays blocked until the branch's cycle is complete. Nothing is sent to CI, and no CI job checks gate evidence.
+The gate is local, and it is the product. Everything runs on the developer's machine, inside the agent's session, before a pull request exists: the hooks and the CLI read and write a gitignored gate store, and opening a PR stays blocked until the branch's cycle is complete. Two layers do the blocking:
+
+- **Host hooks** stop every PR path `pr_paths.py` recognizes (`gh pr create`, `gh api` POSTs, `glab`, `hub`, `git push -o merge_request.create`, MCP PR tools) on hosts that run them: Claude Code and Codex through `hooks/hooks.json`, pi through its extension.
+- **A git pre-push hook** (`pre-push.py`, installed by `/sdlc:gate`) is the floor under them: host-agnostic, it runs the same missing/stale check for whatever a script, alias or the web UI opens after the push. It warns by default and refuses only when the repo opts in with `git config sharpen.prePush block`.
+
+Nothing is sent to CI, and no CI job checks gate evidence.
 
 Its limits, stated plainly:
 
 - **Opt-out, per branch.** A branch with no cycle is not gated (auto-init arms one on the first commit where the host supports it). `--attest` stamps a gate on a human's word, with a required reason, and shows as unverified.
-- **Not adversarial.** It stops an agent talking itself past its own process. It does not stop someone who edits the store, skips the hooks, or pushes from another clone. The people and agents using it are coworkers, not attackers.
+- **Not adversarial.** It stops an agent talking itself past its own process. It does not stop someone who edits the store, sets `SDLC_ALLOW_PUSH=1`, skips the hooks, or pushes from another clone. The people and agents using it are coworkers, not attackers.
 - **One machine.** A fork's pull request, or an agent running without the host hooks, has no cycle in this checkout's store and is not covered. A repository that needs to hold outside contributions to a review standard needs its own review policy for them; sharpen does not supply a CI-side substitute.
 
-CI still matters, for a different job. `/sdlc:init` scaffolds a consumer repository's pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, typecheck, build). That check never reads gate state. Earlier versions shipped `ci-validate.py` and a `gates` job that did; because the store is gitignored, the job could only ever pass, and it was removed in sdlc 4.15.0.
+CI still matters, for a different job. `/sdlc:init` scaffolds a consumer repository's pipeline with one required check, `ci-pass`, that verifies the code itself (tests, lint, typecheck, build). That check never reads gate state. Earlier versions shipped `ci-validate.py` and a `gates` job that did; because the store is gitignored, the job could only ever pass, and it was removed in sdlc 4.20.0.

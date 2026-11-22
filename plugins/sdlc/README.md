@@ -8,7 +8,8 @@ Two layers, two jobs, and they never swap:
 
 - **The gate chain is local, and it is sharpen's product.** It runs on the
   developer's machine before a PR exists, records to a gitignored store, and
-  blocks `gh pr create` until review is done. It is opt-out per branch and not
+  blocks opening a PR, by any path `pr_paths.py` knows, until review is done,
+  with a git pre-push hook as the floor. It is opt-out per branch and not
   an adversarial control: it stops an agent talking itself past its process,
   not a person editing the store. Nothing about it is sent to CI.
 - **CI checks the code.** `init` / `audit` / `secrets` (formerly the

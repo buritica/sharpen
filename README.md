@@ -60,7 +60,7 @@ It doesn't render findings as a bulleted report and call that a review:
 
 ## The gate is local, and that's the point
 
-Review happens before the pull request, in the agent's own session. The chain records to a gitignored JSON store keyed by branch, and a review gate records only from the receipt its grumpy pass leaves when it finishes, naming the commit it reviewed — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, or a commit has landed since the review, `gh pr create` stays blocked. Nothing goes to CI, and no CI job checks gate evidence.
+Review happens before the pull request, in the agent's own session. The chain records to a gitignored JSON store keyed by branch, and a review gate records only from the receipt its grumpy pass leaves when it finishes, naming the commit it reviewed — `record-gate.py --record grumpy-review` is refused, by the hook and by the store behind it. While gates are missing, or a commit has landed since the review, opening the PR stays blocked, whichever way the agent opens it: `gh pr create`, `gh api`, `glab`, or a GitHub MCP tool. A git pre-push hook is the floor under that for anything the host hooks can't see, and it warns unless the repo opts in to blocking. Nothing goes to CI, and no CI job checks gate evidence.
 
 The limit is stated plainly in the code: enforcement is opt-out per branch, and it's not an adversarial control. It stops an agent talking itself past its own process; it doesn't stop a person who edits the store or opens the PR from somewhere the hooks don't run. That's deliberate. The people and agents using it are coworkers, not attackers.
 
