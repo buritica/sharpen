@@ -209,7 +209,7 @@ Replace `<tier>` with `tiny`, `small-medium`, or `significant`. Drop `--route-fr
 Then install (or refresh) the git pre-push floor. It is idempotent, and it refreshes the scripts path the hook uses after a plugin update:
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/install-pre-push.py" --root "$WT"
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/install-pre-push.py" --root "$WT"
 ```
 
 It warns on a push of a branch whose gates are missing or stale and never blocks unless the repo opted in with `git config sharpen.prePush block`. If it reports that hooks are managed elsewhere (husky, lefthook, `core.hooksPath`), pass its chain line on to the user rather than editing their hook yourself.
