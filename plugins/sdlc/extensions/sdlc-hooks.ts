@@ -95,37 +95,16 @@ export default function (pi: ExtensionAPI) {
     // `mcp_<server>_create_pull_request`) goes through the same script under
     // its own name; pr_paths.py decides whether it is a PR. Name-only filter
     // here so python isn't spawned on every tool call.
-    if (!isToolCallEventType("bash", event)) {
-      if (!MCP_PR_TOOL.test(event.toolName)) return;
-      const out = await runHook(
-        "enforce-sdlc-gates.py",
-        {
-          hook_event_name: "PreToolUse",
-          tool_name: event.toolName,
-          tool_input: event.input,
-          cwd: ctx.cwd,
-        },
-        ctx.cwd,
-      );
-      if (out.exitCode !== 0) {
-        return gateConfirmation(
-          out.stderr,
-          "SDLC gate incomplete — block PR?",
-          "Run /sdlc:gate to finish the chain, then retry.",
-          ctx,
-        );
-      }
-      if (out.systemMessage) ctx.ui.notify(out.systemMessage, "info");
-      return;
-    }
+    const bash = isToolCallEventType("bash", event) ? event : null;
+    if (!bash && !MCP_PR_TOOL.test(event.toolName)) return;
     const payload = {
       hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: event.input.command },
+      tool_name: bash ? "Bash" : event.toolName,
+      tool_input: bash ? { command: bash.input.command } : event.input,
       cwd: ctx.cwd,
     };
 
-    // enforce-sdlc-gates.py: block ungated `gh pr create`.
+    // enforce-sdlc-gates.py: block an ungated PR on any path.
     const enforce = await runHook("enforce-sdlc-gates.py", payload, ctx.cwd);
     if (enforce.exitCode !== 0) {
       return gateConfirmation(
@@ -138,8 +117,7 @@ export default function (pi: ExtensionAPI) {
 
     // block-direct-gate-record.py: block manual stamping of skill-gated gates.
     // Mirror its own cheap pre-filter so we don't spawn python on every Bash call.
-    const command = event.input.command;
-    if (/record-gate|auto-record-skill-gate/.test(command)) {
+    if (bash && /record-gate|auto-record-skill-gate/.test(bash.input.command)) {
       const direct = await runHook("block-direct-gate-record.py", payload, ctx.cwd);
       if (direct.exitCode !== 0) {
         return gateConfirmation(

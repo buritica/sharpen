@@ -548,7 +548,7 @@ def flag_value(argv, *flags):
     a clustered rule here reads `--title "-Hotfix: ..."` as a head branch — a
     gate bypass triggered by a plausible PR title. A caller that needs the
     clustered form must parse positionally, where it can tell a flag from a
-    value; see enforce-sdlc-gates.extract_head_flag."""
+    value; see pr_paths.extract_head_flag."""
     for i, tok in enumerate(argv):
         for flag in flags:
             if tok == flag and i + 1 < len(argv):

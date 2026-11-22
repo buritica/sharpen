@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 
+import gate_store as gs
 import shell_parse as sp
 
 # Tools whose input is a shell command string. `Bash` covers Claude Code and
@@ -99,20 +100,22 @@ class PrOpen:
         or None to mean "the branch checked out in `workdir`".
     workdir: the checkout to judge it against, or None for this process's cwd.
     names_workdir: the call asked for a directory that could not be resolved.
+    no_checkout: the call named a repo that has no local checkout in reach.
     notes: caveats about how head/workdir were reached, for the verdict.
     label: how to name this path in a message ("gh pr create", "MCP ...").
     """
 
     __slots__ = ("label", "head", "workdir", "names_workdir", "notes", "no_checkout")
 
-    def __init__(self, label, head, workdir, names_workdir=False, notes=None):
+    def __init__(
+        self, label, head, workdir, names_workdir=False, notes=None, no_checkout=False
+    ):
         self.label = label
-        # Set when the call named a repo that has no local checkout in reach.
-        self.no_checkout = False
         self.head = head
         self.workdir = workdir
         self.names_workdir = names_workdir
         self.notes = list(notes or [])
+        self.no_checkout = no_checkout
 
     def __repr__(self):
         return f"PrOpen({self.label!r}, head={self.head!r}, workdir={self.workdir!r})"
@@ -128,17 +131,6 @@ def pr_opens(tool_name, tool_input):
     if isinstance(tool_name, str) and _MCP_PR_TOOL.search(tool_name):
         return [_mcp_pr_open(tool_name, tool_input)]
     return []
-
-
-def is_candidate(tool_name, tool_input):
-    """Cheap pre-filter for hosts that fire on every tool call: could this be
-    a PR at all? Errs toward True; pr_opens() gives the real answer."""
-    if tool_name in SHELL_TOOLS:
-        command = (tool_input or {}).get("command")
-        return isinstance(command, str) and any(
-            w in command for w in ("gh", "glab", "hub", "push")
-        )
-    return isinstance(tool_name, str) and bool(_MCP_PR_TOOL.search(tool_name))
 
 
 # --- shell ---------------------------------------------------------------
@@ -169,9 +161,7 @@ def shell_pr_opens(command):
 def _shell_open(label, raw_head, inv, repo=None):
     head, notes = normalize_head(raw_head)
     workdir, found, more = resolve_checkout(inv.workdir, repo)
-    pr = PrOpen(label, head, workdir, inv.names_workdir, notes + more)
-    pr.no_checkout = not found
-    return pr
+    return PrOpen(label, head, workdir, inv.names_workdir, notes + more, not found)
 
 
 def _gh_create(name, inv):
@@ -280,9 +270,7 @@ def _mcp_pr_open(tool_name, tool_input):
     workdir, found, more = resolve_checkout(
         None, hint if isinstance(hint, str) else None
     )
-    pr = PrOpen(f"MCP {tool_name}", head, workdir, False, notes + more)
-    pr.no_checkout = not found
-    return pr
+    return PrOpen(f"MCP {tool_name}", head, workdir, False, notes + more, not found)
 
 
 # --- shared --------------------------------------------------------------
@@ -354,9 +342,7 @@ def _child_checkouts(base):
     """Git checkouts one level below `base` (and `base`'s siblings when `base`
     is itself a checkout, which is the multi-repo session's layout)."""
     roots = [base]
-    if os.path.isdir(os.path.join(base, ".git")) or os.path.isfile(
-        os.path.join(base, ".git")
-    ):
+    if os.path.exists(os.path.join(base, ".git")):
         roots = [os.path.dirname(base)]
     found = []
     for root in roots:
@@ -394,10 +380,6 @@ def _repo_slug(url):
 
 def _git_out(cwd, *args):
     try:
-        return (
-            subprocess.check_output(["git", *args], cwd=cwd, stderr=subprocess.DEVNULL)
-            .decode()
-            .strip()
-        )
+        return gs._git(*args, cwd=cwd)
     except (OSError, subprocess.CalledProcessError):
         return None

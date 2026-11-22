@@ -36,7 +36,6 @@ import sys
 import gate_receipts as rc
 import gate_store as gs
 
-ZERO = "0" * 40
 MODES = ("warn", "block", "off")
 
 

@@ -9,7 +9,7 @@ worktrees, a cycle recorded in one checkout is seen here even when the PR is
 created from another. Opt-in: no cycle for the branch -> allow.
 
 KNOWN BLIND SPOT, not a bug to be fixed here: `--head owner:branch` (a PR from a
-fork) strips to the bare branch name for the store lookup (extract_head_flag),
+fork) strips to the bare branch name for the store lookup (pr_paths.normalize_head),
 but that name almost never has a cycle in THIS checkout's store — the fork
 contributor's own commits ran against their own clone, if any hooks ran at all.
 That reads as "no cycle -> allow" and the PR goes out ungated. This is
@@ -39,11 +39,6 @@ def is_crew_actor():
     """Non-interactive crew sessions should get machine-parseable deny
     output. Any truthy SDLC_ACTOR=crew value enables it."""
     return os.environ.get("SDLC_ACTOR", "").strip().lower() == "crew"
-
-
-# Kept as names on this module for callers that imported them from here.
-extract_head_flag = pp.extract_head_flag
-GH_VALUE_FLAGS = pp.GH_VALUE_FLAGS
 
 
 def check_gates(tool, tool_input):
