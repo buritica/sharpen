@@ -20,7 +20,7 @@ An adapter owns host mechanics:
 - forge APIs such as GitHub, GitLab, or a manual fallback; and
 - CI-specific publication of a required check.
 
-Claude commands, `Skill` lifecycle events, `Task` dispatch, `${CLAUDE_PLUGIN_ROOT}`, and `PreToolUse`/`PostToolUse` hooks are therefore adapter features, not portable-core requirements.
+Claude commands, `Skill` lifecycle events, `Task` dispatch, Claude Code's `CLAUDE_PLUGIN_ROOT` substitution, and `PreToolUse`/`PostToolUse` hooks are therefore adapter features, not portable-core requirements.
 
 ## Protocol documents
 
@@ -60,18 +60,26 @@ Receipts record that the work ran. They are not a security boundary, and are not
 
 Legacy cycles (no `evidence` key) keep event-only recording until their next `--init`, and the receipt-only paths (`--verify`, the sweeps) never stamp them.
 
+## Capability manifest
+
+Each host's session-start adapter (`plugins/sdlc/scripts/session-start.py`) writes `.sharpen/data/capabilities.<host>.json`, naming the host honestly: `SHARPEN_HOST` when the adapter sets it (pi does), `claude-code` when Claude Code's `CLAUDECODE=1` is present, otherwise `unknown`. One file per host, so hosts sharing a repo don't overwrite each other. Next to the v1 fields it records two extensions auto-init reads:
+
+- `x-recording`: `automatic` when a host event sweeps receipts at the end of a turn (Claude Code, pi), `manual` otherwise (run `--verify`).
+- `x-receipts`: whether the installed grumpy writes receipts. When it doesn't, auto-init arms an event-only cycle, because a receipt-backed one could never complete.
+
+[`hosts.md`](hosts.md) has the per-host support matrix, generated from the same table.
+
 ## Capability profiles
 
-Resolve a profile against the active capability manifest *before* creating a gate cycle:
+A profile summarizes a manifest's capabilities:
 
 | Profile | Required outcomes | Use case |
 |---|---|---|
 | `baseline` | `test`, `lint`, `typecheck` | Any agent or CI environment |
 | `review` | baseline + `review` | A structured independent review is available |
 | `adversarial` | review + `imagine`, `fix` | A capable delegated-agent workflow |
-| `claude-enforced` | adversarial + Claude hook support | Current Claude Code installation |
 
-A host must not auto-arm a profile it cannot complete. This avoids treating a missing host-specific skill as a workflow failure.
+A profile is a declaration, recorded on the cycle for diagnostics. It does not decide which gates a cycle requires: the tier alone does (`gate_store.required_gates`), on every host. Auto-init never arms a lighter tier because a profile is incomplete. Since receipts, every host that can run a shell can record gates 2 to 6, so a lighter tier would only quietly drop the review gates. Instead, the arming message names the grumpy passes the manifest lacks, and a person decides whether to install grumpy or re-init as `tiny`. An explicit `record-gate.py --init --profile <name> --capabilities-file <path>` still fails when the declared capabilities can't satisfy the requested profile.
 
 ## Review evidence
 
@@ -88,7 +96,7 @@ Portable state uses `.sharpen/` for new shared data:
 ```text
 .sharpen/
   data/gates.json
-  data/capabilities.claude.json
+  data/capabilities.<host>.json
   sdlc/<branch>/plan.md
   reviews/<branch>/review.json
   simplify.json

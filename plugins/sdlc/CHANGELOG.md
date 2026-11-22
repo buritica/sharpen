@@ -5,6 +5,38 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.14.0 — skill gates record from receipts, on every host
+
+Gates 2 through 6 (`simplify` and the grumpy passes) used to be stamped by a `PostToolUse`
+hook on the `Skill` tool call. That fired when the skill's instructions loaded, before any
+work ran (sharpen#53), it did not fire at all on a cached repeat call (sharpen#52), and
+hosts with no such event (Codex, fx, pi) could not record the gates without `--attest`.
+
+A new gate cycle is now **receipt-backed**:
+
+- Each grumpy pass (needs grumpy 2.9.0+) ends by writing
+  `.claude/grumpy/<branch>/receipts/<pass>.json`, naming the branch, its current HEAD and
+  the sha256 of the report the pass saved. A receipt whose report is gone doesn't count;
+  one whose report changed afterwards records with a warning.
+- `record-gate.py --verify <simplify|review|fix|imagine|all>` records the gate from a
+  receipt that names a commit on the branch (HEAD, or an ancestor once a later fix has
+  committed), is newer than the cycle, and (for a fix gate) is newer than the receipt
+  of the pass it follows. It works the same on every host.
+- Claude Code runs the same check on its `Stop` hook and pi on `agent_end`, so nothing
+  extra is needed there. The `Skill` hook still fires, but now only records once the
+  receipt exists.
+- `enforce-sdlc-gates` blocks `gh pr create` when the last review gate was earned on
+  an older commit than HEAD, and names the stale gates. Re-run the chain on the new
+  HEAD. A rebase counts, so rebase before the chain (`/sdlc:ship` now says so).
+  `--status` and `--oneline` show the same warning, so it doesn't surface first at
+  `gh pr create`.
+
+**What an existing repo needs to do:** nothing. A cycle that was already open keeps the old
+event-only recording until it is re-initialised, and receipts are written under the
+already-gitignored `.claude/grumpy/` directory. Update grumpy alongside sdlc: an older
+grumpy writes no receipt, so `--verify` will say "no receipt yet". To keep event-only
+recording for new cycles, set `SDLC_GATE_EVIDENCE=events`.
+
 ## 4.13.0 — `/sdlc:ship` drops the post-merge confirmation loop
 
 `/sdlc:ship` no longer runs a post-merge confirmation window; that loop was specific to one

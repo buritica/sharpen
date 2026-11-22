@@ -269,7 +269,10 @@ When aggregating across agents: prefer high-confidence findings over speculative
 
 ### Step 4: Ask What to Clean Up
 
-Use AskUserQuestion with multiselect, grouping findings by confidence level:
+Ask the user (a structured question tool if your harness has one, such as Claude Code's
+AskUserQuestion; otherwise ask in chat with the same options, numbered, and
+wait for the answer before going on), allowing several
+choices, grouping findings by confidence level:
 
 ```json
 {
@@ -304,8 +307,8 @@ Use AskUserQuestion with multiselect, grouping findings by confidence level:
 Replace `[N]` with the actual count of findings in each tier.
 
 If the user picks "Let me pick individually", present each finding one at a time
-with AskUserQuestion yes/no, including the agent name, description, and file
-reference.
+as a yes/no question the same way, including the agent name, description,
+and file reference.
 
 ### Step 5: Track the Work and Apply the Cleanups
 

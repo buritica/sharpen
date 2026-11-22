@@ -41,13 +41,15 @@ import capabilities
 import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
+import hosts
 import shell_parse as sp
 
 GIT_COMMIT = "git commit"
 DEFAULT_TIER = "small-medium"
 OVERLAY_SKILL_PATH = os.path.join(".claude", "skills", "sdlc", "SKILL.md")
-CAPABILITY_MANIFEST_ENV = "SDLC_CAPABILITIES_PATH"
-CAPABILITY_MANIFEST_NAME = "capabilities.claude.json"
+# The grumpy passes a small-medium/significant cycle needs (gates 2-6), as
+# manifest capability names, in chain order.
+SKILL_CAPABILITIES = ("simplify", "review", "fix", "imagine")
 
 # Allowlist, not a denylist: an unrecognized extension (or none at all) is
 # NOT docs. See _pick_tier — under-classifying silently skips gates 2-6,
@@ -152,41 +154,111 @@ def has_project_overlay(cwd=None):
     return os.path.isfile(os.path.join(top, OVERLAY_SKILL_PATH))
 
 
-def _capability_manifest_path(cwd=None):
-    """Where the Claude SessionStart adapter writes this repo's manifest."""
-    return gs.state_file_path(CAPABILITY_MANIFEST_NAME, CAPABILITY_MANIFEST_ENV, cwd)
+def _capability_manifest_path(host, cwd=None):
+    """Where the session-start adapter wrote this host's manifest.
+
+    Before sdlc 4.15 every host wrote `capabilities.claude.json`. Claude Code
+    still reads that file when its own is missing (a session that started
+    before the upgrade); other hosts don't, because what it says about them
+    was written under the wrong name."""
+    path = gs.state_file_path(hosts.manifest_name(host), hosts.MANIFEST_ENV, cwd)
+    if path and os.path.isfile(path):
+        return path
+    if host == "claude-code" and not os.environ.get(hosts.MANIFEST_ENV):
+        legacy = gs.state_file_path(hosts.LEGACY_MANIFEST_NAME, hosts.MANIFEST_ENV, cwd)
+        if legacy and os.path.isfile(legacy):
+            return legacy
+    return path
 
 
-def _resolve_portable_profile(cwd=None):
-    """Return `(profile, snapshot)` from the host manifest, or `(None, None)`.
+def _load_host_manifest(host, cwd=None):
+    """This host's validated manifest, or None.
 
-    Missing, unreadable, invalid, or incomplete manifests deliberately preserve
-    legacy auto-init behavior: local enforcement still works without profile
-    metadata, and explicit `/sdlc:gate --init --capabilities-file ...` remains
-    the path that fails closed on a bad declaration.
-    """
-    path = _capability_manifest_path(cwd)
+    Missing, unreadable or invalid manifests deliberately preserve legacy
+    auto-init behavior: local enforcement still works without them, and
+    explicit `/sdlc:gate --init --capabilities-file ...` remains the path that
+    fails closed on a bad declaration."""
+    path = _capability_manifest_path(host, cwd)
     if not path or not os.path.isfile(path):
-        return None, None
+        return None
     try:
-        manifest = capabilities.load_manifest(path)
-        decision = capabilities.resolve_profile(manifest["capabilities"])
+        return capabilities.load_manifest(path)
     except ValueError as e:
         ho.notify(
             "auto-init",
             f"ignoring capability manifest at {path}: {e}",
             surface=False,
         )
+        return None
+
+
+def _resolve_portable_profile(manifest):
+    """Return `(profile, snapshot)` from a loaded manifest, or `(None, None)`.
+
+    The profile is recorded on the cycle for diagnostics only. It never
+    changes the tier: an incomplete profile still arms the tier _pick_tier
+    chose, and the arming message names what is missing instead."""
+    if manifest is None:
         return None, None
+    decision = capabilities.resolve_profile(manifest["capabilities"])
     if decision["decision"] != "selected":
         ho.notify(
             "auto-init",
-            f"capability manifest at {path} did not satisfy a profile: "
-            f"{decision['reason']}",
+            f"capability manifest did not satisfy a profile: {decision['reason']}",
             surface=False,
         )
         return None, None
     return decision["resolved_profile"], manifest["capabilities"]
+
+
+def _pick_evidence(manifest):
+    """`(evidence, note)` for a new cycle.
+
+    Receipt-backed by default (or event-only when SDLC_GATE_EVIDENCE=events).
+    The one automatic exception: the manifest says grumpy is installed but
+    predates receipts (`x-receipts: false`). Its passes write no receipt, so a
+    receipt-backed cycle could never complete; an event-only cycle can, and
+    the note says what to upgrade. A missing grumpy is NOT this case — nothing
+    records without it either way, and the arming message names it."""
+    evidence = rc.default_evidence()
+    if (
+        evidence == rc.EVIDENCE_RECEIPTS
+        and manifest is not None
+        and manifest.get("x-receipts") is False
+        and "review" in manifest["capabilities"]
+    ):
+        return None, (
+            " The installed grumpy predates receipts, so this cycle records "
+            "gates 2-6 the old event-only way; upgrade grumpy to 2.9.0 or later "
+            "for receipt-backed gates."
+        )
+    return evidence, ""
+
+
+def _recording_note(host, manifest):
+    """One sentence on how gates 2-6 record on this host, plus any grumpy
+    passes the manifest says are missing. Without a manifest, the host's
+    default recording mode still applies; missing skills can't be known."""
+    mode = (manifest or {}).get("x-recording") or hosts.recording_mode(host)
+    if mode == hosts.RECORDING_AUTOMATIC:
+        note = (
+            "Each grumpy pass leaves a receipt, and this host records it at the "
+            "end of the turn (`record-gate.py --verify <pass>` records it now)."
+        )
+    else:
+        note = (
+            "Each grumpy pass leaves a receipt; on this host, run "
+            "`record-gate.py --verify <pass>` after each pass to record it."
+        )
+    if manifest is not None:
+        missing = [c for c in SKILL_CAPABILITIES if c not in manifest["capabilities"]]
+        if missing:
+            note += (
+                f" This host's manifest lists no grumpy {', '.join(missing)}: "
+                "install grumpy, or re-init as tiny (/sdlc:gate --init tiny) "
+                "if the change qualifies."
+            )
+    return note
 
 
 def _is_docs_path(path):
@@ -386,12 +458,17 @@ def main():
             surface=False,
         )
         cycle_exists = False
+    host = hosts.detect_host()
+    manifest = None
     if cycle_exists:
         tier, tier_reason = DEFAULT_TIER, None  # unused: mutator no-ops below
         profile, capability_snapshot = None, None
+        evidence, evidence_note = None, ""
     else:
         tier, tier_reason = _pick_tier(workdir)
-        profile, capability_snapshot = _resolve_portable_profile(workdir)
+        manifest = _load_host_manifest(host, workdir)
+        profile, capability_snapshot = _resolve_portable_profile(manifest)
+        evidence, evidence_note = _pick_evidence(manifest)
     try:
         # Idempotency check is inside the mutator so it runs under the exclusive
         # lock — one read, atomic guard, no write when cycle already exists.
@@ -412,7 +489,7 @@ def main():
                     tier_reason=tier_reason,
                     profile=profile,
                     capabilities=capability_snapshot,
-                    evidence=rc.default_evidence(),
+                    evidence=evidence,
                 )
             ),
         )
@@ -459,9 +536,15 @@ def main():
             )
         else:
             detail = (
-                f'It armed a {tier} gate cycle for "{branch}"{profile_note}: gates 2-6 '
-                "need the grumpy skills to record, so without them, re-init "
-                "as tiny (/sdlc:gate --init tiny) if the change qualifies."
+                f'It armed a {tier} gate cycle for "{branch}"{profile_note}. '
+                + (
+                    _recording_note(host, manifest)
+                    if evidence == rc.EVIDENCE_RECEIPTS
+                    else "Gates 2-6 need the grumpy skills to record, so "
+                    "without them, re-init as tiny (/sdlc:gate --init tiny) if "
+                    "the change qualifies."
+                )
+                + evidence_note
             )
         return ho.notify("auto-init", f"{COMMIT_OK}. {detail}")
     return 0

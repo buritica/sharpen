@@ -18,6 +18,13 @@ Checks, per plugin listed in .claude-plugin/marketplace.json:
     same-directory sibling — this repo's hook scripts are pure stdlib by
     convention, so anything else means a script survived a sibling's deletion)
 
+  - every plugin path in commands/*.md and skills/*/SKILL.md is spelled
+    `${<PLUGIN>_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}` with the plugin's own
+    prefix: never a bare or unbraced `$CLAUDE_PLUGIN_ROOT` (empty in Claude
+    Code's agent shell) and never another plugin's variable (see
+    docs/hosts.md, "Plugin roots in skill text")
+  - docs/hosts.md's support matrix matches plugins/sdlc/scripts/hosts.py
+
 Also flags plugin directories present on disk but absent from the
 marketplace listing (easy to forget when adding a plugin).
 
@@ -214,6 +221,94 @@ def check_skills(plugin_dir, name):
             continue
         if not ok:
             err("{}: {}".format(name, message))
+
+
+# Each plugin's own root variable, exported by its pi extension. A plugin not
+# listed here gets its name upper-cased with dashes as underscores.
+PLUGIN_ROOT_PREFIX = {
+    "sdlc": "SDLC",
+    "grumpy": "GRUMPY",
+    "sdlc-guardrails": "GUARDRAILS",
+}
+SHARED_ROOT_REF = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\b\}?")
+OWN_ROOT_REF = re.compile(r"\$\{?([A-Z]+)_PLUGIN_ROOT\b")
+
+
+def _root_prefix(name):
+    return PLUGIN_ROOT_PREFIX.get(name, name.upper().replace("-", "_"))
+
+
+def plugin_root_problems(text, name):
+    """(line, message) for every plugin path in `text` not spelled with
+    `name`'s own variable first. Prose naming the variable without a `$`
+    (`CLAUDE_PLUGIN_ROOT`) is fine; only expansions are checked."""
+    prefix = _root_prefix(name)
+    want = "${%s_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}" % prefix
+    lead = "${%s_PLUGIN_ROOT:-" % prefix
+    problems = []
+    for m in SHARED_ROOT_REF.finditer(text):
+        start = m.start() - len(lead)
+        if start < 0 or text[start : start + len(want)] != want:
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append((line, "plugin path must be spelled " + want))
+    for m in OWN_ROOT_REF.finditer(text):
+        if m.group(1) not in (prefix, "CLAUDE"):
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append(
+                (
+                    line,
+                    "uses another plugin's root variable ${}_PLUGIN_ROOT".format(
+                        m.group(1)
+                    ),
+                )
+            )
+    return problems
+
+
+def check_plugin_roots(plugin_dir, name):
+    paths = []
+    for sub_dir, pattern in (("commands", None), ("skills", "SKILL.md")):
+        base = os.path.join(plugin_dir, sub_dir)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _dirs, files in os.walk(base):
+            for fn in sorted(files):
+                if (pattern and fn == pattern) or (not pattern and fn.endswith(".md")):
+                    paths.append(os.path.join(dirpath, fn))
+    for path in sorted(paths):
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, ValueError) as e:
+            err("{}: {}: {}".format(name, path, e))
+            continue
+        for line, message in plugin_root_problems(text, name):
+            err(
+                "{}: {}:{}: {}".format(name, os.path.relpath(path, ROOT), line, message)
+            )
+
+
+def check_hosts_matrix():
+    """docs/hosts.md's generated table must match hosts.HOSTS."""
+    hosts_py = os.path.join(ROOT, "plugins", "sdlc", "scripts", "hosts.py")
+    doc = os.path.join(ROOT, "docs", "hosts.md")
+    if not os.path.isfile(hosts_py):
+        return
+    spec = importlib.util.spec_from_file_location("sharpen_hosts", hosts_py)
+    hosts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hosts)
+    try:
+        with open(doc, encoding="utf-8") as f:
+            text = f.read()
+        fresh = hosts.splice_matrix(text)
+    except (OSError, ValueError) as e:
+        err("docs/hosts.md: {}".format(e))
+        return
+    if fresh != text:
+        err(
+            "docs/hosts.md: support matrix is stale; run "
+            "python3 plugins/sdlc/scripts/hosts.py --write docs/hosts.md"
+        )
 
 
 # Extensions shell out to hook scripts by bare filename (runHook("name.py")
@@ -433,9 +528,11 @@ def main():
         check_commands(plugin_dir, name)
         check_hooks(plugin_dir, name)
         check_skills(plugin_dir, name)
+        check_plugin_roots(plugin_dir, name)
         check_pi_manifests(plugin_dir, name, pv)
 
     check_top_level_pi_bundle()
+    check_hosts_matrix()
 
     # Plugin dirs on disk but not in the marketplace listing.
     plugins_root = os.path.join(ROOT, "plugins")

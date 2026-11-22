@@ -457,5 +457,72 @@ class PiManifestTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout.decode())
 
 
+class PluginRootSpellingTest(unittest.TestCase):
+    """check_plugin_roots: every plugin path leads with the plugin's own
+    variable and falls back to the BRACED shared name (docs/hosts.md)."""
+
+    def _run_with(self, plugin, body):
+        source = '---\ndescription: "Does foo."\n---\n\n' + body + "\n"
+        root = make_marketplace({plugin: {"commands": {"bar.md": source}}})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        subprocess.run(
+            [
+                sys.executable,
+                os.path.join(root, "scripts", "generate-skill.py"),
+                "--write-all-in",
+                os.path.join(root, "plugins", plugin),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return run(root)
+
+    def test_own_variable_with_braced_fallback_passes(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_unbraced_shared_variable_is_an_error(self):
+        # Empty in Claude Code's agent shell: the bug this check exists for.
+        r = self._run_with("sdlc", 'python3 "$CLAUDE_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("SDLC_PLUGIN_ROOT", out)
+
+    def test_bare_braced_shared_variable_is_an_error(self):
+        # Fine on Claude Code, wrong on pi, which sets no shared value.
+        r = self._run_with("sdlc", "Read `${CLAUDE_PLUGIN_ROOT}/templates/x.md`.")
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
+    def test_unbraced_fallback_inside_own_variable_is_an_error(self):
+        # The sdlc-guardrails guard command shipped exactly this.
+        r = self._run_with(
+            "sdlc-guardrails",
+            'PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"',
+        )
+        self.assertEqual(r.returncode, 1, r.stdout.decode())
+
+    def test_another_plugins_variable_is_an_error(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("another plugin", out)
+
+    def test_prose_naming_the_variable_without_dollar_is_fine(self):
+        r = self._run_with(
+            "sdlc", "Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT` name."
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_this_repo_passes(self):
+        r = subprocess.run([sys.executable, CHECKER], capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+
 if __name__ == "__main__":
     unittest.main()

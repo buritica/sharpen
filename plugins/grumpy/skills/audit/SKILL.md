@@ -41,7 +41,7 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 
 This command is the heaviest reasoning grumpy does. Run the synthesis and
 planning (Phases 1, 3, 4) on the strongest available model. Read
-`${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a repo-relative
+`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` for the role→model map — a repo-relative
 `plugins/grumpy/models.yaml` spelling resolves against the consumer repo's cwd
 in an installed plugin, not this plugin's own directory, and silently fails to
 exist there. If it isn't readable from where you're running, **say so in the

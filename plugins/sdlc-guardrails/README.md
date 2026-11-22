@@ -65,8 +65,9 @@ its exit code back to a pi decision:
   Claude.
 
 Install as a pi package (`pi install git:...sharpen --dir plugins/sdlc-guardrails`,
-or via the top-level bundle). `$CLAUDE_PLUGIN_ROOT` is injected into
-`process.env` so the shared SKILL.md body runs unchanged. See
+or via the top-level bundle). The extension exports `GUARDRAILS_PLUGIN_ROOT` into
+`process.env` so the shared SKILL.md body runs unchanged (see
+[`docs/hosts.md`](../../docs/hosts.md)). See
 [`docs/pi.md`](../../docs/pi.md) for the full contract.
 
 ## Tests

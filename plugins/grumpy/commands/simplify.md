@@ -241,8 +241,9 @@ if [ -n "$BASE" ]; then
 else
   MB=$(git -C "$WT" rev-parse HEAD~1)
 fi
-POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
-# Some hosts don't set CLAUDE_PLUGIN_ROOT. The script lives at
+POLICY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py"
+# pi exports GRUMPY_PLUGIN_ROOT; Claude Code fills in the braced name. If the
+# path is still empty, the script lives at
 # <grumpy plugin root>/scripts/simplify_policy.py — if you know where this
 # skill was loaded from, point POLICY there; if you can't, say so below.
 [ -f "$POLICY" ] || { echo "simplify_policy.py not found at '$POLICY'"; }
@@ -445,7 +446,7 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
-POLICY="${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py"
+POLICY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py"
 python3 "$POLICY" judge --worktree "$WT" --loc "$ARTIFACT_DIR/simplify-loc.json" \
   < "$ARTIFACT_DIR/simplify-agents.jsonl" > "$ARTIFACT_DIR/simplify-findings.json.tmp" \
   && mv "$ARTIFACT_DIR/simplify-findings.json.tmp" "$ARTIFACT_DIR/simplify-findings.json"
@@ -658,9 +659,9 @@ write the report somewhere else to get one.
 # Shell state doesn't persist between calls: set WT to the --worktree path
 # again if one was given, or the receipt lands on the wrong branch.
 WT="${WT:-.}"
-# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
-# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
-# shell. If neither is set, point RECEIPT at
+# pi exports GRUMPY_PLUGIN_ROOT; Claude Code fills in the braced
+# CLAUDE_PLUGIN_ROOT name when it loads this skill (see docs/hosts.md).
+# If the path is still empty, point RECEIPT at
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then

@@ -30,7 +30,7 @@ From `$ARGUMENTS`:
 ## 1. Detect the stack and test file conventions
 
 Read manifests in `$WT`. Use the same detection logic as the other `/sdlc:test-*`
-commands. Consult `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the
+commands. Consult `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the
 full reference.
 
 Test file patterns by stack:

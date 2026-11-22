@@ -23,7 +23,7 @@ From `$ARGUMENTS`:
 ## 1. Detect the stack
 
 Read manifests in `$WT` to determine the language(s) and test file conventions.
-Consult `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the full
+Consult `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the full
 reference. Do not hardcode assumptions — test-file naming varies by stack:
 
 | Stack | Source extensions | Test file conventions |

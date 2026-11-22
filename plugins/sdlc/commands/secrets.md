@@ -153,7 +153,7 @@ Link the docs:
 
 ## 4. Emit the template
 
-If `.env.op` doesn't exist, copy `${CLAUDE_PLUGIN_ROOT}/templates/env.op.example`
+If `.env.op` doesn't exist, copy `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/env.op.example`
 to `.env.op` and fill it from the repo's current `.env` / `.env.example`,
 rewriting each value to `op://$APP_ENV/<item>/<field>` (for CI/prod) or
 `op://dev/<repo>/<field>` (for dev). Never write a real secret value into the
@@ -202,7 +202,7 @@ Only the item structure and the seed source differ. So when the user
 passes `--scaffold-prod`, generate a repo-specific bootstrap script from
 the shared template and stop; the user fills in the ITEM SEED block.
 
-**Template**: `${CLAUDE_PLUGIN_ROOT}/templates/bootstrap-prod-tier.sh` —
+**Template**: `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/bootstrap-prod-tier.sh` —
 parameterized on three placeholders. Copy to
 `scripts/bootstrap-<repo>-prod-tier.sh` in the target repo, substitute all
 three, and `chmod +x` the result:

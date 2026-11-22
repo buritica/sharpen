@@ -301,7 +301,7 @@ rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
 strong tier, not a mix. The thrifty split is real, just conditional on going
 through `/grumpy:audit` first.
 
-Read `${CLAUDE_PLUGIN_ROOT}/models.yaml` for the role→model map — a
+Read `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` for the role→model map — a
 repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
 target repo's cwd in an installed plugin, not this plugin's own directory. If
 it isn't readable from where you're running, **say so in the summary**
@@ -474,7 +474,9 @@ noise, not signal.
 Findings that Step 1b already deferred (wrote a marker for) are not offered
 here — they're handled. If there are **remaining** findings in the
 **Optional** bucket — 🤔 Questionable findings that couldn't be deferred
-because no observable trigger could be named — ask using AskUserQuestion:
+because no observable trigger could be named — ask the user (a structured question tool if your harness has one, such as Claude Code's
+AskUserQuestion; otherwise ask in chat with the same options, numbered, and
+wait for the answer before going on):
 
 ```json
 {
@@ -522,9 +524,9 @@ write the report somewhere else to get one.
 # Shell state doesn't persist between calls: set WT to the --worktree path
 # again if one was given, or the receipt lands on the wrong branch.
 WT="${WT:-.}"
-# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
-# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
-# shell. If neither is set, point RECEIPT at
+# pi exports GRUMPY_PLUGIN_ROOT; Claude Code fills in the braced
+# CLAUDE_PLUGIN_ROOT name when it loads this skill (see docs/hosts.md).
+# If the path is still empty, point RECEIPT at
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then

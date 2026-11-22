@@ -212,9 +212,9 @@ absent file means the defaults above apply unchanged.
 ### CLI
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" config
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" loc --base <merge-base>
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/simplify_policy.py" judge --loc simplify-loc.json   # agent JSON lines on stdin
+python3 "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py" config
+python3 "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py" loc --base <merge-base>
+python3 "${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py" judge --loc simplify-loc.json   # agent JSON lines on stdin
 ```
 
 `judge --loc` folds the `loc` report (its findings, excluded paths, merge
@@ -325,8 +325,9 @@ pi install git:...sharpen --dir plugins/grumpy
 ```
 
 Its one extension (`extensions/grumpy-env.ts`) only exports
-`GRUMPY_PLUGIN_ROOT`, so each pass can find `scripts/receipt.py`; sdlc's
-extension owns the shared `CLAUDE_PLUGIN_ROOT`. The gate chain still works:
+`GRUMPY_PLUGIN_ROOT`, so each pass finds its own files (`scripts/receipt.py`,
+`scripts/simplify_policy.py`, `models.yaml`). No pi extension sets the shared
+`CLAUDE_PLUGIN_ROOT`; see [`docs/hosts.md`](../../docs/hosts.md). The gate chain still works:
 `/sdlc:gate` reads grumpy's `review`/`imagine` reports the same way it does
 under Claude, and skill-gated gates record from the receipt each pass writes
 (see `docs/pi.md` and sdlc's `gate.md`). In the top-level bundle, grumpy's `audit` skill is

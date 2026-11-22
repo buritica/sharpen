@@ -42,7 +42,7 @@ If `--stack` was provided and is recognised, use it directly and skip scanning.
 Otherwise read the stack reference:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/templates/stacks.md"
+cat "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md"
 ```
 
 Then scan the working directory for manifests. Do not stop at the first hit —
@@ -208,7 +208,7 @@ test -f .env.op && echo "exists" || echo "missing"
 **If it does not exist:** read the canonical template from the sdlc plugin:
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/templates/env.op.example"
+cat "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/env.op.example"
 ```
 
 Write `.env.op` adapting the template for this repo. The key convention is:

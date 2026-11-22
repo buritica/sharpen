@@ -9,7 +9,7 @@
  * exit codes back into pi tool-call decisions.
  *
  * Event mapping (see docs/pi.md for the full contract):
- *   SessionStart     -> pi `session_start`          -> claude-session-start.py
+ *   SessionStart     -> pi `session_start`          -> session-start.py
  *   PreToolUse Bash  -> pi `tool_call` (bash)       -> enforce-sdlc-gates.py
  *                                                    -> block-direct-gate-record.py
  *   PostToolUse Bash -> pi `tool_result` (bash)     -> auto-init-gate-cycle.py
@@ -27,10 +27,13 @@
  * gate FAILS CLOSED. The model can never self-bypass; that matches the
  * fail-closed posture the scripts enforce.
  *
- * Also exports `CLAUDE_PLUGIN_ROOT` (and `CLAUDE_PLUGIN_SCRIPTS`) into the
- * process env so the existing cross-host SKILL.md instructions that reference
- * `$CLAUDE_PLUGIN_ROOT/scripts/...` resolve unchanged under pi's bash tool,
- * whose spawned shells inherit `process.env`.
+ * Also exports `SDLC_PLUGIN_ROOT` into the process env, so the SKILL.md
+ * references spelled `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}` resolve under
+ * pi's bash tool, whose spawned shells inherit `process.env`. Each plugin
+ * exports its OWN variable; none sets the shared `CLAUDE_PLUGIN_ROOT`, because
+ * pi runs every plugin in one process and one shared value is wrong for all but
+ * one of them (see docs/hosts.md). `SHARPEN_HOST=pi` is exported too, so the
+ * session-start adapter and any script the agent runs know which host this is.
  *
  * Node stdlib only — the repo's "pure stdlib" constraint, in TS.
  */
@@ -43,10 +46,10 @@ import type {
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { PLUGIN_ROOT, SCRIPTS_DIR, runHook } from "./lib/run-hook";
 
-// Let existing SKILL.md `$CLAUDE_PLUGIN_ROOT/scripts/...` references run under
-// pi's bash tool (its spawned shells inherit process.env).
-process.env.CLAUDE_PLUGIN_ROOT = PLUGIN_ROOT;
-process.env.CLAUDE_PLUGIN_SCRIPTS = SCRIPTS_DIR;
+// Let SKILL.md `${SDLC_PLUGIN_ROOT:-...}/scripts/...` references run under
+// pi's bash tool (its spawned shells inherit process.env), and declare the host.
+process.env.SDLC_PLUGIN_ROOT = PLUGIN_ROOT;
+process.env.SHARPEN_HOST = "pi";
 
 /**
  * Replicate a Claude PreToolUse denial's interactive confirmation.
@@ -77,7 +80,7 @@ async function gateConfirmation(
 export default function (pi: ExtensionAPI) {
   // SessionStart: write the capability manifest the gate store reads.
   pi.on("session_start", async (_event, ctx) => {
-    await runHook("claude-session-start.py", {}, ctx.cwd);
+    await runHook("session-start.py", {}, ctx.cwd);
   });
 
   // PreToolUse Bash: block `gh pr create` until gates pass, and block direct

@@ -42,7 +42,7 @@ go.mod                                   → go test ./... (shell loop)
 Makefile with "test" target             → make test   (shell loop)
 ```
 
-Read `${CLAUDE_PLUGIN_ROOT}/templates/stacks.md` for the full
+Read `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/stacks.md` for the full
 toolchain reference, including how to detect the package manager from the
 lockfile. For stacks not listed there, use WebSearch/WebFetch to confirm the
 current idiomatic test runner before proceeding.
