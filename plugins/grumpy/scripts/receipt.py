@@ -2,7 +2,7 @@
 """Write the receipt a grumpy pass leaves when it finishes.
 
 Usage:
-  receipt.py <simplify|review|imagine|fix> [--worktree <path>]
+  receipt.py <simplify|review|imagine|fix> [--stage review|imagine] [--worktree <path>]
 
 Writes `<worktree>/.claude/grumpy/<branch>/receipts/<pass>.json`, next to the
 report the pass already wrote, naming the commit the pass ran against and the
@@ -11,6 +11,13 @@ receipt. The
 sdlc gate chain records a skill gate only from a receipt that names the
 branch's current HEAD (`record-gate.py --verify <pass>`), so a pass that was
 loaded but never finished earns nothing, on any host.
+
+`fix --stage review` (or `imagine`) names which review the fix run resolved
+and writes `fix-review.json` (or `fix-imagine.json`), so one fix run earns one
+fix gate (sdlc 4.17.0+). It refreshes `fix.json` too, the name older sdlc
+reads. Without `--stage` only `fix.json` is written, and any stage files
+from an earlier run are removed, so sdlc 4.17+ (which prefers a stage file)
+reads the fresh `fix.json` instead of a stale stage receipt.
 
 Run it as the pass's LAST step, after committing whatever the pass changed, so
 the receipt names the commit the work landed in. A dirty tree is refused.
@@ -28,6 +35,7 @@ import tempfile
 from datetime import datetime, timezone
 
 PASSES = ("simplify", "review", "imagine", "fix")
+FIX_STAGES = ("review", "imagine")
 # The report each pass writes next to its receipt, before the receipt.
 REPORT_FOR = {p: f"{p}.md" for p in PASSES}
 
@@ -38,7 +46,7 @@ def _git(wt, *args):
     ).strip()
 
 
-def _report_digest(report, previous_receipt):
+def _report_digest(report, previous_receipts):
     """sha256 of the pass's report, or ValueError when there is no fresh one.
 
     A receipt is evidence that the pass ran AND left its report. A pass that
@@ -53,16 +61,24 @@ def _report_digest(report, previous_receipt):
         raise ValueError(f"report not written ({report}): save it first") from None
     if not data.strip():
         raise ValueError(f"report is empty ({report})")
-    if os.path.exists(previous_receipt) and os.path.getmtime(
-        report
-    ) <= os.path.getmtime(previous_receipt):
-        raise ValueError(f"report predates the last receipt ({report}): save it again")
+    previous = [
+        (os.path.getmtime(p), p) for p in previous_receipts if os.path.exists(p)
+    ]
+    if previous:
+        newest, newest_path = max(previous)
+        if os.path.getmtime(report) <= newest:
+            raise ValueError(
+                f"report predates the last receipt "
+                f"({os.path.basename(newest_path)}): save {report} again"
+            )
     return hashlib.sha256(data).hexdigest()
 
 
-def write_receipt(pass_name, worktree="."):
+def write_receipt(pass_name, worktree=".", stage=None):
     if pass_name not in PASSES:
         raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
+    if stage is not None and (pass_name != "fix" or stage not in FIX_STAGES):
+        raise ValueError("--stage is review or imagine, and only for fix")
     branch = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
     if branch == "HEAD":
         raise ValueError("detached HEAD: a receipt needs a named branch")
@@ -79,9 +95,20 @@ def write_receipt(pass_name, worktree="."):
     head = _git(worktree, "rev-parse", "HEAD")
     artifacts = os.path.join(root, ".claude", "grumpy", branch)
     directory = os.path.join(artifacts, "receipts")
-    path = os.path.join(directory, f"{pass_name}.json")
+    name = f"fix-{stage}" if stage else pass_name
+    path = os.path.join(directory, f"{name}.json")
     report = os.path.join(artifacts, REPORT_FOR[pass_name])
-    digest = _report_digest(report, path)
+    # Every fix receipt counts as "the last receipt": the second fix run must
+    # leave a newer report than the first one's receipt, whatever its name.
+    siblings = (
+        [
+            os.path.join(directory, f"{n}.json")
+            for n in ("fix", "fix-review", "fix-imagine")
+        ]
+        if pass_name == "fix"
+        else [path]
+    )
+    digest = _report_digest(report, siblings)
     os.makedirs(directory, exist_ok=True)
     receipt = {
         "protocol_version": "1",
@@ -92,17 +119,50 @@ def write_receipt(pass_name, worktree="."):
         "report": REPORT_FOR[pass_name],
         "report_sha256": digest,
     }
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{pass_name}.", suffix=".tmp")
+    if stage:
+        receipt["stage"] = stage
+    # A stage receipt also refreshes fix.json, the one name sdlc before 4.17
+    # reads, so a newer grumpy with an older installed sdlc still records the
+    # fix gates. sdlc 4.17+ prefers the stage file.
+    # The stage file first: if the fix.json refresh then fails, sdlc 4.17+
+    # still has the receipt it reads, and the error names what is missing.
+    _write_json(directory, path, receipt)
+    if stage:
+        try:
+            _write_json(directory, os.path.join(directory, "fix.json"), receipt)
+        except OSError as e:
+            raise PartialReceipt(path, e) from e
+    elif pass_name == "fix":
+        # A stageless run supersedes earlier stage receipts; left in place,
+        # sdlc 4.17+ would read them instead of this fix.json.
+        for n in FIX_STAGES:
+            stale = os.path.join(directory, f"fix-{n}.json")
+            if os.path.exists(stale):
+                os.unlink(stale)
+    return path, receipt
+
+
+class PartialReceipt(OSError):
+    """The stage receipt was written; only the fix.json copy failed."""
+
+    def __init__(self, path, cause):
+        super().__init__(f"{path} written, fix.json not refreshed: {cause}")
+        self.path = path
+        self.cause = cause
+
+
+def _write_json(directory, path, data):
+    name = os.path.splitext(os.path.basename(path))[0]
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(receipt, f, indent=2)
+            json.dump(data, f, indent=2)
             f.write("\n")
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    return path, receipt
 
 
 def main(argv):
@@ -115,11 +175,27 @@ def main(argv):
             return 1
         worktree = args[i + 1]
         del args[i : i + 2]
+    stage = None
+    if "--stage" in args:
+        i = args.index("--stage")
+        if i + 1 >= len(args):
+            sys.stderr.write("--stage needs review or imagine\n")
+            return 1
+        stage = args[i + 1]
+        del args[i : i + 2]
     if len(args) != 1:
         sys.stderr.write(__doc__.split("\n\n")[1] + "\n")
         return 1
     try:
-        path, receipt = write_receipt(args[0], worktree)
+        path, receipt = write_receipt(args[0], worktree, stage)
+    except PartialReceipt as e:
+        # sdlc 4.17+ reads the stage file, which is in place; don't retry
+        # (the report is now older than it). Only an older sdlc misses out.
+        sys.stderr.write(
+            f"[grumpy] fix receipt written to {e.path}; sdlc 4.17+ records "
+            f"from it. Copying it to fix.json for older sdlc failed: {e.cause}\n"
+        )
+        return 0
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         sys.stderr.write(f"[grumpy] receipt not written: {e}\n")
         return 1

@@ -10,7 +10,15 @@ import os
 import re
 import unittest
 
-from test_receipts import BRANCH, ReceiptTestBase, git, ignore_artifacts
+import time
+
+from test_receipts import (
+    BRANCH,
+    GRUMPY_RECEIPT,
+    ReceiptTestBase,
+    git,
+    ignore_artifacts,
+)
 
 
 class StackTest(ReceiptTestBase):
@@ -346,14 +354,25 @@ class FixReceiptTest(ReceiptTestBase):
             self.assertEqual(self.verify(step).returncode, 0)
 
     def write_stage_receipt(self, stage):
-        self.receipt("fix")
+        # grumpy 2.11's writer: `receipt.py fix --stage <stage>`.
+        self.report("fix")
+        time.sleep(0.01)
+        r = self.run_py(
+            GRUMPY_RECEIPT, "fix", "--stage", stage, "--worktree", self.repo
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
         d = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
-        with open(os.path.join(d, "fix.json")) as f:
-            receipt = json.load(f)
-        receipt["stage"] = stage
-        with open(os.path.join(d, f"fix-{stage}.json"), "w") as f:
-            json.dump(receipt, f)
-        os.unlink(os.path.join(d, "fix.json"))
+        with open(os.path.join(d, f"fix-{stage}.json")) as f:
+            self.assertEqual(json.load(f)["stage"], stage)
+        time.sleep(0.01)
+
+    def test_a_stale_fix_report_is_refused_for_the_second_stage(self):
+        self.write_stage_receipt("review")
+        r = self.run_py(
+            GRUMPY_RECEIPT, "fix", "--stage", "imagine", "--worktree", self.repo
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("predates the last receipt", r.stderr)
 
     def test_one_shared_fix_receipt_cannot_earn_both_fix_gates(self):
         self.receipt("fix")  # first fix: --verify skipped
@@ -364,6 +383,17 @@ class FixReceiptTest(ReceiptTestBase):
         self.verify("fix")
         fixes = [g for g in self.gates() if g.startswith("grumpy-fix")]
         self.assertEqual(len(fixes), 1, self.gates())
+
+    def test_a_review_stage_receipt_after_imagine_cannot_earn_gate_six(self):
+        # review was re-run after imagine, so fix labels its run `review`:
+        # the refreshed fix.json is newer than imagine but names the wrong stage.
+        self.write_stage_receipt("review")
+        self.assertEqual(self.verify("fix").returncode, 0)
+        self.receipt("imagine")
+        self.assertEqual(self.verify("imagine").returncode, 0)
+        self.write_stage_receipt("review")
+        self.assertNotEqual(self.verify("fix").returncode, 0)
+        self.assertNotIn("grumpy-fix-post-imagine", self.gates())
 
     def test_stage_receipts_earn_their_own_gates(self):
         self.write_stage_receipt("review")
