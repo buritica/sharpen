@@ -245,24 +245,40 @@ def _pick_evidence(manifest, host):
     return evidence, ""
 
 
+# Absolute, because the agent's shell on Claude Code has no plugin root to
+# build the path from: the script sits next to this hook.
+RECORD_GATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "record-gate.py")
+
+
+def _missing_skills(manifest):
+    """Grumpy passes the manifest says are absent. A manifest written before
+    sdlc 4.15 (no current `x-source`) predates the `simplify` capability, so
+    its silence on `simplify` is unknown, not missing."""
+    known = SKILL_CAPABILITIES
+    if manifest.get("x-source") != hosts.MANIFEST_SOURCE:
+        known = tuple(c for c in known if c != "simplify")
+    return [c for c in known if c not in manifest["capabilities"]]
+
+
 def _recording_note(host, manifest):
     """One sentence on how gates 2-6 record on this host, plus any grumpy
     passes the manifest says are missing. Without a manifest, the host's
     default recording mode still applies; missing skills can't be known."""
     # The manifest's `x-recording` is a declaration for other consumers; the
     # host table is the one source here, so the two can't disagree.
+    verify = f"`python3 {RECORD_GATE} --verify <pass>`"
     if hosts.recording_mode(host) == hosts.RECORDING_AUTOMATIC:
         note = (
-            "Each grumpy pass leaves a receipt, and this host records it at the "
-            "end of the turn (`record-gate.py --verify <pass>` records it now)."
+            f"Each grumpy pass leaves a receipt, and this host ({host}) records "
+            f"it at the end of the turn ({verify} records it now)."
         )
     else:
         note = (
-            "Each grumpy pass leaves a receipt; on this host, run "
-            "`record-gate.py --verify <pass>` after each pass to record it."
+            f"Each grumpy pass leaves a receipt; on this host ({host}), run "
+            f"{verify} after each pass to record it."
         )
     if manifest is not None:
-        missing = [c for c in SKILL_CAPABILITIES if c not in manifest["capabilities"]]
+        missing = _missing_skills(manifest)
         if missing:
             note += (
                 f" This host's manifest lists no grumpy {', '.join(missing)}: "

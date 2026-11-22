@@ -57,6 +57,14 @@ host and writes `.sharpen/data/capabilities.<host>.json`:
    `unknown` and is told to run `--verify` by hand. To name a host yourself,
    export `SHARPEN_HOST` before starting it.
 
+The `SHARPEN_HOST` values that change behavior are `claude-code`, `codex` and
+`pi`. Any other well-formed value (letters, digits, `.` and `-`, up to 64
+characters, case folded to lowercase) is accepted as a label: it
+gets its own manifest file and manual recording, like `unknown`. A malformed
+value is treated as `unknown`. Don't use `claude`: it writes
+`capabilities.claude.json`, the pre-4.15 file name that Claude Code still
+reads as a fallback.
+
 One file per host means a Claude Code session and a pi or Codex session in
 the same repo no longer overwrite each other. Besides the v1 fields, the
 manifest records:
@@ -72,6 +80,9 @@ manifest records:
   message says gates 2-6 can't record until grumpy is upgraded (or, as a last
   resort, `--attest` per gate). `SDLC_GATE_EVIDENCE=events` still forces
   event-only cycles by hand.
+- `x-source`: `session-start` from 4.15 on. A manifest without it (a pre-4.15
+  `capabilities.claude.json`) predates the `simplify` capability, so auto-init
+  treats its silence on `simplify` as unknown rather than reporting it missing.
 
 ## Plugin roots in skill text
 

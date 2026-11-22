@@ -180,7 +180,7 @@ def build_manifest(capabilities, host=hosts.UNKNOWN, receipts=True):
         "capabilities": sorted(capabilities),
         "x-recording": hosts.recording_mode(host),
         "x-receipts": bool(receipts),
-        "x-source": "session-start",
+        "x-source": hosts.MANIFEST_SOURCE,
         "x-generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

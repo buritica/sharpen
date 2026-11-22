@@ -111,6 +111,10 @@ def detect_host(env=None):
 MANIFEST_ENV = "SDLC_CAPABILITIES_PATH"
 # Written by every sdlc before 4.15, on every host, whatever the host was.
 LEGACY_MANIFEST_NAME = "capabilities.claude.json"
+# The `x-source` session-start writes from 4.15 on. A manifest without it was
+# written before `simplify` was a capability, so its silence on `simplify`
+# means "unknown", not "missing".
+MANIFEST_SOURCE = "session-start"
 
 
 def manifest_name(host):

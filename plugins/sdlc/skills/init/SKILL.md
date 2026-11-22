@@ -375,7 +375,7 @@ upgrade without re-deriving the toolchain.
 
 If that path comes out empty on this host (an instructions-only host such
 as Gemini, Cursor or Copilot reading this as a SKILL.md; see
-`docs/hosts.md`), the script still exists wherever the sdlc plugin is
+<https://github.com/buritica/sharpen/blob/main/docs/hosts.md>), the script still exists wherever the sdlc plugin is
 installed — it is at `<sdlc plugin root>/scripts/agents_md.py`, two
 directories above this SKILL.md. On a Claude Code marketplace install,
 `ls -d ~/.claude/plugins/cache/*/sdlc/*/scripts/agents_md.py | sort -V | tail -1`

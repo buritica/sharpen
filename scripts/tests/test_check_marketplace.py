@@ -524,6 +524,29 @@ class PluginRootSpellingTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("another plugin", out)
 
+    def test_multi_word_prefix_without_fallback_is_an_error(self):
+        # `foo-bar` -> FOO_BAR: the prefix carries an underscore.
+        r = self._run_with("foo-bar", 'python3 "$FOO_BAR_PLUGIN_ROOT/scripts/x.py"')
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}", out)
+
+    def test_multi_word_prefix_with_braced_fallback_passes(self):
+        r = self._run_with(
+            "foo-bar",
+            'python3 "${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_another_plugins_multi_word_variable_is_an_error(self):
+        r = self._run_with(
+            "grumpy",
+            'python3 "${FOO_BAR_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/x.py"',
+        )
+        out = r.stdout.decode()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("another plugin's root variable $FOO_BAR_PLUGIN_ROOT", out)
+
     def test_prose_naming_the_variable_without_dollar_is_fine(self):
         r = self._run_with(
             "sdlc", "Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT` name."

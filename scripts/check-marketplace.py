@@ -231,7 +231,9 @@ PLUGIN_ROOT_PREFIX = {
     "sdlc-guardrails": "GUARDRAILS",
 }
 SHARED_ROOT_REF = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\b\}?")
-OWN_ROOT_REF = re.compile(r"\$\{?([A-Z]+)_PLUGIN_ROOT\b")
+# Underscores and digits allowed: a plugin named `foo-bar` has the prefix
+# `FOO_BAR`, which `[A-Z]+` would never capture.
+OWN_ROOT_REF = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)_PLUGIN_ROOT\b")
 
 
 def _root_prefix(name):

@@ -24,8 +24,9 @@ releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
   `simplify` as a capability.
 - **Auto-init says how gates record on this host.** The arming message tells a Claude Code
   or pi session that receipts record at the end of the turn, and anyone else to run
-  `record-gate.py --verify <pass>` after each pass. It names any grumpy pass the manifest
-  lacks. With a grumpy older than 2.9.0 on Claude Code, it arms an event-only cycle
+  `record-gate.py --verify <pass>` after each pass. It names the detected host and prints
+  the absolute path of `record-gate.py`. It names any grumpy pass the manifest lacks, except
+  `simplify` in a pre-4.15 manifest, which predates that capability. With a grumpy older than 2.9.0 on Claude Code, it arms an event-only cycle
   (Claude Code's `Skill` event can stamp it) instead of a receipt-backed one that could
   never complete. Other hosts have no such event, so they keep the receipt-backed cycle and
   are told gates 2-6 can't record until grumpy is upgraded to 2.9.0+ (`--attest` per gate
@@ -34,7 +35,7 @@ releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
   a host must not auto-arm a profile it can't complete; the code never did that, and with
   receipts it shouldn't. The `claude-enforced` profile, which the code never had, is gone
   from the docs.
-- **A host support matrix**, [`docs/hosts.md`](../../docs/hosts.md), generated from
+- **A host support matrix**, [`docs/hosts.md`](https://github.com/buritica/sharpen/blob/main/docs/hosts.md), generated from
   `scripts/hosts.py`, says what Claude Code, Codex, pi and the instructions-only hosts
   (Gemini, Cursor, Copilot, `npx skills add`) each do (sharpen#46).
 

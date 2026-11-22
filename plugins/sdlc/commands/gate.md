@@ -47,7 +47,7 @@ python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --ve
 ```
 
 Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT` name in this text but does
-not export it to the agent's shell, so keep the braces (see `docs/hosts.md`). A host that exports
+not export it to the agent's shell, so keep the braces (see <https://github.com/buritica/sharpen/blob/main/docs/hosts.md>). A host that exports
 `SDLC_PLUGIN_ROOT` wins. If the path still comes out empty, use the installed
 sdlc plugin's path instead. Run it from the worktree being gated (`cd "$WT"` first when
 `--worktree` is set); routing set with `--route-from` applies exactly as it does to the

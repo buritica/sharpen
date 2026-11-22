@@ -24,6 +24,8 @@ import hosts  # noqa: E402
 
 SKILLS = ["simplify", "review", "fix", "imagine"]
 BASE = ["test", "lint", "typecheck", "plan", "ship"]
+# What session-start writes from 4.15 on; without it a manifest is legacy.
+CURRENT = {"x-source": hosts.MANIFEST_SOURCE}
 
 
 def git(repo, *args):
@@ -188,7 +190,8 @@ class AutoInitHostTest(unittest.TestCase):
         r, cycle = self.commit()
         out = r.stderr.decode()
         self.assertEqual(cycle["tier"], "small-medium")
-        self.assertIn("run `record-gate.py --verify <pass>` after each pass", out)
+        self.assertIn("this host (unknown), run `python3 ", out)
+        self.assertIn("record-gate.py --verify <pass>` after each pass", out)
 
     def test_claude_code_falls_back_to_the_pre_4_15_manifest_name(self):
         self.write_manifest(hosts.LEGACY_MANIFEST_NAME, "claude-code", BASE + SKILLS)
@@ -201,12 +204,47 @@ class AutoInitHostTest(unittest.TestCase):
         self.assertNotIn("capabilities", cycle)
 
     def test_missing_grumpy_passes_are_named_and_tier_stays(self):
-        self.write_manifest("capabilities.pi.json", "pi", BASE + ["review"])
+        self.write_manifest("capabilities.pi.json", "pi", BASE + ["review"], **CURRENT)
         r, cycle = self.commit(SHARPEN_HOST="pi")
         out = r.stderr.decode()
         self.assertEqual(cycle["tier"], "small-medium")
         self.assertIn("lists no grumpy simplify, fix, imagine", out)
         self.assertIn("/sdlc:gate --init tiny", out)
+
+    def test_legacy_manifest_silence_on_simplify_is_not_missing(self):
+        # Every pre-4.15 manifest predates the simplify capability: telling
+        # its upgrader to re-init as tiny would drop gates 2-6 for nothing.
+        self.write_manifest(
+            hosts.LEGACY_MANIFEST_NAME,
+            "claude-code",
+            BASE + ["review", "fix", "imagine"],
+            **{"x-source": "claude-session-start"},
+        )
+        r, cycle = self.commit(CLAUDECODE="1")
+        self.assertNotIn("lists no grumpy", r.stderr.decode())
+
+    def test_legacy_manifest_still_names_other_missing_passes(self):
+        self.write_manifest(
+            hosts.LEGACY_MANIFEST_NAME, "claude-code", BASE + ["review"]
+        )
+        r, cycle = self.commit(CLAUDECODE="1")
+        self.assertIn("lists no grumpy fix, imagine", r.stderr.decode())
+
+    def test_current_manifest_missing_simplify_names_it(self):
+        self.write_manifest(
+            "capabilities.claude-code.json",
+            "claude-code",
+            BASE + ["review", "fix", "imagine"],
+            **CURRENT,
+        )
+        r, cycle = self.commit(CLAUDECODE="1")
+        self.assertIn("lists no grumpy simplify:", r.stderr.decode())
+
+    def test_arming_message_names_host_and_absolute_record_gate(self):
+        r, cycle = self.commit(SHARPEN_HOST="pi")
+        out = r.stderr.decode()
+        self.assertIn("this host (pi)", out)
+        self.assertIn(os.path.join(SCRIPTS, "record-gate.py") + " --verify <pass>", out)
 
     def test_claude_code_grumpy_without_receipts_gets_an_event_only_cycle(self):
         # grumpy < 2.9.0: no pass writes a receipt, so a receipt-backed

@@ -27,7 +27,7 @@ Resolve this plugin's root first. Under pi, this plugin's extension exports
 `GUARDRAILS_PLUGIN_ROOT`. Claude Code fills in the braced `CLAUDE_PLUGIN_ROOT`
 name below with this plugin's directory when it loads this command (it does
 not export it to your shell, so the unbraced spelling would be empty). See
-`docs/hosts.md` for every host:
+<https://github.com/buritica/sharpen/blob/main/docs/hosts.md> for every host:
 
 ```bash
 PLUGIN_ROOT="${GUARDRAILS_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"
