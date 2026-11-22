@@ -39,6 +39,11 @@ changes stay discoverable without bloating either the README or `UPDATE.md`.
   `scripts/hosts.py`, says what Claude Code, Codex, pi and the instructions-only hosts
   (Gemini, Cursor, Copilot, `npx skills add`) each do (sharpen#46).
 
+**What an existing repo needs to do:** nothing. A Claude Code session started before the
+upgrade still has its old `capabilities.claude.json` read until the next session writes
+`capabilities.claude-code.json`; both live under the gitignored `.sharpen/data/`. Upgrade
+grumpy (2.10.0) and sdlc-guardrails (1.4.5) alongside sdlc.
+
 ## 4.14.0 — skill gates record from receipts, on every host
 
 Gates 2 through 6 (`simplify` and the grumpy passes) used to be stamped by a `PostToolUse`
