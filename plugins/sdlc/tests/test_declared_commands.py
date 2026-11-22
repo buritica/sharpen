@@ -179,9 +179,21 @@ class GateUsesItTests(unittest.TestCase):
     def test_format_is_never_run_and_monorepo_areas_are_split(self):
         self.assertIn("never run `format`", self.section)
         self.assertIn("one entry is a plain command", self.section)
-        self.assertIn("exit 127", self.section)
-        self.assertIn("run each part after the colon in that area", self.section)
+        self.assertIn("before its first colon", self.section)
+        self.assertIn("no `area:` prefix run in turn from the root", self.section)
         self.assertIn("`unreadable`", self.section)
+
+    def test_only_a_missing_binary_falls_back_to_detection(self):
+        # A script's own 127 (a tool it calls is missing) must fail the gate,
+        # never swap in another runner that could pass.
+        self.assertIn("`command -v <first word>` fails", self.section)
+        self.assertIn("fails the gate, whatever its exit code", self.section)
+        self.assertNotIn("not found (exit 127)", self.section)
+
+    def test_package_json_lint_never_overrides_a_declared_lint(self):
+        self.assertIn(
+            "When AGENTS.md declares no `lint` and package.json", self.section
+        )
 
     def test_shellcheck_stays_additive_to_a_declared_lint(self):
         self.assertIn("a declared `lint` that doesn't already run it", self.section)

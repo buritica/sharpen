@@ -352,14 +352,14 @@ The **Key** column is the exact gate name `record-gate.py` accepts and stores. `
 
 | # | Gate | Key | How | Pass when |
 |---|------|-----|-----|-----------|
-| 1 | **Test** | `tests` | Auto-detect runner (see below) | Exit 0 |
+| 1 | **Test** | `tests` | AGENTS.md `test`, else auto-detect (see below) | Exit 0 |
 | 2 | **Simplify** | `simplify` | If `grumpy` plugin installed: `/grumpy:simplify`. Otherwise: review for unnecessary complexity, dead code, over-abstraction — but see the note below, the gate cannot be recorded | With `/grumpy:simplify`: no blocking findings (`new`/`regressed` against the merge base) after the fix pass; legacy debt is reported, not failed. Without it the gate cannot be recorded at all (see note below) |
 | 3 | **Review** | `grumpy-review` | If `grumpy` plugin installed: `/grumpy:review`. Otherwise: self-review for correctness bugs, edge cases, security | No critical findings |
 | 4 | **Fix** | `grumpy-fix-post-review` | If grumpy: `/grumpy:fix`. Otherwise: fix findings from step 3 | All critical findings resolved |
 | 5 | **Imagine** | `grumpy-imagine` | If `grumpy` plugin installed: `/grumpy:imagine`. Otherwise: mental production walkthrough | No critical findings |
 | 6 | **Fix** | `grumpy-fix-post-imagine` | Fix findings from step 5 | All critical findings resolved |
-| 7 | **Lint** | `lint` | Auto-detect linter (see below) | Exit 0 |
-| 8 | **Typecheck** | `typecheck` | Auto-detect checker (see below) | Exit 0 |
+| 7 | **Lint** | `lint` | AGENTS.md `lint`, else auto-detect (see below) | Exit 0 |
+| 8 | **Typecheck** | `typecheck` | AGENTS.md `typecheck`, else auto-detect (see below) | Exit 0 |
 
 Gates 2-6 are **skill-gated**: they are recorded only from the receipt the skill's own pass leaves, by `--verify` or a host hook. `record-gate.py --record simplify` (or any `grumpy-*` gate) is refused — by the hook, and by the store behind it, however you spell it. The self-review in the "Otherwise" column is a quality practice, not a way to satisfy the gate.
 
@@ -423,7 +423,7 @@ Declared commands come first: `/sdlc:init` writes the repo's own into the AGENTS
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/declared_commands.py" --root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"
 ```
 
-`test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A list of two or more names each area before a colon (`web: bun test`): run each part after the colon in that area; one entry is a plain command (`npm run test:unit`). Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`) and name any `unreadable` line. A declared command that is not found (exit 127) is a wrong declaration, not a failing gate: say so, run the detected one for this run, and suggest `/sdlc:init` step 10 (never edit inside the markers). If the script fails, say so and use the tables. Otherwise detect from config files:
+`test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A list of two or more names each area before its first colon (`web: npm run test:unit`): run what follows that colon, from the area's directory when one exists, otherwise from the root. Two or more entries with no `area:` prefix run in turn from the root; one entry is a plain command (`npm run test:unit`). Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`) and name any `unreadable` line. A declared command whose first word isn't installed (`command -v <first word>` fails) is a wrong declaration, not a failing gate: say so, run the detected one for this run, and suggest `/sdlc:init` step 10 (never edit inside the markers). A declared command that starts and then fails fails the gate, whatever its exit code: a script that exits 127 because a tool *it* calls is missing is a broken suite, and swapping in a different runner could record a pass for tests that never ran. If the script fails, say so and use the tables. Otherwise detect from config files:
 
 **Test runner:**
 ```
@@ -462,7 +462,7 @@ two is exactly the false-confidence gap this table exists to close). If
 `shellcheck` isn't installed, say so in the gate's mode line rather than
 silently skipping it.
 
-If the project has a `lint` or `lint:fix` script in package.json, prefer that.
+When AGENTS.md declares no `lint` and package.json has a `lint` or `lint:fix` script, prefer that over the table.
 
 **Type checker:**
 ```
