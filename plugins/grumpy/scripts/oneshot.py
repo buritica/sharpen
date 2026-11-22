@@ -555,45 +555,85 @@ def _parse_args(argv):
     return args
 
 
-def main(argv, env=None):
-    env = os.environ if env is None else env
-    try:
-        args = _parse_args(argv)
-    except ValueError as e:
-        _log(f"{e}\n" + __doc__.split("\n\n")[1])
-        return 2
-    wt = args["worktree"]
+class Stop(Exception):
+    """End the run with `code` (1: earned nothing, 2: setup error) and a message."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def configure(args, env):
+    """(provider, prompt parts, model, model note), or Stop(2)."""
     provider = args["provider"] or env.get("SHARPEN_LLM_PROVIDER") or "openai"
     if provider not in PROVIDERS:
-        _log(f"unknown provider {provider!r} (one of: {', '.join(PROVIDERS)})")
-        return 2
+        raise Stop(2, f"unknown provider {provider!r} (one of: {', '.join(PROVIDERS)})")
     try:
         parts = load_command(args["pass"])
     except (OSError, ExtractionError) as e:
-        _log(f"can't build prompts from commands/{args['pass']}.md: {e}")
-        return 2
+        raise Stop(
+            2, f"can't build prompts from commands/{args['pass']}.md: {e}"
+        ) from None
     model, note = args["model"] or env.get("SHARPEN_LLM_MODEL"), ""
     if not model and PROVIDERS[provider]["default_from_map"]:
-        model, note = model_from_map(wt)
+        model, note = model_from_map(args["worktree"])
     if not model:
-        _log(
-            f"no model: pass --model or set SHARPEN_LLM_MODEL ({provider} has no default)"
+        raise Stop(
+            2,
+            f"no model: pass --model or set SHARPEN_LLM_MODEL ({provider} has no default)",
         )
-        return 2
+    return provider, parts, model, note
+
+
+def select_aspects(parts, wanted):
+    names = wanted.split(",") if wanted else None
+    aspects = [(n, d) for n, d in parts["aspects"] if not names or n in names]
+    if not aspects:
+        raise Stop(2, f"no known aspect in {wanted!r}")
+    return aspects
+
+
+def run_passes(client, model, passes, jobs, timeout):
+    """{aspect: (lines, errored, failure)}, in parallel; Stop(1) if every call failed."""
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        futures = {
+            pool.submit(client.chat, model, m, timeout): n for n, m in passes.items()
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            name = futures[fut]
+            try:
+                results[name] = (*parse_pass_lines(fut.result()), None)
+            except ProviderError as e:
+                results[name] = ([], False, str(e))
+                _log(f"pass {name} failed: {e}")
+    if all(r[2] for r in results.values()):
+        raise Stop(1, "every finding pass failed: no report, no receipt")
+    return {n: results[n] for n in passes}
+
+
+def save_report(wt, branch, pass_name, report):
+    root = _git(wt, "rev-parse", "--show-toplevel").strip()
+    artifacts = os.path.join(root, *receipt.GRUMPY_ROOT, branch)
+    os.makedirs(artifacts, exist_ok=True)
+    receipt._ensure_self_ignored(os.path.join(root, *receipt.GRUMPY_ROOT))
+    path = os.path.join(artifacts, receipt.REPORT_FOR[pass_name])
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(report)
+    return path
+
+
+def run(args, env):
+    wt, pass_name = args["worktree"], args["pass"]
+    provider, parts, model, note = configure(args, env)
     try:
         branch = _git(wt, "rev-parse", "--abbrev-ref", "HEAD").strip()
         base, diff, names = resolve_diff(wt, require_clean=not args["dry_run"])
     except (ValueError, subprocess.CalledProcessError) as e:
-        _log(f"no review: {e}")
-        return 1
+        raise Stop(1, f"no review: {e}") from None
     if not diff.strip():
-        _log(f"nothing to review against {base}")
-        return 1
-    wanted = args["aspects"].split(",") if args["aspects"] else None
-    aspects = [(n, d) for n, d in parts["aspects"] if not wanted or n in wanted]
-    if not aspects:
-        _log(f"no known aspect in {args['aspects']!r}")
-        return 2
+        raise Stop(1, f"nothing to review against {base}")
+    aspects = select_aspects(parts, args["aspects"])
     files_text = changed_files_text(wt, names)
     model_line = f"_Model: {model} via {provider} (one-shot, no agent){'; ' + note if note else ''}_"
     passes = {n: pass_messages(parts, n, d, base, diff, files_text) for n, d in aspects}
@@ -603,63 +643,48 @@ def main(argv, env=None):
         sys.stdout.write(
             f"===== {len(passes)} pass call(s) + 1 aggregation call to {provider} {model}\n"
         )
-        return 0
+        return
     try:
         client = ChatClient(provider, env)
     except ValueError as e:
-        _log(str(e))
-        return 2
+        raise Stop(2, str(e)) from None
     _log(
         f"{len(passes)} finding pass(es) on {provider} {model}, base {base}; "
         "the diff and changed files are sent to the provider"
     )
-    results = {}
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=max(1, args["jobs"])
-    ) as pool:
-        futures = {
-            pool.submit(client.chat, model, m, args["timeout"]): n
-            for n, m in passes.items()
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            name = futures[fut]
-            try:
-                lines, errored = parse_pass_lines(fut.result())
-                results[name] = (lines, errored, None)
-            except ProviderError as e:
-                results[name] = ([], False, str(e))
-                _log(f"pass {name} failed: {e}")
-    if all(r[2] for r in results.values()):
-        _log("every finding pass failed: no report, no receipt")
-        return 1
-    ordered = {n: results[n] for n, _ in aspects}
+    results = run_passes(client, model, passes, args["jobs"], args["timeout"])
+    messages = aggregate_messages(
+        parts, results, settled_entries(wt, branch), model_line
+    )
     try:
-        reply = client.chat(
-            model,
-            aggregate_messages(parts, ordered, settled_entries(wt, branch), model_line),
-            args["timeout"],
+        report = finish_report(
+            client.chat(model, messages, args["timeout"]), model_line
         )
-        report = finish_report(reply, model_line)
     except (ProviderError, ValueError) as e:
-        _log(f"aggregation failed: {e}. No report, no receipt")
-        return 1
-    root = _git(wt, "rev-parse", "--show-toplevel").strip()
-    artifacts = os.path.join(root, *receipt.GRUMPY_ROOT, branch)
-    os.makedirs(artifacts, exist_ok=True)
-    receipt._ensure_self_ignored(os.path.join(root, *receipt.GRUMPY_ROOT))
-    path = os.path.join(artifacts, receipt.REPORT_FOR[args["pass"]])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(report)
-    _log(f"report saved: {path}")
+        raise Stop(1, f"aggregation failed: {e}. No report, no receipt") from None
+    _log(f"report saved: {save_report(wt, branch, pass_name, report)}")
     executor = {"host": EXECUTOR_HOST, "provider": provider, "model": model}
     try:
-        rpath, _ = receipt.write_receipt(args["pass"], wt, executor=executor)
+        rpath, _ = receipt.write_receipt(pass_name, wt, executor=executor)
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
-        _log(f"receipt not written: {e}")
-        return 1
+        raise Stop(1, f"receipt not written: {e}") from None
     _log(
-        f"receipt written: {rpath} (record it with: record-gate.py --verify {args['pass']})"
+        f"receipt written: {rpath} (record it with: record-gate.py --verify {pass_name})"
     )
+
+
+def main(argv, env=None):
+    env = os.environ if env is None else env
+    try:
+        args = _parse_args(argv)
+    except ValueError as e:
+        _log(f"{e}\n" + __doc__.split("\n\n")[1])
+        return 2
+    try:
+        run(args, env)
+    except Stop as e:
+        _log(str(e))
+        return e.code
     return 0
 
 

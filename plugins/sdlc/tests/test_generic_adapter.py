@@ -171,5 +171,16 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("FAIL review", r.stderr.decode())
 
 
+class NoManifestTest(unittest.TestCase):
+    def test_no_manifest_and_no_env_is_a_setup_error(self):
+        old = os.environ.pop("SHARPEN_CAPABILITIES", None)
+        try:
+            self.assertEqual(ga.resolve_manifest([], "x"), 2)
+            self.assertEqual(ga.run_with_oneshot([], "x", "openai", env={}), 2)
+        finally:
+            if old is not None:
+                os.environ["SHARPEN_CAPABILITIES"] = old
+
+
 if __name__ == "__main__":
     sys.exit(0 if unittest.main(exit=False).result.wasSuccessful() else 1)

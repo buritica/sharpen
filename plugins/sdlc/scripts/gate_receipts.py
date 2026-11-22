@@ -34,10 +34,7 @@ from artifact_dirs import GRUMPY_ROOT, LEGACY_GRUMPY_ROOT
 EVIDENCE_KEY = "evidence"
 EVIDENCE_RECEIPTS = "receipts"
 EVIDENCE_HEADS_KEY = "evidence_heads"
-# gate -> the receipt's `executor` when a path other than an agent host ran the
-# pass (grumpy's oneshot.py). Shown by --status so a one-shot review is never
-# mistaken for an agent review. Mirrored in gate_store.format_status.
-EVIDENCE_EXECUTORS_KEY = "evidence_executors"
+EVIDENCE_EXECUTORS_KEY = gs.EVIDENCE_EXECUTORS_KEY  # set by stamp_receipt
 RECEIPT_PROTOCOL = "1"
 # Skill (as seen on the Skill tool) -> receipt file name. grumpy:fix writes
 # one `fix` receipt per run; which fix gate it earns is decided by

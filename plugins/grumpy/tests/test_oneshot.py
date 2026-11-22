@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -85,22 +86,32 @@ class ExtractionTest(unittest.TestCase):
             self.assertIn(heading, parts["step4"])
 
     def test_drift_fails_loudly(self):
+        # Each break is written to a plugin root of its own and loaded the way
+        # the runner loads it, so a review.md edit this path can't follow
+        # stops the run instead of sending half a prompt.
         text = read(REVIEW_MD)
         breaks = {
+            "persona rewritten": text.replace("grumpy principal engineer", "reviewer"),
+            "code aspect renamed": text.replace("- **code** -", "- **general** -"),
             "audit section renamed": text.replace(
                 "## Audit discipline", "## Audit rules"
             ),
             "placeholder renamed": text.replace("[DIFF_CONTENT]", "[THE_DIFF]"),
+            "severity sentence gone": text.replace("SEVERITY is one of", "Use"),
             "severity renamed": text.replace("WARN (will cause", "MAJOR (will cause"),
             "template moved": text.replace("Example agent prompt structure", "Example"),
             "aspects heading gone": text.replace("### Available Review Aspects", ""),
+            "settled line renamed": text.replace("Settled findings held back", "Held"),
         }
         for name, broken in breaks.items():
             with self.subTest(name):
+                root = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, root, True)
+                os.makedirs(os.path.join(root, "commands"))
+                with open(os.path.join(root, "commands", "review.md"), "w") as f:
+                    f.write(broken)
                 with self.assertRaises(oneshot.ExtractionError):
-                    parts = oneshot.extract_review(broken)
-                    if parts["severities"] != list(oneshot.SEVERITY_SECTIONS):
-                        raise oneshot.ExtractionError("severities")
+                    oneshot.load_command("review", plugin_root=root)
 
     def test_fenced_headings_stay_in_their_section(self):
         text = "## A\nx\n```\n## Not a heading\n```\ny\n## B\nz"
@@ -141,6 +152,103 @@ class ParseTest(unittest.TestCase):
         self.assertNotEqual(roles["analysis"]["openai"], "gpt-4o-mini")
 
 
+class HelperTest(unittest.TestCase):
+    def test_frontmatter_and_fences(self):
+        self.assertEqual(oneshot._strip_frontmatter("no front"), "no front")
+        self.assertEqual(oneshot._strip_frontmatter("---\nunclosed"), "---\nunclosed")
+        with self.assertRaises(oneshot.ExtractionError):
+            oneshot._fence_after("text", "missing")
+        with self.assertRaises(oneshot.ExtractionError):
+            oneshot._fence_after("marker and no fence", "marker")
+
+    def test_parse_models_rejects_other_shapes(self):
+        self.assertEqual(oneshot.parse_models("x:\n  y: z\n"), {})
+        for bad in ("roles:\n  r\n", "roles:\n    c: m\n"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                oneshot.parse_models(bad)
+
+    def test_model_override(self):
+        wt = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, wt, True)
+        default = oneshot.parse_models(read(MODELS))["analysis"]["openai"]
+        self.assertEqual(oneshot.model_from_map(wt), (default, ""))
+        os.makedirs(os.path.join(wt, ".sharpen"))
+        path = os.path.join(wt, ".sharpen", "models.yaml")
+        with open(path, "w") as f:
+            f.write("roles:\n  analysis:\n    openai: gpt-mine\n")
+        model, note = oneshot.model_from_map(wt)
+        self.assertEqual(model, "gpt-mine")
+        self.assertIn("override", note)
+        with open(path, "w") as f:
+            f.write("roles:\n  analysis\n")
+        model, note = oneshot.model_from_map(wt)
+        self.assertEqual(model, default)
+        self.assertIn("ignored", note)
+
+    def test_content_shapes(self):
+        for bad in ({}, {"choices": []}, {"choices": [{"message": {"content": 3}}]}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                oneshot._content(bad)
+        parts = {
+            "choices": [{"message": {"content": [{"text": "a"}, {"text": "b"}, "x"]}}]
+        }
+        self.assertEqual(oneshot._content(parts), "ab")
+
+    def test_client_setup_errors(self):
+        with self.assertRaises(ValueError):
+            oneshot.ChatClient("compatible", env={})
+        with self.assertRaises(ValueError):
+            oneshot.ChatClient("openai", env={})
+        url = oneshot.ChatClient(
+            "compatible", env={"SHARPEN_LLM_URL": "http://h/v1/"}
+        ).url
+        self.assertEqual(url, "http://h/v1/chat/completions")
+
+    def test_unreachable_server_retries_then_raises(self):
+        client = oneshot.ChatClient(
+            "compatible",
+            env={
+                "SHARPEN_LLM_URL": "http://127.0.0.1:1/v1",
+                "SHARPEN_LLM_API_KEY": KEY,
+            },
+        )
+        with mock.patch.object(oneshot.time, "sleep") as sleep:
+            with self.assertRaises(oneshot.ProviderError) as caught:
+                client.chat("m", [], timeout=2)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertIn("URLError", str(caught.exception))
+        self.assertNotIn(KEY, str(caught.exception))
+
+    def test_usage_errors(self):
+        for argv in (
+            ["review", "--model"],
+            ["review", "--bogus"],
+            ["review", "x"],
+            ["imagine"],
+        ):
+            with self.subTest(argv), self.assertRaises(ValueError):
+                oneshot._parse_args(argv)
+        self.assertEqual(oneshot.main(["--bogus"], env={}), 2)
+
+    def test_failed_call_is_named_to_the_aggregator(self):
+        parts = oneshot.load_command("review")
+        messages = oneshot.aggregate_messages(
+            parts, {"code": ([], False, "HTTP 500")}, [], "_Model: m_"
+        )
+        self.assertIn(
+            "[code] errored: the call failed (HTTP 500)", messages[1]["content"]
+        )
+
+    def test_select_aspects(self):
+        parts = oneshot.load_command("review")
+        with self.assertRaises(oneshot.Stop) as caught:
+            oneshot.select_aspects(parts, "bogus")
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(
+            len(oneshot.select_aspects(parts, None)), len(parts["aspects"])
+        )
+
+
 class Handler(BaseHTTPRequestHandler):
     calls = []
     status = 200
@@ -169,7 +277,7 @@ def default_reply(prompt):
     return "CRIT|app.py:2|swallows the error|fact|errors"
 
 
-class RunTest(unittest.TestCase):
+class _Repo(unittest.TestCase):
     def setUp(self):
         Handler.calls, Handler.status, Handler.reply = [], 200, default_reply
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -223,6 +331,8 @@ class RunTest(unittest.TestCase):
     def artifact(self, *parts):
         return os.path.join(self.repo, ".sharpen", "grumpy", BRANCH, *parts)
 
+
+class RunTest(_Repo):
     def test_review_writes_report_and_receipt(self):
         r = self.run_oneshot(
             "--provider", "compatible", "--model", "local-m", "--aspects", "errors,code"
@@ -315,6 +425,73 @@ class RunTest(unittest.TestCase):
         self.assertTrue(
             re.search(r"\[code\] errored: the response was not pipe lines", agg)
         )
+
+
+class MainTest(_Repo):
+    """Exits of the in-process runner the subprocess cases don't reach."""
+
+    def main(self, *args, env=None):
+        full = {
+            "SHARPEN_LLM_URL": f"http://127.0.0.1:{self.server.server_address[1]}/v1",
+            "SHARPEN_LLM_MODEL": "m",
+            **(env or {}),
+        }
+        return oneshot.main(
+            [
+                "review",
+                "--provider",
+                "compatible",
+                "--worktree",
+                self.repo,
+                "--aspects",
+                "code",
+                *args,
+            ],
+            env=full,
+        )
+
+    def test_unknown_provider(self):
+        self.assertEqual(oneshot.main(["review", "--provider", "nope"], env={}), 2)
+
+    def test_extraction_error_is_a_setup_error(self):
+        with mock.patch.object(
+            oneshot, "load_command", side_effect=oneshot.ExtractionError("x")
+        ):
+            self.assertEqual(self.main(), 2)
+
+    def test_empty_diff_earns_nothing(self):
+        with mock.patch.object(oneshot, "resolve_diff", return_value=("main", "", [])):
+            self.assertEqual(self.main(), 1)
+        self.assertEqual(Handler.calls, [])
+
+    def test_unknown_aspect(self):
+        self.assertEqual(self.main("--aspects", "bogus"), 2)
+        self.assertEqual(Handler.calls, [])
+
+    def test_receipt_refused_keeps_the_report(self):
+        with mock.patch.object(
+            oneshot.receipt, "write_receipt", side_effect=ValueError("no")
+        ):
+            self.assertEqual(self.main(), 1)
+        self.assertTrue(os.path.exists(self.artifact("review.md")))
+
+    def test_every_pass_failing_earns_nothing(self):
+        Handler.status = 500
+        with mock.patch.object(oneshot.time, "sleep"):
+            self.assertEqual(self.main(), 1)
+        self.assertFalse(os.path.exists(self.artifact("review.md")))
+
+    def test_no_base_falls_back_to_previous_commit(self):
+        with mock.patch.object(
+            oneshot.diff_base, "resolve", return_value=(None, "none")
+        ):
+            base, diff, names = oneshot.resolve_diff(self.repo)
+        self.assertEqual((base, names), ("HEAD~1", ["app.py"]))
+
+    def test_changed_files_skip_deleted_and_respect_the_cap(self):
+        self.assertEqual(oneshot.changed_files_text(self.repo, ["gone.py"]), "")
+        with mock.patch.object(oneshot, "FILES_CAP", 1):
+            self.assertIn("omitted", oneshot.changed_files_text(self.repo, ["app.py"]))
 
 
 if __name__ == "__main__":

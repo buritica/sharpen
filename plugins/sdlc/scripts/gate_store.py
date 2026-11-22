@@ -991,10 +991,16 @@ def determine_gate(skill, branch_data):
     return None
 
 
+# gate -> the receipt's `executor` when a path other than an agent host ran the
+# pass (grumpy's oneshot.py). gate_receipts stamps it; --status shows it so a
+# one-shot review is never mistaken for an agent review.
+EVIDENCE_EXECUTORS_KEY = "evidence_executors"
+
+
 def _executor_note(branch_data, gate):
     """` (via oneshot: openai gpt-6.2-astra)` when a receipt from a non-agent
-    path earned the gate (gate_receipts.EVIDENCE_EXECUTORS_KEY)."""
-    executor = (branch_data.get("evidence_executors") or {}).get(gate)
+    path earned the gate."""
+    executor = (branch_data.get(EVIDENCE_EXECUTORS_KEY) or {}).get(gate)
     if not isinstance(executor, dict) or not executor.get("host"):
         return ""
     detail = " ".join(executor[k] for k in ("provider", "model") if executor.get(k))
