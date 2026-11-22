@@ -1,0 +1,9 @@
+{
+  "passes": ["review"],
+  "description": "A comment-only commit: a docstring that named the wrong unit is corrected and a vague comment is replaced. No executable line changes. This is the kind of commit issue #37 paid a full review round for; any CRIT or WARN is noise.",
+  "planted": [],
+  "acceptable": [
+    {"id": "wall-clock-not-monotonic", "file": "jobs/scheduler.py", "lines": [14, 17],
+     "keywords": ["monotonic", "wall clock", "clock skew", "ntp", "time.time"], "max_severity": "NOTE"}
+  ]
+}
