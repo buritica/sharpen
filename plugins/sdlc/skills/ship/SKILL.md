@@ -17,8 +17,14 @@ Before opening, verify:
    receipt-backed cycle any new commit, a clean rebase included, makes the review
    gates stale and the PR hook (and the pre-push floor) will name them. Bring the
    branch up to date *before* `/sdlc:gate` (`git fetch origin main && git rebase
-   origin/main`). If main moves while the PR is open, let the PR's merge handle it;
-   a real conflict is a code change, so it re-runs the chain.
+   origin/main`; on a stacked branch, rebase onto its parent instead, the `Base:`
+   ref `record-gate.py --status` prints, never onto main). If main moves while the PR is open, let the PR's merge handle it;
+   a real conflict is a code change, so it re-runs the chain. If the branch was
+   rebased after the chain anyway, `record-gate.py --carry` carries the review
+   gates when the branch's own changed lines are unchanged (context that moved
+   around them doesn't count), or differ only in release bookkeeping such as a
+   renumbered version, and re-opens tests, lint and typecheck. A rebase that
+   needed conflict resolution in the branch's own lines does not qualify.
 
 ## Open the PR
 
@@ -42,7 +48,7 @@ only when the branch added at least one `ponytail:` marker — check
 `.claude/grumpy/<branch>/fix.md`'s own `## Deferred` section first; if that
 artifact doesn't exist (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
-`git diff origin/main...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
+`git diff "$BASE"...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
 — anchored to an actual comment prefix (not a bare substring match, which a
 PR merely *documenting* the convention in prose would trip) AND scoped away
 from documentation files (`.md`/`.mdx` — extend this list for any other
@@ -57,8 +63,19 @@ primary source. So a marker never ships invisibly just because the report
 wasn't written. Omit the whole section when neither source finds anything —
 most PRs defer nothing.
 
+Include `## Carried` when `record-gate.py --status` lists any `Carried
+(manual)` line: one line per manual carry with its reason, so the reviewer of
+the PR sees every change that was carried rather than reviewed. Mechanical
+carries (rebase, format, docs, bookkeeping) need no line.
+
+`$BASE` below is the `Base:` ref `record-gate.py --status` prints (origin/main
+when the branch isn't stacked). On a stacked branch, open the PR against its
+parent with `--base <parent branch>`: a PR aimed at main makes the next
+`--init` or `--carry` resolve main as the review base (the open PR's base
+outranks a local upstream), which reviews the layers below.
+
 ```bash
-gh pr create --title "<prefix>(<scope>): <short description>" --body "$(cat <<'EOF'
+gh pr create --title "<prefix>(<scope>): <short description>" [--base <parent branch>] --body "$(cat <<'EOF'
 ## Summary
 <1-3 bullet points describing what changed and why>
 
@@ -70,6 +87,10 @@ Closes #XXX
 ## Deferred
 <one line per marker this branch added: [Serious|Questionable] file:line — ceiling/trigger — #issue or "not filed" (carry the severity tag straight from fix.md's own report when it exists; the grep fallback can't recover severity, so mark those lines "severity unknown — fix report missing" instead of guessing)>
 <omit this whole section when the branch added no markers>
+
+## Carried
+<one line per `Carried (manual)` line in `--status`: from -> to: reason>
+<omit this whole section when there was no manual carry>
 
 <your host's attribution line, if it adds one to PRs; omit otherwise>
 EOF
@@ -91,7 +112,7 @@ If `$PLAN` exists, append:
 ```markdown
 ## Shipped
 PR #<number> — YYYY-MM-DD
-<diff stats from `git diff --stat origin/main...HEAD` — e.g. "+342/-28 across 6 files">
+<diff stats from `git diff --stat "$BASE"...HEAD` — e.g. "+342/-28 across 6 files">
 ```
 
 If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.claude/sdlc/`, so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).

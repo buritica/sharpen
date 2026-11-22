@@ -85,7 +85,7 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
         return None, None
     root, head, reachable = (evidence or {}).get(target_branch, (None, None, ()))
     receipt, reason = rc.check_receipt(
-        rc.receipt_path(root, target_branch, skill),
+        rc.receipt_path(root, target_branch, skill, gate),
         skill=skill,
         gate=gate,
         branch=target_branch,
