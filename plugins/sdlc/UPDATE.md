@@ -19,9 +19,15 @@ builds its prompts from grumpy's `commands/review.md`, saves a real report to
 - **New variable names.** `SHARPEN_LLM_URL`, `SHARPEN_LLM_MODEL` and `SHARPEN_LLM_API_KEY`
   replace `LOCAL_LLM_URL`, `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`, and `SHARPEN_LLM_MODEL`
   replaces `OPENAI_MODEL`. The old names still work for now and print a deprecation line.
-- **No more `gpt-4o-mini` or `llama3.1` defaults.** OpenAI defaults to grumpy's
-  `models.yaml` (`analysis.openai`, currently `gpt-6.2-astra`, unverified until measured);
-  a local server has no default and needs a model named.
+  One precedence change rides along: the variable (`SHARPEN_LLM_MODEL`, or a legacy name
+  mapped to it) now beats the manifest's `provider.model`, where before the manifest beat
+  `OPENAI_MODEL`/`LOCAL_LLM_MODEL`. A repo that sets both switches to the variable's model
+  on upgrade; unset one.
+- **No more `gpt-4o-mini` or `llama3.1` defaults.** The model is `SHARPEN_LLM_MODEL`, else
+  the manifest's `provider.model`, else, for OpenAI only, grumpy's `models.yaml`
+  (`analysis.openai`, currently `gpt-6.2-astra`, unverified until measured). A local
+  server has no default and needs a model named. Whatever is named goes to the provider
+  as its model id, so a placeholder in the manifest fails the call with exit 1.
 - **`generic_adapter.py` no longer attaches a "review" report.** It runs the gate commands
   and prints PASS/FAIL; a gate summary was never a review. `record-gate.py --attach-report`
   still attaches a report you produce yourself.

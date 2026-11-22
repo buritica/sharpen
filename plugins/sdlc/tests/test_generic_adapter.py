@@ -169,6 +169,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr.decode())
         self.assertNotIn("PASS review", r.stderr.decode())
         self.assertNotIn("FAIL review", r.stderr.decode())
+        # Skipped out loud, not silently: a declared review that never ran.
+        self.assertIn("`review` is declared but not run here", r.stderr.decode())
 
 
 class NoManifestTest(unittest.TestCase):

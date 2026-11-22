@@ -17,11 +17,14 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
 
-STUB = """import json, os, sys
+STUB = """import json, os, signal, sys
 with open(os.environ["STUB_OUT"], "w") as f:
     json.dump({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items()
                if k.startswith(("SHARPEN_LLM", "OPENAI"))}}, f)
-sys.exit(int(os.environ.get("STUB_EXIT", "0")))
+code = os.environ.get("STUB_EXIT", "0")
+if code == "kill":
+    os.kill(os.getpid(), signal.SIGKILL)
+sys.exit(int(code))
 """
 
 
@@ -136,6 +139,34 @@ class AdapterTest(unittest.TestCase):
         r = self.run_adapter("openai_adapter.py", path, "--grumpy", self.grumpy)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIsNone(self.called())
+        # Exit 0 with no review is said out loud, so the sdlc README's example
+        # manifest (which declares review) and this one can't be confused.
+        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertIn("no receipt was written", r.stderr)
+
+    def test_trailing_grumpy_flag_is_a_usage_error(self):
+        # A bare `--grumpy` used to read as root=None and override a valid
+        # GRUMPY_PLUGIN_ROOT, failing as "grumpy not found".
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(),
+            "--grumpy",
+            env={"GRUMPY_PLUGIN_ROOT": self.grumpy},
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--grumpy needs a path", r.stderr)
+        self.assertIsNone(self.called())
+
+    def test_a_killed_review_is_exit_1_not_a_negative_code(self):
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(),
+            "--grumpy",
+            self.grumpy,
+            env={"STUB_EXIT": "kill"},
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("killed by signal 9", r.stderr)
 
 
 if __name__ == "__main__":

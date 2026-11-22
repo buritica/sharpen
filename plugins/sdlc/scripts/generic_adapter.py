@@ -150,7 +150,9 @@ def grumpy_oneshot(argv, env=None):
     root = env.get("GRUMPY_PLUGIN_ROOT")
     if "--grumpy" in args:
         i = args.index("--grumpy")
-        root = args[i + 1] if i + 1 < len(args) else None
+        if i + 1 >= len(args):
+            raise ValueError("--grumpy needs a path (the grumpy plugin folder)")
+        root = args[i + 1]
         del args[i : i + 2]
     path = os.path.join(root, "scripts", "oneshot.py") if root else None
     return (path if path and os.path.isfile(path) else None), args
@@ -165,9 +167,15 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     `record-gate.py --verify review` records gate 3 from. `legacy_env` maps an
     old variable name to the one oneshot.py reads, honored with a warning.
     Exit codes: 2 setup error, 1 a gate command failed or the review earned
-    nothing, 0 all passed and the receipt was written."""
+    nothing, 0 every gate command passed and, when the manifest declares
+    `review`, the report and receipt were written. A manifest without
+    `review` runs no review: it says so on stderr and exits 0."""
     env = dict(os.environ if env is None else env)
-    oneshot, argv = grumpy_oneshot(argv, env)
+    try:
+        oneshot, argv = grumpy_oneshot(argv, env)
+    except ValueError as e:
+        _log(f"[{name}] error: {e}")
+        return 2
     resolved = resolve_manifest(argv, name)
     if isinstance(resolved, int):
         return resolved
@@ -187,12 +195,20 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
         _log(f"[{name}] gate command(s) failed; review skipped")
         return 1
     if "review" not in manifest["capabilities"]:
+        _log(
+            f"[{name}] gate commands passed; the manifest declares no `review` "
+            "capability, so nothing was reviewed and no receipt was written"
+        )
         return 0
     cmd = [sys.executable, oneshot, "review", "--provider", provider]
     model = (manifest.get("provider") or {}).get("model")
     if model and not env.get("SHARPEN_LLM_MODEL"):
         cmd += ["--model", model]
-    return subprocess.call(cmd, env=env)
+    code = subprocess.call(cmd, env=env)
+    if code < 0:  # killed by a signal: outside the 0/1/2 contract
+        _log(f"[{name}] oneshot.py was killed by signal {-code}; no review")
+        return 1
+    return code
 
 
 def main(argv):
@@ -209,6 +225,12 @@ def main(argv):
         _log(f"[generic-adapter] {len(failures)} gate command(s) failed")
         return 1
     _log("[generic-adapter] all gate commands passed")
+    if "review" in manifest["capabilities"]:
+        _log(
+            "[generic-adapter] `review` is declared but not run here: a review "
+            "comes from a grumpy pass (an agent host, openai_adapter.py or "
+            "local_llm_adapter.py)"
+        )
     return 0
 
 

@@ -61,11 +61,15 @@ With no coding agent, grumpy's `scripts/oneshot.py review` runs the review pass
 against a chat API: OpenAI, or any OpenAI-compatible server such as Ollama.
 It builds its prompts from `commands/review.md`, saves the report and leaves
 a normal receipt naming the provider and model, so gate 3 records through
-`--verify` like any host and `--status` says it came from `oneshot`. It can't
-earn simplify or fix (they edit code), it sees only the diff and the changed
-files, and with OpenAI the code leaves the machine. Nothing blocks a PR on
-this path unless the git pre-push hook is installed. See grumpy's README, "No
-agent installed".
+`record-gate.py --verify review` like any host and `--status` says it came
+from `oneshot`. Nothing arms a gate cycle on this path (auto-init is a host
+hook), so run `record-gate.py --init small-medium` before the pass, or
+`--verify` has no cycle to record into. It can't earn simplify or fix (they
+edit code), it sees only the diff and the changed files, and with OpenAI the
+code leaves the machine. Nothing blocks a PR on this path: the git pre-push
+hook, when installed, warns about a pushed branch with missing or stale gates
+and refuses the push only with `git config sharpen.prePush block`. See
+grumpy's README, "No agent installed".
 
 ## Which host is running
 

@@ -331,12 +331,10 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     bd = data[branch]
     stamp_head(data, branch, gate, receipt.get("head"))
     _stamp_receipt_identity(data, branch, gate, receipt)
-    executor = receipt.get("executor")
     executors = bd.setdefault(EVIDENCE_EXECUTORS_KEY, {})
-    if isinstance(executor, dict) and executor.get("host"):
-        executors[gate] = {
-            k: str(executor[k]) for k in ("host", "provider", "model") if k in executor
-        }
+    executor = _executor_fields(receipt.get("executor"))
+    if executor:
+        executors[gate] = executor
     else:
         executors.pop(gate, None)  # re-earned by an agent host
     if not executors:
@@ -353,12 +351,30 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     return cleared
 
 
+def _executor_fields(executor):
+    """The executor's `host`, `provider` and `model` as the receipt schema
+    defines them (non-empty strings), or {} when there is no usable host.
+    Anything else (a null model, a number, a list in a hand-edited store) is
+    dropped rather than rendered as the text "None" in gate evidence."""
+    if not isinstance(executor, dict):
+        return {}
+    fields = {
+        k: v
+        for k, v in executor.items()
+        if k in ("host", "provider", "model") and isinstance(v, str) and v
+    }
+    return fields if "host" in fields else {}
+
+
 def executor_note(branch_data, gate):
     """` (via oneshot: openai gpt-6.2-astra)` when a non-agent receipt earned the gate."""
-    executor = (branch_data.get(EVIDENCE_EXECUTORS_KEY) or {}).get(gate)
-    if not isinstance(executor, dict) or not executor.get("host"):
+    executors = branch_data.get(EVIDENCE_EXECUTORS_KEY)
+    executor = _executor_fields(
+        executors.get(gate) if isinstance(executors, dict) else None
+    )
+    if not executor:
         return ""
-    detail = " ".join(executor[k] for k in ("provider", "model") if executor.get(k))
+    detail = " ".join(executor[k] for k in ("provider", "model") if k in executor)
     return f" (via {executor['host']}{': ' + detail if detail else ''})"
 
 
