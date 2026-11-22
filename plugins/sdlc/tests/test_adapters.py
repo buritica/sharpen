@@ -111,12 +111,38 @@ class AdapterTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.called()["argv"][-2:], ["--model", "gpt-x"])
+        self.assertNotIn("overrides", r.stderr)
 
-    def test_gate_failure_skips_review(self):
-        path = self.manifest({"test": "true", "lint": "false", "typecheck": "true"})
+    def test_variable_beating_the_manifest_model_is_said(self):
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(model="gpt-x"),
+            "--grumpy",
+            self.grumpy,
+            env={"SHARPEN_LLM_MODEL": "gpt-env"},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("--model", self.called()["argv"])
+        self.assertIn(
+            "SHARPEN_LLM_MODEL=gpt-env overrides the manifest's provider.model (gpt-x)",
+            r.stderr,
+        )
+
+    def test_gate_failure_skips_review_and_shows_the_output(self):
+        path = self.manifest(
+            {"test": "true", "lint": "echo nope >&2; exit 3", "typecheck": "true"}
+        )
         r = self.run_adapter("openai_adapter.py", path, "--grumpy", self.grumpy)
         self.assertEqual(r.returncode, 1)
         self.assertIsNone(self.called())
+        # The FAIL line carries the command, its exit code and its stderr, all
+        # under the adapter's own tag.
+        self.assertIn("[openai-adapter] FAIL lint", r.stderr)
+        self.assertIn(
+            "[openai-adapter]     $ echo nope >&2; exit 3 -> exit 3", r.stderr
+        )
+        self.assertIn("[openai-adapter]     nope", r.stderr)
+        self.assertNotIn("[generic-adapter]", r.stderr)
 
     def test_review_failure_is_the_exit_code(self):
         r = self.run_adapter(
@@ -132,6 +158,22 @@ class AdapterTest(unittest.TestCase):
         r = self.run_adapter("openai_adapter.py", self.manifest())
         self.assertEqual(r.returncode, 2)
         self.assertIn("GRUMPY_PLUGIN_ROOT", r.stderr)
+        self.assertIn("grumpy 2.16 or newer", r.stderr)
+        self.assertIsNone(self.called())
+
+    def test_old_grumpy_is_named_by_path_not_called_missing(self):
+        # A grumpy before 2.16 has no scripts/oneshot.py; the error names the
+        # folder that was tried and the version it needs, so the operator
+        # upgrades instead of re-setting a variable that was already right.
+        old = os.path.join(self.repo, "grumpy-2.15")
+        os.makedirs(os.path.join(old, "scripts"))
+        r = self.run_adapter("openai_adapter.py", self.manifest(), "--grumpy", old)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(
+            os.path.join(old, "scripts", "oneshot.py") + " not found", r.stderr
+        )
+        self.assertIn("grumpy 2.16 or newer", r.stderr)
+        self.assertNotIn("grumpy not found", r.stderr)
         self.assertIsNone(self.called())
 
     def test_no_review_capability_runs_no_review(self):
@@ -143,6 +185,15 @@ class AdapterTest(unittest.TestCase):
         # manifest (which declares review) and this one can't be confused.
         self.assertIn("declares no `review` capability", r.stderr)
         self.assertIn("no receipt was written", r.stderr)
+
+    def test_no_review_capability_needs_no_grumpy(self):
+        # The README promises exit 0 without `review`; a box with no grumpy
+        # installed used to get "grumpy not found" first.
+        path = self.manifest(caps=("test", "lint", "typecheck"))
+        r = self.run_adapter("local_llm_adapter.py", path)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertNotIn("grumpy", r.stderr.replace("grumpy's", ""))
 
     def test_trailing_grumpy_flag_is_a_usage_error(self):
         # A bare `--grumpy` used to read as root=None and override a valid

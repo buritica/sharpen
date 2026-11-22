@@ -139,7 +139,10 @@ def _checked_executor(executor):
     return clean
 
 
-def write_receipt(pass_name, worktree=".", stage=None, executor=None):
+def write_receipt(pass_name, worktree=".", stage=None, executor=None, head=None):
+    """`head`, when given, is the commit the pass reviewed: the receipt is
+    refused (ValueError) if HEAD is anything else, so a commit landing
+    between the review and this write can't be named as reviewed."""
     if pass_name not in PASSES:
         raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
     if stage is not None and (pass_name != "fix" or stage not in FIX_STAGES):
@@ -148,7 +151,12 @@ def write_receipt(pass_name, worktree=".", stage=None, executor=None):
     require_clean(worktree)
     executor = _checked_executor(executor)
     root = _git(worktree, "rev-parse", "--show-toplevel")
-    head = _git(worktree, "rev-parse", "HEAD")
+    now = _git(worktree, "rev-parse", "HEAD")
+    if head is not None and now != head:
+        raise ValueError(
+            f"HEAD moved during the run (reviewed {head[:12]}, now {now[:12]})"
+        )
+    head = now
     artifacts = os.path.join(root, *GRUMPY_ROOT, branch)
     directory = os.path.join(artifacts, "receipts")
     name = f"fix-{stage}" if stage else pass_name

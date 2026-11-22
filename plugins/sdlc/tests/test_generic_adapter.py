@@ -157,6 +157,40 @@ class CliTest(unittest.TestCase):
         r = self.run_cli(path)
         self.assertEqual(r.returncode, 1)
         self.assertIn("1 gate command(s) failed", r.stderr.decode())
+        # The FAIL line names the command and its exit code, so a failing
+        # lint doesn't leave the operator with no reason at all.
+        self.assertIn("[generic-adapter]     $ false -> exit 1", r.stderr.decode())
+        self.assertIn("[generic-adapter]     (no output)", r.stderr.decode())
+
+    def test_unmapped_gate_failure_prints_its_reason(self):
+        failures = ga.summarize(
+            [
+                {
+                    "capability": "lint",
+                    "command": None,
+                    "exit_code": 1,
+                    "duration_s": 0,
+                    "stdout": "",
+                    "stderr": "no command mapped for capability 'lint'",
+                }
+            ],
+            name="x-adapter",
+        )
+        self.assertEqual(len(failures), 1)
+        failures = ga.summarize(
+            [
+                {
+                    "capability": "test",
+                    "command": "pytest",
+                    "exit_code": 1,
+                    "duration_s": 0,
+                    "stdout": "many\nlines\nof\nstdout",
+                    "stderr": "",
+                }
+            ],
+            tail=2,
+        )
+        self.assertEqual(len(failures), 1)
 
     def test_review_capability_runs_no_command(self):
         manifest = make_manifest(

@@ -111,11 +111,21 @@ def run_gates(manifest, profile, cwd=None, skip_capabilities=()):
     return results
 
 
-def summarize(results):
-    """Log one PASS/FAIL line per gate command; return the failures."""
+def summarize(results, name="generic-adapter", tail=20):
+    """Log one PASS/FAIL line per gate command, tagged with the adapter's
+    `name`; a FAIL is followed by the command's last `tail` lines of output
+    (stderr, else stdout), indented, so the reason is on the screen and not
+    only in the result dict. Returns the failures."""
     for r in results:
         status = "PASS" if r["exit_code"] == 0 else "FAIL"
-        _log(f"[generic-adapter] {status} {r['capability']} ({r['duration_s']}s)")
+        _log(f"[{name}] {status} {r['capability']} ({r['duration_s']}s)")
+        if r["exit_code"] != 0:
+            output = (r["stderr"] or r["stdout"] or "").rstrip()
+            lines = output.split("\n")[-tail:] if output else ["(no output)"]
+            if r["command"] is not None:
+                lines.insert(0, f"$ {r['command']} -> exit {r['exit_code']}")
+            for line in lines:
+                _log(f"[{name}]     {line}")
     return [r for r in results if r["exit_code"] != 0]
 
 
@@ -144,7 +154,10 @@ def grumpy_oneshot(argv, env=None):
     """Path to grumpy's scripts/oneshot.py: `--grumpy <root>` in argv, else
     GRUMPY_PLUGIN_ROOT. sdlc can't import grumpy (separate plugins, and a
     `../grumpy` path never exists in the version-nested plugin cache), so the
-    root is always named explicitly. Returns (path or None, remaining argv)."""
+    root is always named explicitly. Returns (path or None, the root that was
+    tried or None, remaining argv): the root is kept so the error can name
+    the folder that has no oneshot.py (an installed grumpy older than 2.16
+    looks exactly like no grumpy at all otherwise)."""
     env = os.environ if env is None else env
     args = list(argv)
     root = env.get("GRUMPY_PLUGIN_ROOT")
@@ -155,7 +168,21 @@ def grumpy_oneshot(argv, env=None):
         root = args[i + 1]
         del args[i : i + 2]
     path = os.path.join(root, "scripts", "oneshot.py") if root else None
-    return (path if path and os.path.isfile(path) else None), args
+    return (path if path and os.path.isfile(path) else None), (root or None), args
+
+
+def missing_grumpy_message(name, root):
+    if root:
+        return (
+            f"[{name}] error: {os.path.join(root, 'scripts', 'oneshot.py')} not found. "
+            "The review runs grumpy's oneshot.py, which needs grumpy 2.16 or newer: "
+            "upgrade grumpy, or point GRUMPY_PLUGIN_ROOT / --grumpy <path> at one"
+        )
+    return (
+        f"[{name}] error: grumpy not found. Set GRUMPY_PLUGIN_ROOT to the grumpy "
+        "plugin folder or pass --grumpy <path>; the review runs grumpy's "
+        "oneshot.py (grumpy 2.16 or newer)"
+    )
 
 
 def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
@@ -169,10 +196,11 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     Exit codes: 2 setup error, 1 a gate command failed or the review earned
     nothing, 0 every gate command passed and, when the manifest declares
     `review`, the report and receipt were written. A manifest without
-    `review` runs no review: it says so on stderr and exits 0."""
+    `review` runs no review, needs no grumpy: it says so on stderr and exits
+    0."""
     env = dict(os.environ if env is None else env)
     try:
-        oneshot, argv = grumpy_oneshot(argv, env)
+        oneshot, grumpy_root, argv = grumpy_oneshot(argv, env)
     except ValueError as e:
         _log(f"[{name}] error: {e}")
         return 2
@@ -180,21 +208,21 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     if isinstance(resolved, int):
         return resolved
     manifest, profile = resolved
-    if oneshot is None:
-        _log(
-            f"[{name}] error: grumpy not found. Set GRUMPY_PLUGIN_ROOT to the grumpy "
-            "plugin folder or pass --grumpy <path>; the review runs grumpy's oneshot.py"
-        )
+    reviewing = "review" in manifest["capabilities"]
+    # Only a declared review needs grumpy, and then it should fail here,
+    # before the gate commands run, not after.
+    if reviewing and oneshot is None:
+        _log(missing_grumpy_message(name, grumpy_root))
         return 2
     for old, new in (legacy_env or {}).items():
         if env.get(old) and not env.get(new):
             _log(f"[{name}] {old} is deprecated; set {new} instead")
             env[new] = env[old]
     results = run_gates(manifest, profile, skip_capabilities=("review",))
-    if summarize(results):
+    if summarize(results, name):
         _log(f"[{name}] gate command(s) failed; review skipped")
         return 1
-    if "review" not in manifest["capabilities"]:
+    if not reviewing:
         _log(
             f"[{name}] gate commands passed; the manifest declares no `review` "
             "capability, so nothing was reviewed and no receipt was written"
@@ -204,6 +232,16 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     model = (manifest.get("provider") or {}).get("model")
     if model and not env.get("SHARPEN_LLM_MODEL"):
         cmd += ["--model", model]
+    elif model:
+        _log(
+            f"[{name}] SHARPEN_LLM_MODEL={env['SHARPEN_LLM_MODEL']} overrides the "
+            f"manifest's provider.model ({model})"
+        )
+    # ponytail: no deadline on the review subprocess and no --timeout/--jobs/
+    # --aspects pass-through; oneshot's own defaults bound it at two attempts
+    # times --timeout per aspect (about thirty minutes when a provider hangs).
+    # Add a manifest `provider.timeout` the first time an adapter run is
+    # reported hanging past that, or a caller has to kill it.
     code = subprocess.call(cmd, env=env)
     if code < 0:  # killed by a signal: outside the 0/1/2 contract
         _log(f"[{name}] oneshot.py was killed by signal {-code}; no review")

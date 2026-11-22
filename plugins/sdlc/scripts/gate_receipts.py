@@ -336,6 +336,10 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     if executor:
         executors[gate] = executor
     else:
+        # ponytail: only 4.22+ pops this; a lagging 4.21 session that re-earns
+        # the gate from an agent receipt leaves an older oneshot note in place,
+        # so --status says "(via oneshot: ...)" for a gate an agent earned.
+        # Sweep stale notes against evidence_heads if that is ever reported.
         executors.pop(gate, None)  # re-earned by an agent host
     if not executors:
         bd.pop(EVIDENCE_EXECUTORS_KEY, None)

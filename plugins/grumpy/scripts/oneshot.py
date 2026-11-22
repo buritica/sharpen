@@ -18,14 +18,18 @@ means one thing on every path:
      `extract_review`), so this path changes when the command changes. A
      command edit that breaks the extraction fails loudly here and in
      `tests/test_oneshot.py`; it never falls back to a prompt of its own.
-  3. Send one finding call per aspect (in parallel), each with the command's
-     own pass template, then one aggregation call with the command's Audit
-     discipline and Step 4 text. The model never runs git or writes a file.
-  4. Save the report to `.sharpen/grumpy/<branch>/review.md` with a `_Model:_`
-     line this script writes itself, then write the same receipt any host
-     writes (`receipt.py`), plus an `executor` naming this path, the provider
-     and the model. `record-gate.py --verify review` records gate 3 from it,
-     and `--status` shows that the gate came from this path.
+  3. Send one finding call per aspect (in parallel: `--jobs`, 4 for openai
+     and 1 for a compatible server, which usually serializes anyway), each
+     with the command's own pass template. Save what they returned to
+     `.sharpen/grumpy/<branch>/review-passes.jsonl`, then send one
+     aggregation call with the command's Audit discipline and Step 4 text.
+     The model never runs git or writes a file.
+  4. Save the report to `.sharpen/grumpy/<branch>/review.md` with the
+     `_Model:_` and `_Base:_` lines this script writes itself (the model line
+     names the aspects that ran), then write the same receipt any host writes
+     (`receipt.py`), plus an `executor` naming this path, the provider, the
+     model and the aspects. `record-gate.py --verify review` records gate 3
+     from it, and `--status` shows that the gate came from this path.
 
 What it can't do that an agent host does: open files beyond the changed
 files handed to it, follow call sites, append the review note to the sdlc
@@ -50,21 +54,25 @@ is redacted before it is printed.
 
 Exit codes: 0 report saved and receipt written. 1 the pass earned nothing:
 a dirty tree, an empty diff, a git failure, any finding pass that failed or
-answered in prose (the report is saved so you can read it, but no receipt),
-an unusable aggregation, HEAD moving during the run, or a refused receipt.
+answered without finding lines (prose, or nothing at all; the report is
+saved so you can read it, stamped `_Incomplete:_`, but no receipt), an
+unusable aggregation, HEAD moving during the run, or a refused receipt.
 2 usage or configuration: unknown flag, provider or aspect, no key, no model,
 a detached HEAD or the default branch, a provider that rejects the request
 as unauthorized or unknown (400/401/403/404), or an extraction error.
 Pure stdlib.
 """
 
+import collections
 import concurrent.futures
 import http.client
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -81,6 +89,20 @@ DIFF_CAP = 200000  # the command's own cap (`| head -c 200000`)
 FILES_CAP = 200000  # total text of changed files sent as context
 FILE_CAP = 40000  # per file
 EXECUTOR_HOST = "oneshot"
+# `--jobs` when the flag is absent. A hosted API takes parallel calls; a local
+# single-GPU server serializes prompt evaluation, so parallel ~100k-token
+# prompts queue behind each other while every socket timeout keeps ticking.
+DEFAULT_JOBS = {"openai": 4, "compatible": 1}
+RETRY_WAIT_CAP = 60  # seconds: the most a Retry-After header can make us wait
+# What the finding passes returned, saved next to the report before the
+# aggregation call so a failed aggregation loses nothing that was paid for.
+PASSES_FILE = "review-passes.jsonl"
+
+# One finding pass's outcome. `failure` is the call's error text (None when it
+# answered); `errored` means it answered without finding lines; `dropped`
+# counts malformed lines the parser threw away.
+PassResult = collections.namedtuple("PassResult", "lines errored failure dropped")
+Reply = collections.namedtuple("Reply", "text usage model request_id")
 
 # grumpy's pass severities and the report section each one lands in. The
 # command defines them ("SEVERITY is one of CRIT ..., WARN ..., NOTE ...");
@@ -338,20 +360,25 @@ class ChatClient:
         if spec["key_required"] and not self._key:
             raise ValueError(f"{spec['key_env']} is not set")
 
-    def chat(self, model, messages, timeout=300, attempts=2):
+    def chat(self, model, messages, timeout=300, attempts=2, label="call"):
+        """Reply(text, usage, model, request_id). `label` names the call in
+        the retry line on stderr (the aspect, or "aggregation")."""
         body = json.dumps({"model": model, "messages": messages}).encode()
         headers = {"Content-Type": "application/json"}
         if self._key:
             headers["Authorization"] = f"Bearer {self._key}"
-        last, status = None, None
+        last, status, wait = None, None, None
         for attempt in range(attempts):
             req = urllib.request.Request(self.url, data=body, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return _content(json.load(resp))
+                    data = json.load(resp)
+                    return Reply(_content(data), *_meta(data, resp.headers))
             except urllib.error.HTTPError as e:
                 status = e.code
-                last = f"HTTP {e.code}: {_snippet(e)}"
+                what = "rate limited: " if e.code == 429 else ""
+                last = f"{what}HTTP {e.code}: {_snippet(e)}"
+                wait = _retry_after(e.headers)
                 if e.code != 429 and e.code < 500:
                     break
             except (
@@ -363,10 +390,31 @@ class ChatClient:
                 # HTTPException covers a truncated body (IncompleteRead) and a
                 # dropped connection; ValueError a body that isn't JSON or an
                 # answer cut short. All of them are worth one retry.
-                status, last = None, f"{type(e).__name__}: {e}"
+                status, last, wait = None, f"{type(e).__name__}: {e}", None
             if attempt + 1 < attempts:
-                time.sleep(2 * (attempt + 1))
+                # The server's Retry-After when it sent one (capped), else a
+                # short backoff; jitter so parallel passes don't retry as the
+                # same burst that was just rejected.
+                delay = (
+                    wait if wait is not None else 2 * (attempt + 1)
+                ) + random.random()
+                _log(
+                    f"{label}: attempt {attempt + 1} failed "
+                    f"({redact(last, [self._key])}); retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
         raise ProviderError(redact(f"{self.provider}: {last}", [self._key]), status)
+
+
+def _retry_after(headers):
+    """Seconds the server asked us to wait, capped, or None. Only the
+    delay-seconds form; an HTTP-date is rare from these APIs and falls back
+    to the fixed wait."""
+    try:
+        value = int((headers or {}).get("Retry-After", "").strip())
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return max(0, min(value, RETRY_WAIT_CAP))
 
 
 def _snippet(error):
@@ -393,41 +441,84 @@ def _content(data):
     return content
 
 
+def _meta(data, headers=None):
+    """(usage total tokens or None, the model the server says it served or
+    None, request id or None): what the log line and the pass record keep."""
+    usage = data.get("usage") if isinstance(data, dict) else None
+    total = usage.get("total_tokens") if isinstance(usage, dict) else None
+    served = data.get("model") if isinstance(data, dict) else None
+    request_id = (headers or {}).get("x-request-id") if headers is not None else None
+    return (
+        total if isinstance(total, int) else None,
+        served if isinstance(served, str) and served else None,
+        request_id or None,
+    )
+
+
 # --- the diff -----------------------------------------------------------------
+
+
+class GitError(subprocess.CalledProcessError):
+    """A failed git call that prints git's own reason, not the command dump
+    `CalledProcessError` renders ("returned non-zero exit status 128")."""
+
+    def __str__(self):
+        reason = (self.stderr or "").strip().split("\n")[-1]
+        return f"git {' '.join(self.cmd[3:])}: {reason or f'exit {self.returncode}'}"
 
 
 def _git(wt, *args):
     # errors="replace": one latin-1 file in the diff must not end the review.
-    return subprocess.check_output(
-        ["git", "-C", wt, *args],
-        stderr=subprocess.DEVNULL,
-        encoding="utf-8",
-        errors="replace",
+    # stderr is kept: "no merge base" in a shallow clone is the message the
+    # user needs, and it is the only one git gives.
+    cmd = ["git", "-C", wt, *args]
+    proc = subprocess.run(
+        cmd, capture_output=True, encoding="utf-8", errors="replace", check=False
     )
+    if proc.returncode:
+        raise GitError(proc.returncode, cmd, proc.stdout, proc.stderr)
+    return proc.stdout
 
 
 def resolve_diff(wt, require_clean=True):
-    """(base, head sha, diff, files). Same base as the command. The tree must
-    be clean, and the diff is taken at a fixed sha: the receipt must name the
-    commit that was reviewed, so `run` refuses it if HEAD moved meanwhile."""
+    """(base, head sha, diff, files, where the base came from). Same base as
+    the command. The tree must be clean, and the diff is taken at fixed shas:
+    the receipt must name the commit that was reviewed (`write_receipt`
+    refuses it if HEAD moved meanwhile), and a `git fetch` moving the base
+    ref mid-run must not make the file list disagree with the diff. The diff
+    is capped like the command's `head -c`; a cut is marked in the prompt
+    and said on stderr, since the model can't open the rest."""
     if require_clean:
         receipt.require_clean(wt)
     head = _git(wt, "rev-parse", "HEAD").strip()
-    base, _why = diff_base.resolve(wt)
+    base, why = diff_base.resolve(wt)
     if not base:
-        base = "HEAD~1"
+        base, why = "HEAD~1", "no branch base resolved: the last commit only"
         _log("no branch base resolved: reviewing the last commit only (HEAD~1)")
-    diff = _git(wt, "diff", f"{base}...{head}")[:DIFF_CAP]
+    base_sha = _git(wt, "rev-parse", "--verify", f"{base}^{{commit}}").strip()
+    diff = _git(wt, "diff", f"{base_sha}...{head}")
+    if len(diff) > DIFF_CAP:
+        _log(
+            f"diff is {len(diff)} characters; sending the first {DIFF_CAP} "
+            "(the rest is not reviewed)"
+        )
+        diff = (
+            diff[:DIFF_CAP]
+            + f"\n[grumpy oneshot: diff truncated at {DIFF_CAP} characters; "
+            "the rest of the diff was not sent]\n"
+        )
     names = [
         n
-        for n in _git(wt, "diff", "-z", "--name-only", f"{base}...{head}").split("\0")
+        for n in _git(wt, "diff", "-z", "--name-only", f"{base_sha}...{head}").split(
+            "\0"
+        )
         if n
     ]
-    return base, head, diff, names
+    return base, head, diff, names, why
 
 
 def changed_files_text(wt, names, head="HEAD"):
-    out, total = [], 0
+    out, total, cut, omitted = [], 0, [], []
     for name in names:
         try:
             text = _git(wt, "show", f"{head}:{name}")
@@ -435,12 +526,24 @@ def changed_files_text(wt, names, head="HEAD"):
             continue  # deleted
         if "\0" in text:
             continue  # binary
-        text = text[:FILE_CAP]
+        if len(text) > FILE_CAP:
+            cut.append(name)
+            text = (
+                text[:FILE_CAP]
+                + f"\n[grumpy oneshot: file truncated at {FILE_CAP} characters]\n"
+            )
         if total + len(text) > FILES_CAP:
+            omitted.append(name)
             out.append(f"--- {name} (omitted: context cap reached)")
             continue
         total += len(text)
         out.append(f"--- {name}\n{text}")
+    if cut:
+        _log(f"file text truncated at {FILE_CAP} characters: {', '.join(cut)}")
+    if omitted:
+        _log(
+            f"file text omitted (context cap {FILES_CAP} reached): {', '.join(omitted)}"
+        )
     return "\n".join(out)
 
 
@@ -490,41 +593,56 @@ def pass_messages(parts, aspect, description, base, diff, files_text):
 
 
 def parse_pass_lines(text):
-    """(findings, errored). Outside-in, as the command's Audit discipline says:
-    SEVERITY and file:line from the left, FACT and ASPECT from the right, the
-    rest is the text. A response with no usable line that is more than a
-    short "nothing found" is errored, never salvaged."""
-    found = []
+    """(findings, errored, dropped). Outside-in, as the command's Audit
+    discipline says: SEVERITY and file:line from the left, FACT and ASPECT
+    from the right, the rest is the text. A line with pipes that still
+    doesn't parse (four fields, a lowercase severity, a `file` with no `:N`)
+    is dropped and counted, so the aggregator and stderr can say the aspect
+    may be incomplete. A response with no usable line is errored, never
+    salvaged, unless it is a short "nothing found": an empty answer is not
+    that, it is a provider that answered nothing (a full queue, say) and
+    must not pass for a clean review."""
+    found, dropped = [], 0
     for line in text.strip().strip("`").split("\n"):
         fields = line.strip().split("|")
         if len(fields) < 5:
+            dropped += len(fields) > 1  # pipes, but not a finding line
             continue
         sev, loc, fact, aspect = fields[0], fields[1], fields[-2], fields[-1]
         if sev.strip() not in SEVERITY_SECTIONS or fact.strip() not in FACTS:
+            dropped += 1
             continue
         if not re.search(r":\d", loc):
+            dropped += 1
             continue
         middle = "|".join(fields[2:-2]).strip()
         found.append(
             "|".join([sev.strip(), loc.strip(), middle, fact.strip(), aspect.strip()])
         )
-    errored = not found and len(text.strip()) > 120
-    return found, errored
+    body = text.strip()
+    errored = not found and (not body or len(body) > 120)
+    return found, errored, dropped
 
 
 def aggregate_messages(parts, results, settled, model_line):
     blocks = []
-    for aspect, (lines, errored, failure) in results.items():
-        if failure:
+    for aspect, r in results.items():
+        if r.failure:
             blocks.append(
-                f"[{aspect}] errored: the call failed ({failure}). Say this aspect needs manual review."
+                f"[{aspect}] errored: the call failed ({r.failure}). Say this aspect needs manual review."
             )
-        elif errored:
+        elif r.errored:
             blocks.append(
                 f"[{aspect}] errored: the response was not pipe lines. Say this aspect needs manual review."
             )
         else:
-            blocks.append(f"[{aspect}]\n" + ("\n".join(lines) or "(nothing found)"))
+            block = f"[{aspect}]\n" + ("\n".join(r.lines) or "(nothing found)")
+            if r.dropped:
+                block += (
+                    f"\n(the runner dropped {r.dropped} malformed line(s) from this "
+                    "pass; say that this aspect may be incomplete)"
+                )
+            blocks.append(block)
     prompt = "\n\n".join(
         [
             "You are the aggregator. The runner already ran one finding pass per "
@@ -546,17 +664,35 @@ def aggregate_messages(parts, results, settled, model_line):
     ]
 
 
-def finish_report(text, model_line):
-    """The model's report with the `_Model:_` line set by this script, or
-    ValueError when it isn't a report (then nothing is saved)."""
+def finish_report(text, model_line, *stamps):
+    """The model's report with the `_Model:_` line (and any other `_Name:_`
+    stamp lines this script writes itself: `_Base:_`, `_Incomplete:_`) set
+    here, or ValueError when it isn't a report (then nothing is saved). A
+    preamble before the `# Code Review` heading, or a note after a closing
+    fence, is dropped rather than failing the run at its last step."""
     text = text.strip()
     fence = re.match(r"^```[a-z]*\n(.*)\n```$", text, re.S)
     if fence:
         text = fence.group(1).strip()
-    if not text.startswith("# Code Review") or "## Verdict" not in text:
+    start = re.search(r"^# Code Review", text, re.M)
+    if not start or "## Verdict" not in text[start.start() :]:
         raise ValueError("the aggregation reply is not a review report")
-    lines = [ln for ln in text.split("\n") if not ln.startswith("_Model:")]
-    return "\n".join([lines[0], "", model_line, *lines[1:]]).rstrip() + "\n"
+    lines = text[start.start() :].strip().split("\n")
+    # After the Verdict heading, a closing fence that no fence opened is the
+    # one the preamble opened: the report ends there, the note after it goes.
+    verdict = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("## Verdict")), len(lines)
+    )
+    fenced = False
+    for i in range(verdict + 1, len(lines)):
+        if lines[i].startswith("```"):
+            if not fenced and lines[i].strip() == "```":
+                lines = lines[:i]
+                break
+            fenced = not fenced
+    ours = tuple(s.split(":", 1)[0] + ":" for s in (model_line, *stamps))
+    lines = [ln for ln in lines if not ln.startswith(ours)]
+    return "\n".join([lines[0], "", model_line, *stamps, *lines[1:]]).rstrip() + "\n"
 
 
 # --- running ------------------------------------------------------------------
@@ -573,7 +709,7 @@ def _parse_args(argv):
         "model": None,
         "worktree": ".",
         "aspects": None,
-        "jobs": 4,
+        "jobs": None,  # DEFAULT_JOBS[provider] when absent
         "timeout": 300,
         "dry_run": False,
     }
@@ -601,7 +737,9 @@ def _parse_args(argv):
             raise ValueError(f"unexpected argument {a!r}")
     if args["pass"] not in PASSES:
         raise ValueError(f"pass must be one of: {', '.join(PASSES)}")
-    args["jobs"], args["timeout"] = int(args["jobs"]), int(args["timeout"])
+    if args["jobs"] is not None:
+        args["jobs"] = int(args["jobs"])
+    args["timeout"] = int(args["timeout"])
     return args
 
 
@@ -646,37 +784,118 @@ def select_aspects(parts, wanted):
     return [(n, d) for n, d in parts["aspects"] if n in names]
 
 
+def _timed_chat(client, model, messages, timeout, label):
+    started = time.monotonic()
+    reply = client.chat(model, messages, timeout, label=label)
+    return reply, time.monotonic() - started
+
+
 def run_passes(client, model, passes, jobs, timeout):
-    """{aspect: (lines, errored, failure)}, in parallel. Stop(2) when the
-    provider rejected the request as setup (key, model, URL); Stop(1) when
-    every call failed."""
+    """{aspect: PassResult}, in parallel. Stop(2) when the provider rejected
+    the request as setup (key, model, URL); Stop(1) when every call failed.
+    Each pass logs one line when it completes (duration, findings, tokens,
+    request id), so a hung server and a slow model look different. On a setup
+    status, or Ctrl-C, the passes still queued are cancelled rather than sent
+    to a provider that already said no; a call already in flight runs to its
+    end (urllib has no cancel), which is the most the floor offers."""
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
+    try:
         futures = {
-            pool.submit(client.chat, model, m, timeout): n for n, m in passes.items()
+            pool.submit(_timed_chat, client, model, m, timeout, f"pass {n}"): n
+            for n, m in passes.items()
         }
         for fut in concurrent.futures.as_completed(futures):
             name = futures[fut]
             try:
-                results[name] = (*parse_pass_lines(fut.result()), None)
+                reply, seconds = fut.result()
             except ProviderError as e:
                 if e.status in SETUP_STATUSES:
                     raise Stop(2, f"the provider rejected the request: {e}") from None
-                results[name] = ([], False, str(e))
+                results[name] = PassResult([], False, str(e), 0)
                 _log(f"pass {name} failed: {e}")
-    if all(r[2] for r in results.values()):
+                continue
+            lines, errored, dropped = parse_pass_lines(reply.text)
+            results[name] = PassResult(lines, errored, None, dropped)
+            detail = [f"{len(lines)} finding line(s)"]
+            if errored:
+                detail.append(
+                    "no finding lines: errored"
+                    if reply.text.strip()
+                    else "empty answer: errored"
+                )
+            if dropped:
+                detail.append(f"{dropped} malformed line(s) dropped")
+            if reply.usage is not None:
+                detail.append(f"{reply.usage} tokens")
+            if reply.model and reply.model != model:
+                detail.append(f"served by {reply.model}")
+            if reply.request_id:
+                detail.append(f"request {reply.request_id}")
+            _log(f"pass {name}: done in {seconds:.0f}s, {', '.join(detail)}")
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    if all(r.failure for r in results.values()):
         raise Stop(1, "every finding pass failed: no report, no receipt")
     return {n: results[n] for n in passes}
 
 
-def save_report(wt, branch, pass_name, report):
+def artifacts_dir(wt, branch):
+    """`.sharpen/grumpy/<branch>/` under the worktree's root, created and
+    self-ignored (the same folder `receipt.write_receipt` uses)."""
     root = _git(wt, "rev-parse", "--show-toplevel").strip()
-    artifacts = os.path.join(root, *receipt.GRUMPY_ROOT, branch)
-    os.makedirs(artifacts, exist_ok=True)
+    path = os.path.join(root, *receipt.GRUMPY_ROOT, branch)
+    os.makedirs(path, exist_ok=True)
     receipt._ensure_self_ignored(os.path.join(root, *receipt.GRUMPY_ROOT))
+    return path
+
+
+def _write_text(path, text):
+    """Write whole or not at all: a `--verify` sweep hashing the report
+    mid-write, or a process killed there, must not see a truncated file."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def save_passes(artifacts, head, model, results):
+    """The finding passes' outcome, one JSON line per aspect, next to the
+    report and before the aggregation call: what every pass returned stays
+    on disk when the aggregation fails, and stays comparable with review.md
+    when it succeeds."""
+    path = os.path.join(artifacts, PASSES_FILE)
+    lines = [
+        json.dumps(
+            {
+                "aspect": aspect,
+                "head": head,
+                "model": model,
+                "lines": r.lines,
+                "errored": r.errored,
+                "failure": r.failure,
+                "dropped": r.dropped,
+            },
+            sort_keys=True,
+        )
+        for aspect, r in results.items()
+    ]
+    _write_text(path, "\n".join(lines) + "\n")
+    return path
+
+
+def save_report(artifacts, pass_name, report):
     path = os.path.join(artifacts, receipt.REPORT_FOR[pass_name])
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(report)
+    _write_text(path, report)
     return path
 
 
@@ -684,19 +903,27 @@ def run(args, env):
     wt, pass_name = args["worktree"], args["pass"]
     provider, parts, model, note = configure(args, env)
     aspects = select_aspects(parts, args["aspects"])
+    jobs = args["jobs"] if args["jobs"] is not None else DEFAULT_JOBS[provider]
     try:
         # Before any paid call: the receipt would refuse these anyway.
         branch = receipt.named_branch(wt)
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         raise Stop(2, f"no review: {e}") from None
     try:
-        base, head, diff, names = resolve_diff(wt, require_clean=not args["dry_run"])
+        base, head, diff, names, why = resolve_diff(
+            wt, require_clean=not args["dry_run"]
+        )
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         raise Stop(1, f"no review: {e}") from None
     if not diff.strip():
         raise Stop(1, f"nothing to review against {base}")
     files_text = changed_files_text(wt, names, head)
-    model_line = f"_Model: {model} via {provider} (one-shot, no agent){'; ' + note if note else ''}_"
+    aspect_names = ", ".join(n for n, _ in aspects)
+    model_line = (
+        f"_Model: {model} via {provider} (one-shot, no agent; aspects: {aspect_names})"
+        f"{'; ' + note if note else ''}_"
+    )
+    base_line = f"_Base: {base}, from {why}_"
     passes = {n: pass_messages(parts, n, d, base, diff, files_text) for n, d in aspects}
     if args["dry_run"]:
         for name, messages in passes.items():
@@ -710,42 +937,54 @@ def run(args, env):
     except ValueError as e:
         raise Stop(2, str(e)) from None
     _log(
-        f"{len(passes)} finding pass(es) on {provider} {model}, base {base}; "
-        "the diff and changed files are sent to the provider"
+        f"{len(passes)} finding pass(es) on {provider} {model}, {jobs} at a time, "
+        f"base {base} ({why}); the diff and changed files are sent to the provider"
     )
-    results = run_passes(client, model, passes, args["jobs"], args["timeout"])
-    messages = aggregate_messages(
-        parts, results, settled_entries(wt, branch), model_line
-    )
+    results = run_passes(client, model, passes, jobs, args["timeout"])
     try:
-        report = finish_report(
-            client.chat(model, messages, args["timeout"]), model_line
+        artifacts = artifacts_dir(wt, branch)
+        passes_path = save_passes(artifacts, head, model, results)
+        settled = settled_entries(wt, branch)
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise Stop(1, f"pass results not saved: {e}. No report, no receipt") from None
+    incomplete = sorted(n for n, r in results.items() if r.errored or r.failure)
+    stamps = [base_line]
+    if incomplete:
+        stamps.append(
+            f"_Incomplete: {', '.join(incomplete)} (failed or no finding lines); "
+            "this report earned no receipt_"
         )
-    except (ProviderError, ValueError) as e:
-        raise Stop(1, f"aggregation failed: {e}. No report, no receipt") from None
+    messages = aggregate_messages(parts, results, settled, model_line)
     try:
-        _log(f"report saved: {save_report(wt, branch, pass_name, report)}")
+        reply, _ = _timed_chat(client, model, messages, args["timeout"], "aggregation")
+        report = finish_report(reply.text, model_line, *stamps)
+    except (ProviderError, ValueError) as e:
+        raise Stop(
+            1,
+            f"aggregation failed: {e}. No report, no receipt; the finding passes' "
+            f"lines are saved at {passes_path}",
+        ) from None
+    try:
+        _log(f"report saved: {save_report(artifacts, pass_name, report)}")
     except OSError as e:
         raise Stop(1, f"report not saved: {e}") from None
-    incomplete = sorted(
-        n for n, (_, errored, failure) in results.items() if errored or failure
-    )
     if incomplete:
         # A review with an aspect missing isn't the review gate 3 asks for.
         raise Stop(
             1,
-            f"aspect(s) {', '.join(incomplete)} failed or answered in prose: the "
-            "report is saved for reading, but no receipt. Re-run to earn the gate",
+            f"aspect(s) {', '.join(incomplete)} failed or answered without finding "
+            "lines: the report is saved for reading, but no receipt. Re-run to earn "
+            "the gate",
         )
+    executor = {
+        "host": EXECUTOR_HOST,
+        "provider": provider,
+        "model": model,
+        "aspects": ",".join(n for n, _ in aspects),
+    }
     try:
-        moved = _git(wt, "rev-parse", "HEAD").strip() != head
-    except (OSError, subprocess.CalledProcessError):
-        moved = True
-    if moved:
-        raise Stop(1, f"HEAD moved during the run (reviewed {head[:12]}): no receipt")
-    executor = {"host": EXECUTOR_HOST, "provider": provider, "model": model}
-    try:
-        rpath, _ = receipt.write_receipt(pass_name, wt, executor=executor)
+        # `head=` makes the receipt name the commit that was diffed, or refuse.
+        rpath, _ = receipt.write_receipt(pass_name, wt, executor=executor, head=head)
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         raise Stop(1, f"receipt not written: {e}") from None
     _log(
