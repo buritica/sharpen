@@ -88,6 +88,8 @@ A normal portable review uses `provenance.kind: "git-range"` and records both `b
 
 The report records the executing agent/model only when the host can supply it. Identity metadata helps auditability but is not needed to make a report portable.
 
+An attached report is informational. `record-gate.py --status` shows it, and nothing blocks on its `status` or provenance: attaching one never completes a gate, and a `fail` report doesn't stop a PR. The gates themselves do that.
+
 ## State root migration
 
 Portable state uses `.sharpen/` for new shared data:
