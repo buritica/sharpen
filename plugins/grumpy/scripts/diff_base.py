@@ -14,7 +14,7 @@ order itself:
   1. `.claude/sdlc/<branch>/base.json` (sdlc's resolved base)
   2. `git config branch.<branch>.sdlcBase`
   3. the open PR's base branch, via `gh pr view`, when `gh` is installed
-  4. the branch's upstream, when it is another branch
+  4. the branch's upstream, when it is a local branch
   5. the default branch (origin/HEAD, origin/main, origin/master, main, master)
 
 Prints the ref (pass it to `git diff "$BASE"...HEAD`), and with `--why` a
@@ -80,11 +80,11 @@ def _from_upstream(wt, branch):
     up = _git(wt, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
     if not up or up == branch:
         return None
-    local = _git(wt, "config", "--get", f"branch.{branch}.remote") == "."
-    if not local and up.split("/", 1)[-1] == branch:
-        # A remote copy with the branch's own name is its pushed self, not a
-        # parent; a local upstream is always another branch. (Same rule as
-        # sdlc's gate_base._upstream.)
+    if _git(wt, "config", "--get", f"branch.{branch}.remote") != ".":
+        # Only a local upstream is a parent. A remote-tracking one may be the
+        # branch's own pushed copy (after a rename, or `push -u origin
+        # HEAD:other`), which would scope review to the unpushed commits.
+        # Same rule as sdlc's gate_base._upstream.
         return None
     return up if _exists(wt, up) else None
 

@@ -283,7 +283,7 @@ when the ponytail plugin is installed.
 the whole gate chain and writes `.claude/sdlc/<branch>/base.json`
 (`record-gate.py --set-base <parent>` pins it); without that file grumpy
 applies the same order itself: `git config branch.<branch>.sdlcBase`, the open
-PR's base (via `gh`), the branch's upstream parent, then the default branch.
+PR's base (via `gh`), the branch's local upstream parent, then the default branch.
 On a stack (main <- A <- B <- yours) the passes review only your layer, and
 `/grumpy:fix` refuses to modify an existing file outside it: such a finding is
 recorded as new capability for the branch that owns the file.

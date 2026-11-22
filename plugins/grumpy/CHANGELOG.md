@@ -18,7 +18,7 @@ sub-agent prompts and their pipe format are unchanged. Nothing to migrate: an ol
 Every gate pass (`simplify`, `review`, `imagine`, `fix`) now diffs against the base
 `scripts/diff_base.py` prints: sdlc's resolved base (`.claude/sdlc/<branch>/base.json`,
 sdlc 4.17.0+), else `git config branch.<branch>.sdlcBase`, else the open PR's base, else
-the branch's upstream parent, else the default branch. On a stacked branch the passes
+the branch's local upstream parent, else the default branch. On a stacked branch the passes
 review only its own layer, and `/grumpy:fix` refuses to edit an existing file outside that
 diff (it records such a finding as new capability instead; a Critical there is asked
 about, and fixed here on an unattended run). Each fix run now writes its own receipt
