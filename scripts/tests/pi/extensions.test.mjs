@@ -95,6 +95,9 @@ before(async () => {
   process.env.CLAUDE_CONFIG_DIR = tmp("pi-ext-cfg-");
   gatesPath = join(tmp("pi-ext-store-"), "gates.json");
   process.env.SDLC_GATES_PATH = gatesPath;
+  // Each extension exports only its own plugin root; the shared name must stay
+  // unset so one plugin can't point another at its directory (docs/hosts.md).
+  delete process.env.CLAUDE_PLUGIN_ROOT;
 
   sdlc = fakePi();
   (await import(pathToFileURL(SDLC_EXT).href)).default(sdlc);
@@ -108,15 +111,17 @@ after(() => {
 
 // --- sdlc-hooks.ts ----------------------------------------------------------
 
-test("sdlc: registers the four events and exports the plugin root", () => {
+test("sdlc: registers the four events and exports its own plugin root", () => {
   assert.deepEqual([...sdlc.handlers.keys()].sort(), [
     "agent_end",
     "session_start",
     "tool_call",
     "tool_result",
   ]);
-  assert.equal(process.env.CLAUDE_PLUGIN_ROOT, join(ROOT, "plugins", "sdlc"));
-  assert.equal(process.env.CLAUDE_PLUGIN_SCRIPTS, join(ROOT, "plugins", "sdlc", "scripts"));
+  assert.equal(process.env.SDLC_PLUGIN_ROOT, join(ROOT, "plugins", "sdlc"));
+  assert.equal(process.env.SHARPEN_HOST, "pi");
+  // Neither extension sets the shared name any more.
+  assert.equal(process.env.CLAUDE_PLUGIN_ROOT, undefined);
 });
 
 test("sdlc: agent_end runs the receipt sweep and stays quiet with nothing to record", async () => {
@@ -196,8 +201,9 @@ test("sdlc: non-commit bash results never spawn the auto-init hook", async () =>
 
 // --- guardrails-hooks.ts ----------------------------------------------------
 
-test("guardrails: registers tool_call only", () => {
+test("guardrails: registers tool_call only and exports its own plugin root", () => {
   assert.deepEqual([...guard.handlers.keys()], ["tool_call"]);
+  assert.equal(process.env.GUARDRAILS_PLUGIN_ROOT, join(ROOT, "plugins", "sdlc-guardrails"));
 });
 
 test("guardrails: commit on a protected default branch is blocked when headless", async () => {
