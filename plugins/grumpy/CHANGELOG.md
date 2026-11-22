@@ -3,6 +3,25 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.15.0 — reports and receipts move to `.sharpen/grumpy/`
+
+Every pass now writes its report, and its receipt, to `.sharpen/grumpy/<branch>/` instead of
+`.claude/grumpy/<branch>/`. Claude Code treats `.claude/` as its own configuration, and a
+headless session (`claude -p`, the benchmark) refuses a Write-tool save there, so the pass
+printed its report; with no saved report, a pass leaves no receipt and earns no gate.
+
+- `/grumpy:fix` reads the old folder when the new one doesn't exist yet, so a review run
+  before the upgrade is still found. review and imagine read the settled list in `fix.md`
+  the same way.
+- review, imagine, simplify and fix read the sdlc plan from `.sharpen/sdlc/<branch>/plan.md`,
+  falling back to `.claude/sdlc/`, and `diff_base.py` reads sdlc's `base.json` from
+  `.sharpen/sdlc/<branch>/` first. Upgrade sdlc to 4.21 alongside: it writes plans and the
+  base file to the new folder, and reads receipts from both.
+- `/grumpy:simplify` also excludes `.sharpen/grumpy/**` and `.sharpen/sdlc/**` from
+  measurement by default.
+- `.sharpen/grumpy/` ignores itself when created (a `.gitignore` holding `*`). `.sharpen/`
+  as a whole never does, because it holds the committed `simplify.json`.
+
 ## 2.14.0 — current models, a Codex column, review routes
 
 `models.yaml` moves to the current Claude ids (`claude-opus-5-5`, `claude-sonnet-5-5`,

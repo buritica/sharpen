@@ -92,8 +92,8 @@ bundle `package.json` (see pi support below).
 it is live in the repo and undelivered to users. `scripts/check-marketplace.py` catches the
 mismatch; CI runs it.
 
-Note that `sdlc` and `grumpy` share a path contract (`.claude/sdlc/<branch>/` and
-`.claude/grumpy/<branch>/`): grumpy's review reads a plan sdlc writes, and sdlc's gate chain
+Note that `sdlc` and `grumpy` share a path contract (`.sharpen/sdlc/<branch>/` and
+`.sharpen/grumpy/<branch>/`, read from the old `.claude/` folders when only those exist): grumpy's review reads a plan sdlc writes, and sdlc's gate chain
 reads what grumpy writes. If you change that contract, both plugins move together; a skew
 leaves one side reading a directory the other never wrote.
 
@@ -186,13 +186,13 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.20.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.21.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
 
 ### Lifecycle
-- `/sdlc:plan` before any code. It opens a worktree off `origin/main` — never work on `main` — on a `<prefix>/short-name` branch (`feature/`, `fix/`, `chore/`, `docs/`) and writes `.claude/sdlc/<branch>/plan.md`.
+- `/sdlc:plan` before any code. It opens a worktree off `origin/main` — never work on `main` — on a `<prefix>/short-name` branch (`feature/`, `fix/`, `chore/`, `docs/`) and writes `.sharpen/sdlc/<branch>/plan.md`.
 - `/sdlc:spec` only when there are open product decisions. Skip for a bug fix.
 - `/sdlc:gate` before every PR. Gates run in order; fix failures before advancing; a code change after the chain completes resets it.
 - `/sdlc:ship` pushes, opens the PR, and squash-merges once CI is green.
@@ -217,7 +217,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - Squash merge only. Never force-push `main`. Never bypass hooks (`--no-verify` and friends are forbidden; fix the failure or ask).
 
 ### Artifacts (gitignored)
-- `.claude/sdlc/<branch>/` — plan and spec. `.claude/grumpy/<branch>/` — review, imagine, simplify reports and pass receipts. `.claude/worktrees/` — `/sdlc:plan` worktrees.
+- `.sharpen/sdlc/<branch>/` — plan and spec. `.sharpen/grumpy/<branch>/` — review, imagine, simplify reports and pass receipts. `.claude/worktrees/` — `/sdlc:plan` worktrees. Older checkouts may still hold plans and reports under `.claude/sdlc/` and `.claude/grumpy/`; sharpen reads them there but no longer writes there.
 - `.sharpen/data/` — gate state, shared across worktrees. `.sharpen/simplify.json` is the one committed file under `.sharpen/` (the simplify policy config), when present, so never ignore `.sharpen/` as a whole.
 - Each of these folders ignores itself when sharpen creates it (a `.gitignore` holding `*` inside it); `/sdlc:init` also lists them in the repo's `.gitignore`.
 <!-- sdlc:end -->

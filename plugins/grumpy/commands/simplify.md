@@ -240,9 +240,9 @@ script measure lines-of-code per changed file at base and head:
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
 # The review base (scripts/diff_base.py): sdlc's resolved base for a
 # stacked branch, else branch.<name>.sdlcBase, the open PR's base, the
 # branch's upstream parent, then the default branch. On a stack this keeps
@@ -470,7 +470,7 @@ and a `summary.verdict` of `compliant`, `passes-with-debt`, or `blocked`:
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 POLICY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/simplify_policy.py"
 python3 "$POLICY" judge --worktree "$WT" --loc "$ARTIFACT_DIR/simplify-loc.json" \
   < "$ARTIFACT_DIR/simplify-agents.jsonl" > "$ARTIFACT_DIR/simplify-findings.json.tmp" \
@@ -569,9 +569,9 @@ compaction (`ARTIFACT_DIR` was resolved in Phase 1b; `simplify-loc.json` and
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write the complete report (from `# Simplify:` through `## Verdict`) to
@@ -586,7 +586,8 @@ If a plan artifact exists for the current branch, append a summary to its
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"
+PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
+[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21
 ```
 
 If `$PLAN` exists, append under `## Notes`:
@@ -667,7 +668,7 @@ optional, the same way `/grumpy:fix`'s Optional bucket works.
 
 Last step, after everything above, including any fixes from Phase 4 and the re-measure, and after committing those fixes: leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
-the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+the same gitignored `.sharpen/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
 writer refuses uncommitted changes, so commit the fixes Phase 4 applied
 first. If the tree was already dirty with someone else's work, don't commit
@@ -676,7 +677,7 @@ it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 The receipt records the sha256 of `simplify.md`, so it is refused unless this
-run saved that report under `.claude/grumpy/<branch>/` first. If the host
+run saved that report under `.sharpen/grumpy/<branch>/` first. If the host
 would not let you write there and you printed the report instead, no receipt
 is written and no gate can be earned from this run: say so plainly, and don't
 write the report somewhere else to get one.
@@ -769,7 +770,7 @@ fi
   scorecard.
 - Artifacts are keyed by branch, not by run. Write `simplify-agents.jsonl`
   fresh every time and write the JSON outputs through a temp file; a stale
-  or half-written artifact under `.claude/grumpy/<branch>/` is how a verdict
+  or half-written artifact under `.sharpen/grumpy/<branch>/` is how a verdict
   about last week's diff gets read as today's.
 - A `summary.verdict` of `unmeasured` is the script refusing to certify
   nothing. Treat it like a dropped dispatch, not like a clean run.

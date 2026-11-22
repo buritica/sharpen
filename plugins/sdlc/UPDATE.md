@@ -1,9 +1,33 @@
-# sdlc UPDATE — v4.20.0
+# sdlc UPDATE — v4.21.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
+
+## New in 4.21.0 — plans and reports move out of `.claude/`
+
+Plans and specs are now written to `.sharpen/sdlc/<branch>/`, and grumpy 2.15 writes its
+reports and pass receipts to `.sharpen/grumpy/<branch>/`. Headless Claude Code refuses to
+write under `.claude/`, which it treats as its own configuration, so a pass run with
+`claude -p` printed its report instead of saving it. `.sharpen/` already held gate state,
+and no host treats it specially.
+
+- **Nothing to migrate.** The old `.claude/sdlc/` and `.claude/grumpy/` folders are still
+  read when the new ones have nothing: a plan from before the upgrade is found, and a
+  receipt an older grumpy wrote still records its gate. New files go only to `.sharpen/`.
+- **Upgrade grumpy to 2.15 with this release.** They share the path contract. With an
+  older grumpy, receipts still record (the fallback above), but `/grumpy:review` and
+  `/grumpy:imagine` look for the plan only under `.claude/sdlc/`, so they miss a plan this
+  version wrote, and its `diff_base.py` misses the stack base (`base.json`) and resolves the
+  base on its own.
+- **`/sdlc:init` adds `.sharpen/sdlc/` and `.sharpen/grumpy/` to its ignore block.** Both
+  folders also ignore themselves when created, so a repo that skips init stays clean.
+  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` is
+  committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
+  still hold old files there.
+- `/sdlc:plan` worktrees stay under `.claude/worktrees/`. `git worktree add` creates them
+  from a shell, which Claude Code's check on its file tools doesn't cover.
 
 ## New in 4.20.0 — CI no longer checks gate state
 

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 import gate_convergence as gc
 import gate_store as gs
+from artifact_dirs import GRUMPY_ROOT, LEGACY_GRUMPY_ROOT
 
 EVIDENCE_KEY = "evidence"
 EVIDENCE_RECEIPTS = "receipts"
@@ -108,18 +109,28 @@ def receipt_path(worktree_root, branch, skill, gate=None):
     """Where the grumpy pass for `skill` leaves its receipt for `branch`.
 
     Same directory the passes already write their reports to
-    (`<worktree>/.claude/grumpy/<branch>/`). `receipt.py` drops a
-    `.gitignore` holding `*` into `.claude/grumpy/`, and `/sdlc:init` lists it
-    in the repo's `.gitignore` too, so receipts never reach git. For a fix
-    gate, the stage-specific receipt wins when it exists."""
+    (`<worktree>/.sharpen/grumpy/<branch>/`). `receipt.py` drops a
+    `.gitignore` holding `*` into `.sharpen/grumpy/`, and `/sdlc:init` lists
+    it in the repo's `.gitignore` too, so receipts never reach git. For a fix
+    gate, the stage-specific receipt wins when it exists.
+
+    A grumpy before 2.15 wrote to `.claude/grumpy/` instead. When the new
+    folder has no receipt for this gate and the old one does, the old one is
+    returned, so a pass run with the older grumpy still records; every
+    freshness and report check applies to it unchanged (its report sits next
+    to it, in the old folder)."""
     name = RECEIPT_NAME_FOR_SKILL.get(skill)
     if not name or not worktree_root:
         return None
-    directory = os.path.join(worktree_root, ".claude", "grumpy", branch, "receipts")
     stage = FIX_STAGE_RECEIPT.get(gate)
-    if stage and os.path.exists(os.path.join(directory, f"{stage}.json")):
-        name = stage
-    return os.path.join(directory, f"{name}.json")
+    candidates = [stage, name] if stage else [name]
+    for root in (GRUMPY_ROOT, LEGACY_GRUMPY_ROOT):
+        directory = os.path.join(worktree_root, *root, branch, "receipts")
+        for candidate in candidates:
+            path = os.path.join(directory, f"{candidate}.json")
+            if os.path.exists(path):
+                return path
+    return os.path.join(worktree_root, *GRUMPY_ROOT, branch, "receipts", f"{name}.json")
 
 
 def _parse_ts(value):

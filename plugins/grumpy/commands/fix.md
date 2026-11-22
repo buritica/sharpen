@@ -64,7 +64,8 @@ First, check for persisted review artifacts on disk:
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
+[ -d "$ARTIFACT_DIR" ] || ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written before grumpy 2.15
 ```
 
 Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
@@ -208,7 +209,8 @@ two-line fix took 13 gate rounds (sharpen#37). So sort each finding first:
   flag, option, event, metric, alert, probe, endpoint or file; a guard for a
   gap that existed before the branch; a change to code the diff did not
   touch. Read the branch's plan if it exists
-  (`$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md`, its scope and approach) and the
+  (`$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md`, or the legacy
+  `$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md`; its scope and approach) and the
   diff: a remedy outside both is new capability.
 
 When unsure, it is a **fix**. A 🚨 Critical finding is never sorted as new
@@ -614,9 +616,9 @@ Save the fix report so `/sdlc:ship` can read it, the same pattern as
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write (or append to, with a dated `### Fix — YYYY-MM-DD` header — this
@@ -721,7 +723,7 @@ stop here. The fix gate is earned by the run after that fix lands.
 
 Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
-the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+the same gitignored `.sharpen/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
 writer refuses uncommitted changes: commit the fixes, and `git stash` any
 uncertain or partial change Step 4 kept out of the commit (say so in the
@@ -730,7 +732,7 @@ it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 The receipt records the sha256 of `fix.md`, so it is refused unless this
-run saved that report under `.claude/grumpy/<branch>/` first. If the host
+run saved that report under `.sharpen/grumpy/<branch>/` first. If the host
 would not let you write there and you printed the report instead, no receipt
 is written and no gate can be earned from this run: say so plainly, and don't
 write the report somewhere else to get one.
@@ -804,6 +806,6 @@ fi
 
 ## Gotchas
 
-- Fix reads persisted artifacts under `.claude/grumpy/<branch>/` first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
+- Fix reads persisted artifacts under `.sharpen/grumpy/<branch>/` (or the pre-2.15 `.claude/grumpy/<branch>/`) first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
 - Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
 - Fix addresses Critical and Serious findings by dispatching a sub-agent, defers what Step 1b's eligibility table allows (never Critical, Serious only when judgment-tagged in a handful of aspects and only with an issue attached), and asks about whatever Optional findings are left. Nothing is silently dropped anymore — check `## Would file` in the persisted report if `--file-issues` wasn't passed.

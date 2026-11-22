@@ -990,6 +990,14 @@ class LocMeasurementTests(unittest.TestCase):
         self.assertEqual(r["findings"], [])
         self.assertEqual(r["summary"]["excluded"][0]["reason"], "glob:.claude/**")
 
+    def test_agent_scratch_under_sharpen_artifacts_is_not_source(self):
+        self.repo.write(".sharpen/grumpy/main/scratch.rs", lines(3000))
+        self.repo.write(".sharpen/sdlc/main/scratch.rs", lines(3000))
+        r = self.report()
+        self.assertEqual(r["findings"], [])
+        reasons = sorted(e["reason"] for e in r["summary"]["excluded"])
+        self.assertEqual(reasons, ["glob:.sharpen/grumpy/**", "glob:.sharpen/sdlc/**"])
+
     def test_big_test_file_does_not_block(self):
         self.repo.write("tests/test_big.py", lines(1600))
         f = self.by_file(self.report())["tests/test_big.py"]

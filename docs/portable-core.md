@@ -49,7 +49,7 @@ record_skill_completion(
 
 The event fields are a canonical skill ID, canonical invocation cwd, boolean success result, host name/version, and optional invocation ID. The shared recorder validates the event, resolves same- and cross-repo routes, preserves gate ordering and invalidation, and performs the authorized atomic store write. Adapter metadata is returned for diagnostics, not treated as stored authority.
 
-On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.claude/grumpy/<branch>/receipts/`) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
+On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.sharpen/grumpy/<branch>/receipts/`, or `.claude/grumpy/` for a receipt an older grumpy wrote) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
 
 - `record-gate.py --verify <pass>` is the host-neutral path. A gate chain runs it after each pass on any host that can run a shell.
 - Claude Code's `PostToolUse` `Skill` hook and `Stop` hook, and pi's `agent_end`, call the same recorder sooner. They are conveniences; the receipt is the evidence.
@@ -110,7 +110,7 @@ files under `.sharpen/`, unlike `data/`, which is gitignored per-run state.
 
 Artifact folders ignore themselves, so keeping them out of git needs no host
 support and no `/sdlc:init`: whatever creates `.sharpen/data/`,
-`.claude/sdlc/`, `.claude/grumpy/` or `.claude/worktrees/` also writes a
+`.sharpen/sdlc/`, `.sharpen/grumpy/` or `.claude/worktrees/` also writes a
 `.gitignore` holding `*` inside it (the stdlib writers through sdlc's
 `artifact_dirs.py` and grumpy's `receipt.py`, and one shell line beside each
 command's `mkdir -p`). `.sharpen/` itself never gets one, because it holds
@@ -119,7 +119,7 @@ the repo's own `.gitignore` as a second layer.
 
 The gate store and capability-manifest adapter now resolve shared data in this order: an explicit environment override, `.sharpen/data/`, then existing `.claude/data/` as a compatibility fallback. Existing installs therefore keep reading and writing active state until `.sharpen/data/` exists; fresh state starts in the neutral root.
 
-`.claude/sdlc/` and `.claude/grumpy/` remain adapter-local scratch/artifact locations and are not moved by this step. A full migration must still read the old locations, write neutral locations atomically, and preserve a documented rollback path.
+Per-branch plans, specs, reports and receipts moved the same way in sdlc 4.21 and grumpy 2.15: they are written to `.sharpen/sdlc/<branch>/` and `.sharpen/grumpy/<branch>/`, and the old `.claude/sdlc/` and `.claude/grumpy/` folders are only read, when the new location has nothing. The reason is a host one, not tidiness. Claude Code treats `.claude/` as its own configuration: its file tools put a write there through a safety check that no permission rule or classifier can approve, so a headless session refuses it and a pass that writes its report with the Write tool prints the report instead of saving it. No other host sharpen supports has a rule about `.claude/`. The two plugins can't import each other, so each names the grumpy root on its own (`artifact_dirs.GRUMPY_ROOT` in sdlc, `GRUMPY_ROOT` in grumpy's `receipt.py`), and `plugins/sdlc/tests/test_artifact_root.py` fails if they drift. Rolling back is installing the previous versions: they read and write `.claude/` again, and nothing they need was moved out of it. `/sdlc:plan` worktrees still live under `.claude/worktrees/`, because `git worktree add` creates them from a shell, which the file-tool check doesn't cover.
 
 ## Enforcement model
 

@@ -123,11 +123,14 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_EXCLUDE = [
-    # Agent artifacts and scratch. `.claude/**` is where this command and its
-    # siblings write reports and where sub-agents tend to drop scratch files;
-    # a scratch file is not a new source file.
+    # Agent artifacts and scratch. `.sharpen/grumpy/**` and `.sharpen/sdlc/**`
+    # are where this command and its siblings write reports and plans
+    # (`.claude/**` before grumpy 2.15, and still where sub-agents tend to drop
+    # scratch files); a scratch file is not a new source file.
     ".claude/**",
     ".sharpen/data/**",
+    ".sharpen/grumpy/**",
+    ".sharpen/sdlc/**",
     "vendor/**",
     "node_modules/**",
     "third_party/**",

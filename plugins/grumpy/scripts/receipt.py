@@ -4,7 +4,7 @@
 Usage:
   receipt.py <simplify|review|imagine|fix> [--stage review|imagine] [--worktree <path>]
 
-Writes `<worktree>/.claude/grumpy/<branch>/receipts/<pass>.json`, next to the
+Writes `<worktree>/.sharpen/grumpy/<branch>/receipts/<pass>.json`, next to the
 report the pass already wrote, naming the commit the pass ran against and the
 sha256 of that report. No report on disk (or one left from the last run), no
 receipt. The
@@ -35,6 +35,13 @@ import tempfile
 from datetime import datetime, timezone
 
 PASSES = ("simplify", "review", "imagine", "fix")
+
+# Where grumpy's per-branch artifacts live, relative to the worktree root.
+# sdlc reads receipts from here and can't import this file, so it keeps its own
+# copy in `artifact_dirs.GRUMPY_ROOT`; a test in sdlc pins the two together.
+# Before grumpy 2.15 this was `.claude/grumpy/`, which Claude Code treats as
+# its own config and a headless session refuses to write.
+GRUMPY_ROOT = (".sharpen", "grumpy")
 FIX_STAGES = ("review", "imagine")
 # The report each pass writes next to its receipt, before the receipt.
 REPORT_FOR = {p: f"{p}.md" for p in PASSES}
@@ -47,7 +54,7 @@ def _git(wt, *args):
 
 
 def _ensure_self_ignored(grumpy_root):
-    """Drop a `.gitignore` holding `*` into `.claude/grumpy/`, so reports and
+    """Drop a `.gitignore` holding `*` into `.sharpen/grumpy/`, so reports and
     receipts stay out of git even in a repo whose own `.gitignore` never
     listed them. Same text the grumpy commands write; an existing file is
     left alone."""
@@ -72,7 +79,7 @@ def _report_digest(report, previous_receipts):
     """sha256 of the pass's report, or ValueError when there is no fresh one.
 
     A receipt is evidence that the pass ran AND left its report. A pass that
-    couldn't save its report (a host that won't write under .claude/, say)
+    couldn't save its report (a host that won't write where it was told, say)
     printed it instead, and must not earn a gate: there is nothing on disk
     for the gate to point at. A report no newer than this pass's previous
     receipt is a leftover from the last run, not this one."""
@@ -115,7 +122,7 @@ def write_receipt(pass_name, worktree=".", stage=None):
         raise ValueError("uncommitted changes: commit the pass's edits first")
     root = _git(worktree, "rev-parse", "--show-toplevel")
     head = _git(worktree, "rev-parse", "HEAD")
-    artifacts = os.path.join(root, ".claude", "grumpy", branch)
+    artifacts = os.path.join(root, *GRUMPY_ROOT, branch)
     directory = os.path.join(artifacts, "receipts")
     name = f"fix-{stage}" if stage else pass_name
     path = os.path.join(directory, f"{name}.json")
@@ -132,7 +139,7 @@ def write_receipt(pass_name, worktree=".", stage=None):
     )
     digest = _report_digest(report, siblings)
     os.makedirs(directory, exist_ok=True)
-    _ensure_self_ignored(os.path.join(root, ".claude", "grumpy"))
+    _ensure_self_ignored(os.path.join(root, *GRUMPY_ROOT))
     receipt = {
         "protocol_version": "1",
         "skill": pass_name,

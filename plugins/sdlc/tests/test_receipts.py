@@ -78,7 +78,7 @@ class ReceiptTestBase(unittest.TestCase):
     def report(self, pass_name, text=None):
         """What the pass writes before its receipt: its report."""
         branch = git(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
-        d = os.path.join(self.repo, ".claude", "grumpy", branch)
+        d = os.path.join(self.repo, ".sharpen", "grumpy", branch)
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"{pass_name}.md")
         with open(path, "w") as f:
@@ -204,7 +204,7 @@ class VerifyTest(ReceiptTestBase):
 
     def test_receipt_whose_report_is_gone_is_refused(self):
         self.receipt("review")
-        os.unlink(os.path.join(self.repo, ".claude", "grumpy", BRANCH, "review.md"))
+        os.unlink(os.path.join(self.repo, ".sharpen", "grumpy", BRANCH, "review.md"))
         r = self.verify("review")
         self.assertEqual(r.returncode, 1)
         self.assertIn("report this receipt names is missing", r.stderr)

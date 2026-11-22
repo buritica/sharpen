@@ -53,7 +53,7 @@ class StackTest(ReceiptTestBase):
         git(self.repo, "commit", "-q", "-m", msg or f"add {rel}")
 
     def base_file(self):
-        path = os.path.join(self.repo, ".claude", "sdlc", BRANCH, "base.json")
+        path = os.path.join(self.repo, ".sharpen", "sdlc", BRANCH, "base.json")
         with open(path) as f:
             return json.load(f)
 
@@ -361,7 +361,7 @@ class FixReceiptTest(ReceiptTestBase):
             GRUMPY_RECEIPT, "fix", "--stage", stage, "--worktree", self.repo
         )
         self.assertEqual(r.returncode, 0, r.stderr)
-        d = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
+        d = os.path.join(self.repo, ".sharpen", "grumpy", BRANCH, "receipts")
         with open(os.path.join(d, f"fix-{stage}.json")) as f:
             self.assertEqual(json.load(f)["stage"], stage)
         time.sleep(0.01)

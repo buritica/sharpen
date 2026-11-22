@@ -46,7 +46,7 @@ Then create the PR with `gh pr create`. Follow these conventions:
 
 **Body:** Include `Closes #XXX` when a linked issue exists. Include `## Deferred`
 only when the branch added at least one `ponytail:` marker — check
-`.claude/grumpy/<branch>/fix.md`'s own `## Deferred` section first; if that
+`.sharpen/grumpy/<branch>/fix.md`'s (or, from grumpy before 2.15, `.claude/grumpy/<branch>/fix.md`'s) own `## Deferred` section first; if that
 artifact doesn't exist (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
 `git diff "$BASE"...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
@@ -105,7 +105,8 @@ After the PR is created, update the plan artifact if it exists:
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
-PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"
+PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
+[ -f "$PLAN" ] || PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21
 ```
 
 If `$PLAN` exists, append:
@@ -116,7 +117,7 @@ PR #<number> — YYYY-MM-DD
 <diff stats from `git diff --stat "$BASE"...HEAD` — e.g. "+342/-28 across 6 files">
 ```
 
-If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.claude/sdlc/`, so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).
+If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.sharpen/sdlc/` (or `.claude/sdlc/` for an older plan), so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).
 
 ## Merge
 
