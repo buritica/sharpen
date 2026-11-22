@@ -176,7 +176,7 @@ fi
 
 If `$BASE` resolved, run `git -C "$WT" diff "$MB"`. That single working-tree
 diff against the merge base covers both committed and uncommitted changes —
-the gate often runs before the commit. If `$BASE` never resolved, `$MB` is
+the pass may run before the commit (commit before Phase 5's receipt, though). If `$BASE` never resolved, `$MB` is
 `HEAD~1` and the diff is against that.
 
 Also collect the full list of changed files
@@ -642,16 +642,21 @@ Last step, after everything above, including any fixes from Phase 4 and the re-m
 gate chain record this pass. It names the commit this pass ran against, in
 the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
-writer refuses uncommitted changes, so commit what this pass changed first. Skip
+writer refuses uncommitted changes, so commit the fixes Phase 4 applied
+first. If the tree was already dirty with someone else's work, don't commit
+it to get a receipt: report that no receipt was written. Skip
 it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 ```bash
+# Shell state doesn't persist between calls: set WT to the --worktree path
+# again if one was given, or the receipt lands on the wrong branch.
 WT="${WT:-.}"
-# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there); Claude
-# Code and Codex set CLAUDE_PLUGIN_ROOT per plugin. If neither is set, point
-# RECEIPT at <grumpy plugin root>/scripts/receipt.py yourself.
-RECEIPT="${GRUMPY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
+# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
+# shell. If neither is set, point RECEIPT at
+# <grumpy plugin root>/scripts/receipt.py yourself.
+RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
   python3 "$RECEIPT" simplify --worktree "$WT"
 else

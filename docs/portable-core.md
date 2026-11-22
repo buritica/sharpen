@@ -50,7 +50,7 @@ record_skill_completion(
 
 The event fields are a canonical skill ID, canonical invocation cwd, boolean success result, host name/version, and optional invocation ID. The shared recorder validates the event, resolves same- and cross-repo routes, preserves gate ordering and invalidation, and performs the authorized atomic store write. Adapter metadata is returned for diagnostics, not treated as stored authority.
 
-On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.claude/grumpy/<branch>/receipts/`) names the branch's current HEAD, was written after the cycle started, and, for a fix gate, after the gate it follows. That makes every host equal:
+On a receipt-backed cycle (every cycle `--init` or auto-init creates; see `gate.md`, "How skill gates record") the event alone proves nothing. The recorder stamps a gate only when the grumpy pass's receipt (`schemas/grumpy-receipt.v1.schema.json`, under the gitignored `.claude/grumpy/<branch>/receipts/`) names a commit on the branch (HEAD, or an ancestor once a later fix has committed), was written after the cycle started, and, for a fix gate, after the receipt of the pass it follows. Enforce then requires the last skill gate to sit on HEAD. That makes every host equal:
 
 - `record-gate.py --verify <pass>` is the host-neutral path. A gate chain runs it after each pass on any host that can run a shell.
 - Claude Code's `PostToolUse` `Skill` hook and `Stop` hook, and pi's `agent_end`, call the same recorder sooner. They are conveniences; the receipt is the evidence.

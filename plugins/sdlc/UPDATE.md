@@ -26,6 +26,8 @@ A new gate cycle is now **receipt-backed**:
 - `enforce-sdlc-gates` blocks `gh pr create` when the last review gate was earned on
   an older commit than HEAD, and names the stale gates. Re-run the chain on the new
   HEAD. A rebase counts, so rebase before the chain (`/sdlc:ship` now says so).
+  `--status` and `--oneline` show the same warning, so it doesn't surface first at
+  `gh pr create`.
 
 **What an existing repo needs to do:** nothing. A cycle that was already open keeps the old
 event-only recording until it is re-initialised, and receipts are written under the

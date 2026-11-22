@@ -506,16 +506,21 @@ Last step, after everything above, including the commit in Step 4 and any option
 gate chain record this pass. It names the commit this pass ran against, in
 the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
-writer refuses uncommitted changes, so commit what this pass changed first. Skip
+writer refuses uncommitted changes: commit the fixes, and `git stash` any
+uncertain or partial change Step 4 kept out of the commit (say so in the
+summary). Skip
 it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 ```bash
+# Shell state doesn't persist between calls: set WT to the --worktree path
+# again if one was given, or the receipt lands on the wrong branch.
 WT="${WT:-.}"
-# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there); Claude
-# Code and Codex set CLAUDE_PLUGIN_ROOT per plugin. If neither is set, point
-# RECEIPT at <grumpy plugin root>/scripts/receipt.py yourself.
-RECEIPT="${GRUMPY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/receipt.py"
+# pi exports GRUMPY_PLUGIN_ROOT (CLAUDE_PLUGIN_ROOT is sdlc's there). Other
+# hosts may set CLAUDE_PLUGIN_ROOT, though not always in the agent's own
+# shell. If neither is set, point RECEIPT at
+# <grumpy plugin root>/scripts/receipt.py yourself.
+RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
   python3 "$RECEIPT" fix --worktree "$WT"
 else

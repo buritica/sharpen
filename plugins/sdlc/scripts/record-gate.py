@@ -212,17 +212,16 @@ def _verify(target, branch_override):
         return 1
     cwd = os.path.realpath(os.getcwd())
     if target == "all":
-        swept = completion.sweep_receipts(cwd=cwd, host="cli")
+        swept = completion.sweep_receipts(cwd=cwd, host="cli", quick=False)
         for r in swept["recorded"]:
             _log(f"[gate] ✓ {r['gate']} recorded on {r['target']} from its receipt")
         for reason in dict.fromkeys(swept["refused"]):
             _log(f"[gate] {reason}")
         if swept["error"]:
             _log(f"[gate] error: {swept['error']}")
-            return 1
-        if not swept["recorded"]:
+        elif not swept["recorded"] and not swept["refused"]:
             _log("[gate] no new receipts to record")
-        return 0
+        return 1 if swept["error"] or swept["refused"] else 0
     skill = target if target.startswith("grumpy:") else f"grumpy:{target}"
     if skill not in gs.SKILL_TO_GATE:
         _log(
@@ -241,10 +240,13 @@ def _verify(target, branch_override):
             _log(f"[gate] {g} cleared: {result['gate']} can change code, re-run it")
         return 0
     reason = result.get("error") or result.get("reason") or ""
-    if not result.get("error") and "already recorded" in reason:
-        _log(f"[gate] {skill}: nothing left to record ({reason})")
+    if not result.get("error") and '" already recorded' in reason:
+        _log(
+            f"[gate] {skill}: nothing left to record ({reason}). A gate is "
+            "earned once per cycle; after a stale-gates block, re-init first."
+        )
         return 0
-    _log(f"[gate] {skill} not recorded: {reason}")
+    _log(f"[gate] {skill}: {reason}")
     return 1
 
 
@@ -549,6 +551,7 @@ def main(argv):
         elif command == "--status":
             data = gs.load_store(path)
             out = gs.format_status(data.get(branch), branch)
+            out += rc.stale_suffix(data.get(branch), branch)
             # `format_status`'s own "Driven from:" line only reaches whoever
             # asks about the branch being routed TO. The source side — the
             # worktree actually doing the driving — had no way to learn this
@@ -581,7 +584,9 @@ def main(argv):
                 out += f"\n\n{note}"
             sys.stdout.write(out + "\n")
         elif command == "--oneline":
-            sys.stdout.write(gs.format_oneline(gs.load_store(path).get(branch)) + "\n")
+            bd = gs.load_store(path).get(branch)
+            line = gs.format_oneline(bd) + rc.stale_suffix(bd, branch)
+            sys.stdout.write(line + "\n")
         else:
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "

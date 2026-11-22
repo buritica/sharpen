@@ -193,8 +193,31 @@ class VerifyTest(ReceiptTestBase):
         self.receipt("review")
         git(self.repo, "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten")
         r = self.verify("all")
-        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 1)
         self.assertIn("re-run the pass", r.stderr)
+
+    def test_verify_fix_before_review_is_not_reported_as_done(self):
+        self.receipt("fix")
+        r = self.verify("fix")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("nothing left to record", r.stderr)
+
+    def test_late_record_keeps_checks_that_ran_after_the_pass(self):
+        # simplify finished and left its receipt; tests/lint/typecheck ran
+        # after it; only then does anything record simplify.
+        self.receipt("simplify")
+        for gate in ("tests", "lint", "typecheck"):
+            self.assertEqual(self.cli("--record", gate).returncode, 0)
+        self.assertEqual(self.verify("simplify").returncode, 0)
+        for gate in ("tests", "lint", "typecheck"):
+            self.assertIn(gate, self.gates())
+
+    def test_checks_from_before_the_pass_are_still_cleared(self):
+        self.cli("--record", "tests")
+        time.sleep(0.01)
+        self.receipt("simplify")
+        self.assertEqual(self.verify("simplify").returncode, 0)
+        self.assertNotIn("tests", self.gates())
 
     def test_late_review_verify_does_not_strand_the_fix_receipt(self):
         # Review and fix both finished before anything recorded.
@@ -338,6 +361,19 @@ class HostHookTest(ReceiptTestBase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("sweep stopped", r.stdout)
 
+    def test_stop_sweep_outside_a_receipt_cycle_takes_no_lock(self):
+        plain = os.path.realpath(tempfile.mkdtemp())
+        r = subprocess.run(
+            ["python3", SWEEP],
+            input=json.dumps({"cwd": plain}),
+            capture_output=True,
+            text=True,
+            env=dict(os.environ),
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stderr, "")
+        self.assertFalse(os.path.exists(os.path.join(plain, ".sharpen")))
+
     def test_stop_sweep_with_nothing_to_do_is_silent(self):
         r = self.hook(SWEEP, {"hook_event_name": "Stop", "cwd": self.repo})
         self.assertEqual(r.returncode, 0)
@@ -363,6 +399,12 @@ class LegacyCycleTest(ReceiptTestBase):
         r = self.hook(SWEEP, {"hook_event_name": "Stop", "cwd": self.repo})
         self.assertEqual(r.returncode, 0)
         self.assertEqual(self.gates(), {})
+
+    def test_verify_all_on_a_legacy_cycle_is_not_a_silent_success(self):
+        self.receipt("review")
+        r = self.verify("all")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("predates receipts", r.stderr)
 
     def test_verify_on_a_legacy_cycle_says_to_re_init(self):
         self.receipt("review")
@@ -413,6 +455,26 @@ class EnforceStalenessTest(ReceiptTestBase):
             self.cli("--record", gate)
         r = self.pr_create()
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_status_lines_warn_when_enforce_would_block_as_stale(self):
+        self.run_chain()
+        self.commit("after review")
+        r = self.cli("--oneline")
+        self.assertIn("Stale", r.stdout)
+        self.assertIn("--init small-medium", r.stdout)
+        self.assertIn("Stale", self.cli("--status").stdout)
+
+    def test_unattested_headless_last_gate_is_stale(self):
+        # A session still running a pre-receipt sdlc stamps at Skill load,
+        # with no head: no evidence, so enforce must not wave it through.
+        self.run_chain()
+        gs.update_store(
+            self.store,
+            lambda d: d[BRANCH]["evidence_heads"].pop("grumpy-fix-post-imagine"),
+        )
+        r = self.pr_create()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no receipt", r.stderr)
 
     def test_attested_last_gate_is_not_judged_stale(self):
         for step in ("simplify", "review", "fix", "imagine"):

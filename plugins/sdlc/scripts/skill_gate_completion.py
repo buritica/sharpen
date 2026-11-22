@@ -6,7 +6,7 @@ Claude PostToolUse Skill hook, the Claude Stop / pi agent_end receipt sweep,
 and `record-gate.py --verify` (which a gate chain runs after each grumpy pass,
 on any host). On a receipt-backed cycle (`evidence: receipts`) the event alone
 proves nothing: the gate records only when the pass's receipt names the
-branch's current HEAD (see gate_receipts.check_receipt). Legacy cycles keep the
+branch's HEAD or an ancestor of it (see gate_receipts.check_receipt). Legacy cycles keep the
 old event-only behaviour. --attest stays the visible fallback when no receipt
 can be produced.
 """
@@ -66,7 +66,7 @@ def find_active_cycle(data, skill, active_branches):
 
 
 def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
-    """For a receipt-backed cycle: (head, None) when the receipt earns
+    """For a receipt-backed cycle: (receipt, None) when the receipt earns
     `gate`, else (None, refusal dict). Legacy cycles: (None, None), unless
     the caller is a receipt-only path (a sweep, --verify), which must never
     stamp a legacy cycle on no evidence at all."""
@@ -84,7 +84,7 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
             }
         return None, None
     root, head, reachable = (evidence or {}).get(target_branch, (None, None, ()))
-    rhead, reason = rc.check_receipt(
+    receipt, reason = rc.check_receipt(
         rc.receipt_path(root, target_branch, skill),
         skill=skill,
         gate=gate,
@@ -104,7 +104,24 @@ def _receipt_gate(skill, gate, target_branch, bd, evidence, require_receipt):
             "reason": f'"{gate}" not recorded: {reason}',
             "awaiting_receipt": True,
         }
-    return rhead, None
+    return receipt, None
+
+
+def _record(data, target_branch, gate, receipt):
+    """The one authorized stamp: a trusted completion event (legacy cycle)
+    or a fresh receipt (receipt-backed cycle)."""
+    before = dict(data[target_branch].get("gates", {}))
+    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
+    if receipt:
+        invalidated = rc.stamp_receipt(
+            data, target_branch, gate, receipt, invalidated, before
+        )
+    return {
+        "recorded": True,
+        "gate": gate,
+        "target": target_branch,
+        "invalidated": invalidated,
+    }
 
 
 def handle_skill_completion(
@@ -188,23 +205,10 @@ def handle_skill_completion(
                 ),
                 "surprising": True,
             }
-        head, refusal = _receipt_gate(
+        receipt, refusal = _receipt_gate(
             skill, gate, target_branch, bd, evidence, require_receipt
         )
-        if refusal:
-            return refusal
-        # Routed or not: a trusted completion event (legacy cycle) or a fresh
-        # receipt (receipt-backed cycle) is the authorization.
-        invalidated = gs.record_gate_and_diff(
-            data, target_branch, gate, authorized=True
-        )
-        rc.stamp_head(data, target_branch, gate, head)
-        return {
-            "recorded": True,
-            "gate": gate,
-            "target": target_branch,
-            "invalidated": invalidated,
-        }
+        return refusal or _record(data, target_branch, gate, receipt)
 
     if not branch:
         # Distinct from detached HEAD so the message says which happened, but
@@ -271,21 +275,10 @@ def handle_skill_completion(
     if bd.get("gates", {}).get(gate):
         return {"recorded": False, "reason": f'"{gate}" already recorded'}
 
-    head, refusal = _receipt_gate(
+    receipt, refusal = _receipt_gate(
         skill, gate, target_branch, bd, evidence, require_receipt
     )
-    if refusal:
-        return refusal
-    # A trusted completion event (legacy cycle) or a fresh receipt
-    # (receipt-backed cycle) — the one authorized recorder.
-    invalidated = gs.record_gate_and_diff(data, target_branch, gate, authorized=True)
-    rc.stamp_head(data, target_branch, gate, head)
-    return {
-        "recorded": True,
-        "gate": gate,
-        "target": target_branch,
-        "invalidated": invalidated,
-    }
+    return refusal or _record(data, target_branch, gate, receipt)
 
 
 def record_skill_completion(
@@ -343,14 +336,7 @@ def record_skill_completion(
     # Normalize paths at the adapter boundary so every subsequent git question
     # and cross-repo registry lookup identifies the same worktree spelling.
     cwd = os.path.realpath(cwd)
-    source_root = gs.canonical_worktree_root(cwd)
-    cross = gs.resolve_cross_repo_route(source_root, cwd=cwd)
-    if cross:
-        path = cross["store_path"]
-        git_cwd = cross["target_root"]
-    else:
-        path = gs.default_store_path(cwd)
-        git_cwd = cwd
+    source_root, path, git_cwd = _store_for(cwd)
     heads = rc.worktree_heads(git_cwd)
     active = set(heads) if heads is not None else None
     # Ancestry needs git, and git never runs inside the store lock.
@@ -411,7 +397,30 @@ SWEEP_ORDER = (
 )
 
 
-def sweep_receipts(*, cwd, host, host_version=None):
+def _store_for(cwd):
+    """(source_root, store_path, git_cwd) for a canonical cwd, following a
+    cross-repo route when one is registered."""
+    source_root = gs.canonical_worktree_root(cwd)
+    cross = gs.resolve_cross_repo_route(source_root, cwd=cwd)
+    if cross:
+        return source_root, cross["store_path"], cross["target_root"]
+    return source_root, gs.default_store_path(cwd), cwd
+
+
+def _any_receipt_cycle(cwd):
+    """False outside a repo, or when no cycle in the store is receipt-backed:
+    nothing a sweep could record, so skip the git work and the store lock."""
+    if not gs.canonical_worktree_root(cwd):
+        return False
+    _, path, _ = _store_for(cwd)
+    try:
+        data = gs.load_store(path)
+    except Exception:
+        return True  # let the real pass report the store problem
+    return any(rc.uses_receipts(bd) for bd in data.values())
+
+
+def sweep_receipts(*, cwd, host, host_version=None, quick=True):
     """Record every skill gate whose receipt is already on disk, in chain
     order. Used by end-of-turn hooks (Claude Stop, pi agent_end) and by
     `record-gate.py --verify all`, so a pass whose own --verify was skipped
@@ -420,6 +429,8 @@ def sweep_receipts(*, cwd, host, host_version=None):
     Returns {"recorded": [results], "refused": [reasons for receipts that
     exist but don't count], "error": str or None}."""
     out = {"recorded": [], "refused": [], "error": None}
+    if quick and not _any_receipt_cycle(os.path.realpath(cwd)):
+        return out  # end-of-turn hooks: every turn, every repo, stay cheap
     for skill in SWEEP_ORDER:
         result = record_skill_completion(
             skill=skill,
@@ -434,8 +445,9 @@ def sweep_receipts(*, cwd, host, host_version=None):
         elif result.get("error"):
             out["error"] = result["error"]
             break
-        elif result.get("awaiting_receipt") and "no receipt yet" not in result.get(
-            "reason", ""
+        elif result.get("legacy_cycle") or (
+            result.get("awaiting_receipt") and "no receipt yet" not in result["reason"]
         ):
-            out["refused"].append(result["reason"])
+            if result["reason"] not in out["refused"]:
+                out["refused"].append(result["reason"])
     return out

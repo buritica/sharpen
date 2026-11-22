@@ -301,7 +301,7 @@ bundle.
 
 `/sdlc:gate` accepts `--worktree <path>` (alias `--path <path>`): branch detection and gate recording run against that worktree instead of the current directory. Use it when the invoking session's cwd isn't the worktree being gated (orchestrators, parallel worktree agents). Flag absent = current directory, unchanged.
 
-`--branch` carries the bash-verifiable gates (`tests`, `lint`, `typecheck`) to the target. The skill-gated ones (`simplify`, `grumpy-*`) are stamped by a PostToolUse hook that only sees the cwd the skill ran in — the *driving* session, not the target. So `--init` also writes a route:
+`--branch` carries the bash-verifiable gates (`tests`, `lint`, `typecheck`) to the target. The skill-gated ones (`simplify`, `grumpy-*`) are recorded by `--verify`, the Stop sweep or the PostToolUse hook, all of which start from the cwd they run in — the *driving* session, not the target. So `--init` also writes a route:
 
 ```bash
 record-gate.py --init small-medium --branch "$TARGET_BRANCH" --route-from "$PWD"

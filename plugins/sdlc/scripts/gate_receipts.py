@@ -2,7 +2,8 @@
 """Receipt-backed skill-gate evidence (sharpen#52, #53).
 
 A cycle initialized with `evidence: receipts` stamps a skill gate only when
-the grumpy pass that earns it left a receipt naming the branch's current HEAD.
+the grumpy pass that earns it left a receipt naming a commit on the branch
+(HEAD, or an ancestor once a later pass has committed).
 The receipt is written by the pass itself, at its end, so "the skill was
 loaded" (all a PostToolUse Skill event can prove) no longer counts as "the
 work ran". This is a guard against skipping steps, not against forgery: we're
@@ -111,7 +112,9 @@ def _parse_ts(value):
 def read_receipt(path):
     """The receipt at `path` as a dict, or (None, reason)."""
     if not path or not os.path.isfile(path):
-        return None, (f"no receipt yet at {path}" if path else "no receipt location")
+        if not path:
+            return None, "no receipt location"
+        return None, f"no receipt yet at {path} (grumpy 2.9.0+ writes one)"
     try:
         with open(path) as f:
             receipt = json.load(f)
@@ -138,8 +141,8 @@ def _predecessor_written(path, gate, branch_data):
 
 
 def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=()):
-    """Return (receipt_head, None) when the receipt at `path` earns `gate`,
-    else (None, reason).
+    """Return (receipt, None) when the receipt at `path` earns `gate`, else
+    (None, reason).
 
     A receipt earns a gate when it is for this skill and branch, names the
     branch's current `head` or a commit in `reachable` (ancestors of it the
@@ -171,7 +174,27 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     before, prior = _predecessor_written(path, gate, branch_data)
     if prior and written <= prior:
         return None, f"receipt at {path} predates the {before} pass it must follow"
-    return rhead, None
+    return receipt, None
+
+
+def stamp_receipt(data, branch, gate, receipt, invalidated, before):
+    """After record_gate_and_diff stamped `gate` from `receipt`: remember the
+    commit it was earned on, and put back any tests/lint/typecheck stamp
+    taken AFTER the receipt was written. Those ran against the pass's
+    committed code, so a late --verify or sweep must not clear them. Returns
+    the gates that stay cleared."""
+    bd = data[branch]
+    stamp_head(data, branch, gate, receipt.get("head"))
+    written = _parse_ts(receipt.get("written_at"))
+    cleared = []
+    for g in invalidated:
+        ran = _parse_ts(before.get(g))
+        if written and ran and ran > written:
+            bd.setdefault("gates", {})[g] = before[g]
+            bd.get("invalidated_by", {}).pop(g, None)
+        else:
+            cleared.append(g)
+    return cleared
 
 
 def receipt_heads(worktree_root, branch, head, cwd=None):
@@ -233,6 +256,42 @@ def stale_skill_gates(branch_data, head):
     # block a PR the person just unblocked.
     attested = branch_data.get("attestations") or {}
     last = recorded[-1] if recorded else None
-    if not last or last in attested or not heads.get(last) or heads[last] == head:
+    # A headless gate that nobody attested was stamped without a receipt (a
+    # session still running a pre-receipt sdlc): no evidence, so stale.
+    if not last or last in attested or heads.get(last) == head:
         return []
-    return [g for g in recorded if heads.get(g) and heads[g] != head]
+    return [g for g in recorded if g not in attested and heads.get(g) != head]
+
+
+def branch_head(branch, cwd=None):
+    """The commit `branch` points at locally, or None (e.g. a fork's
+    `--head owner:branch` that isn't a local ref): staleness then can't be
+    judged and is skipped rather than guessed."""
+    try:
+        return gs._git("rev-parse", "--verify", "-q", f"refs/heads/{branch}", cwd=cwd)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def stale_message(branch_data, branch, stale):
+    """Why these gates are stale and how to get out, shared by enforce and
+    --status/--oneline."""
+    heads = branch_data.get(EVIDENCE_HEADS_KEY, {})
+    seen = ", ".join(
+        f"{g} ({'reviewed ' + heads[g][:12] if heads.get(g) else 'no receipt'})"
+        for g in stale
+    )
+    return (
+        f"Stale ({len(stale)}): {seen}. A commit landed after the review chain "
+        f'on "{branch}". Re-run it on the current HEAD: /sdlc:gate --init '
+        f"{branch_data.get('tier')} (this also clears tests/lint/typecheck), "
+        "then the passes again."
+    )
+
+
+def stale_suffix(branch_data, branch, cwd=None):
+    """A status-line warning when enforce would block as stale, else ''."""
+    if not uses_receipts(branch_data):
+        return ""
+    stale = stale_skill_gates(branch_data, branch_head(branch, cwd))
+    return f"\n⚠ {stale_message(branch_data, branch, stale)}" if stale else ""

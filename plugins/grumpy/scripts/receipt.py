@@ -39,6 +39,10 @@ def write_receipt(pass_name, worktree="."):
     branch = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
     if branch == "HEAD":
         raise ValueError("detached HEAD: a receipt needs a named branch")
+    if branch in ("main", "master"):
+        # Gates track feature branches. A pass that lands here was most likely
+        # pointed at the wrong worktree (a lost --worktree).
+        raise ValueError(f'"{branch}" has no gate cycle; is --worktree right?')
     if _git(worktree, "status", "--porcelain", "--untracked-files=no"):
         # The receipt names HEAD. Uncommitted edits (simplify's applied fixes,
         # fix's leftovers) would land in a later commit the pass never saw,
@@ -57,10 +61,15 @@ def write_receipt(pass_name, worktree="."):
     }
     path = os.path.join(directory, f"{pass_name}.json")
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{pass_name}.", suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(receipt, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(receipt, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     return path, receipt
 
 

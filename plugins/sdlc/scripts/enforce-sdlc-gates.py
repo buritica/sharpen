@@ -163,18 +163,6 @@ def check_gates(tool, tool_input):
     return True, None, None, notes
 
 
-def _branch_head(branch, workdir):
-    """The commit `branch` points at locally, or None (e.g. a fork's
-    `--head owner:branch` that isn't a local ref) — staleness then can't be
-    judged and is skipped rather than guessed."""
-    try:
-        return gs._git(
-            "rev-parse", "--verify", "-q", f"refs/heads/{branch}", cwd=workdir
-        )
-    except (OSError, gs.subprocess.CalledProcessError):
-        return None
-
-
 def _check_one(inv):
     """One `gh pr create` invocation → (allowed, error, state, notes), the same
     4-tuple check_gates returns and documents."""
@@ -228,10 +216,9 @@ def _check_one(inv):
 
     missing = gs.missing_gates(bd)
     if not missing:
-        stale = rc.stale_skill_gates(bd, _branch_head(branch, workdir))
+        stale = rc.stale_skill_gates(bd, rc.branch_head(branch, workdir))
         if not stale:
             return True, None, None, notes
-        heads = bd.get(rc.EVIDENCE_HEADS_KEY, {})
         state = {
             "branch": branch,
             "tier": bd.get("tier"),
@@ -242,14 +229,8 @@ def _check_one(inv):
         }
         return (
             False,
-            (
-                f'SDLC review gates are stale for branch "{branch}": a commit '
-                "landed after the review chain finished.\n\n"
-                f"Stale ({len(stale)}): "
-                + ", ".join(f"{g} (reviewed {heads[g][:12]})" for g in stale)
-                + "\n\nRe-run the chain on the current HEAD: "
-                "/sdlc:gate --init <tier>, then the passes again."
-            ),
+            f'SDLC review gates are stale for branch "{branch}".\n\n'
+            + rc.stale_message(bd, branch, stale),
             state,
             notes,
         )
