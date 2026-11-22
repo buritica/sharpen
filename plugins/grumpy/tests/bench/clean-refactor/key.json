@@ -1,0 +1,9 @@
+{
+  "passes": ["review"],
+  "description": "A behavior-preserving rename of calc to order_total across its module, its only caller and its tests. Nothing here should block a merge; any CRIT or WARN is noise.",
+  "planted": [],
+  "acceptable": [
+    {"id": "no-compat-alias", "file": "shop/orders.py", "lines": [6, 6],
+     "keywords": ["alias", "backward", "compat", "external caller", "other caller", "breaking", "public"], "max_severity": "NOTE"}
+  ]
+}

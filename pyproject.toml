@@ -1,5 +1,7 @@
 [tool.ruff]
 target-version = "py39"
+# Benchmark fixtures plant bugs (undefined names, unused imports) on purpose.
+extend-exclude = ["plugins/grumpy/tests/bench"]
 
 [tool.ruff.lint]
 # Ruff's own documented defaults (pyflakes + a pycodestyle error subset):

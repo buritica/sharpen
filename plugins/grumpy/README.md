@@ -72,6 +72,28 @@ agent and escalating one tier on a failed `accept:` check:
 The role→model map lives in `models.yaml` (single switch point; Claude native,
 Fable marked `wrapper-required` until a per-provider runner exists).
 
+## Measuring review quality
+
+`scripts/bench-grumpy.py` (repo-level, not shipped in the plugin) benchmarks the
+review and imagine passes. It runs the real pass headlessly on Claude Code, Codex
+or pi against small fixture repos in `tests/bench/`, scores the report the pass
+writes against each case's answer key, and compares runs:
+
+- **recall**: planted issues found, matched by file, a line window and a keyword,
+  one finding per issue
+- **precision**: of the distinct, located CRIT/WARN findings, the share that are
+  planted or known-acceptable within their severity cap. Duplicates (a second finding
+  for an issue already claimed) and findings with no file reference are counted on
+  their own, not in precision.
+- **blocking noise**: CRIT/WARN findings that match nothing
+- **overrated**: acceptable findings rated above their cap (a missing log line flagged
+  as a must-fix), counted against precision and compared on their own
+
+Clean, comment-only and capability-bait cases have no planted issues, so any
+blocking finding there is noise of the kind that makes review loops run long.
+Results go to the gitignored `.sharpen/bench/`; nothing runs in CI. See
+[`tests/bench/README.md`](tests/bench/README.md).
+
 ## Simplify policy and config
 
 `/grumpy:simplify` classifies every finding by comparing head against the

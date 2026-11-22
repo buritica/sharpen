@@ -34,15 +34,25 @@ Review runs through `grumpy`, not by hand: `/grumpy:review` and `/grumpy:imagine
 3 and 5, and `/grumpy:fix` is how their findings get resolved. Reviewing your own diff in
 your head does not record a gate, by design.
 
-If you edit `plugins/grumpy/commands/review.md` or `imagine.md`'s sub-agent prompt
-contract (the compact `SEVERITY|file:line|text|FACT|ASPECT`/`DOMAIN` pipe format each
-sub-agent returns), re-run the recall eval before merging:
-`plugins/grumpy/tests/fixtures/` holds a fixture diff with 7 planted issues and a golden
-answer key; `scripts/eval-grumpy-findings.py` scores a candidate findings run (JSON or raw
-pipe-format output) against it — see `plugins/grumpy/tests/fixtures/README.md` for the
-run steps. This is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only
-constraint below), so a prompt-wording change can silently regress recall if the eval is
-skipped — recall must stay at 100% on the fixture, not just "look reasonable."
+If you edit `plugins/grumpy/commands/review.md` or `imagine.md` (or their generated
+SKILL.md), or change the model a pass runs on, run the review benchmark before merging and
+compare against your last baseline:
+
+```sh
+python3 scripts/bench-grumpy.py run --host claude --pass review   # or imagine, all
+python3 scripts/bench-grumpy.py compare <baseline results.json> <new results.json>
+```
+
+It runs the real pass headlessly on Claude Code, Codex or pi against the fixture repos in
+`plugins/grumpy/tests/bench/` (planted issues, plus clean, comment-only and
+capability-bait diffs that measure noise), scores the report the pass writes for recall,
+precision and blocking noise, and writes results to the gitignored `.sharpen/bench/`. See
+`plugins/grumpy/tests/bench/README.md` for cases, cost and the per-host command lines. It
+is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only constraint below), so
+skipping it means a prompt change can regress silently. `compare` exits non-zero on a
+recall drop, a rise in blocking noise or overrated findings, or a precision drop of more
+than 10 points (those thresholds are flags), and on more failed runs or a missing case; don't merge on a regression you can't
+explain.
 
 ## Gates on this repo
 
