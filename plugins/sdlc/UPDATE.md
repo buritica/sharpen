@@ -40,7 +40,7 @@ builds its prompts from grumpy's `commands/review.md`, saves a real report to
 
 ## Coming from 4.13 or earlier
 
-Eight releases (4.14 to 4.21) ship together. In upgrade order, what each one asks of an existing repo
+Nine releases (4.14 to 4.22) ship together. In upgrade order, what each one asks of an existing repo
 (full notes for each are in [`CHANGELOG.md`](CHANGELOG.md)):
 
 - **4.14 — skill gates record from receipts.** Each grumpy pass leaves a receipt naming the
@@ -58,10 +58,15 @@ Eight releases (4.14 to 4.21) ship together. In upgrade order, what each one ask
 - **4.19 — the gate runs the commands AGENTS.md declares.** Fix a wrong declared command by
   re-running `/sdlc:init` step 10.
 - **4.20 — CI no longer checks gate state.** Delete a `gates` CI job if your repo has one.
-- **4.21 — plans and reports move out of `.claude/`** (above).
+- **4.21 — plans and reports move out of `.claude/`** to `.sharpen/sdlc/` and
+  `.sharpen/grumpy/`. Nothing to migrate: the old folders are still read, never written.
+- **4.22 — the no-agent adapters run grumpy's review** (above). Only a repo that uses
+  `openai_adapter.py` or `local_llm_adapter.py` needs anything: grumpy 2.16 reachable
+  through `GRUMPY_PLUGIN_ROOT` or `--grumpy`, and the `SHARPEN_LLM_*` variable names.
 
-Upgrade grumpy to **2.15** at the same time. sdlc 4.21 with an older grumpy still records
-gates, but grumpy 2.15 with an older sdlc never does.
+Upgrade grumpy to **2.16** at the same time. sdlc 4.22 with an older grumpy still records
+gates (the adapters' review step excepted), but grumpy 2.15 or newer with an sdlc older
+than 4.21 never does.
 
 ## What a repo gets
 
