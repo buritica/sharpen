@@ -21,6 +21,10 @@ than what the repo says it runs.
   `Commands: AGENTS.md (test, lint); detected (typecheck)`.
 - A block stamped by an older sdlc is still read (it is still the repo's declaration);
   the gate suggests re-running `/sdlc:init` step 10.
+- Monorepo entries (`web: bun test`) run per area; `format` is never run by a gate;
+  shellcheck still runs alongside a declared `lint` that doesn't include it.
+- A line edited inside the markers past parsing (`make test (needs docker)`) is reported
+  as unreadable and falls back to detection, instead of failing silently.
 
 **What an existing repo needs to do:** nothing. A repo without the block behaves exactly
 as before. A repo with one now runs what it declares; if a declared command is wrong or

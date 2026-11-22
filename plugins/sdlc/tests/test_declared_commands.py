@@ -35,7 +35,7 @@ class ParseTests(unittest.TestCase):
             format_cmd=["ruff format ."],
         )
         self.assertEqual(
-            dc.parse(text),
+            dc.parse(text)[0],
             {
                 "test": ["python3 scripts/run-tests.py"],
                 "lint": ["ruff format --check . && ruff check ."],
@@ -47,7 +47,7 @@ class ParseTests(unittest.TestCase):
     def test_monorepo_commands_read_back_as_a_list(self):
         text = rendered(test_cmd=["api: go test ./...", "web: bun test"])
         self.assertEqual(
-            dc.parse(text)["test"], ["api: go test ./...", "web: bun test"]
+            dc.parse(text)[0]["test"], ["api: go test ./...", "web: bun test"]
         )
 
     def test_no_block_is_none(self):
@@ -57,7 +57,30 @@ class ParseTests(unittest.TestCase):
         text = rendered(test_cmd=["make test"]).replace(
             "### Pull requests", "### Pull requests\n- lint: `not-a-real-lint`"
         )
-        self.assertIsNone(dc.parse(text)["lint"])
+        self.assertIsNone(dc.parse(text)[0]["lint"])
+
+    def test_a_deploy_line_ends_a_nested_list(self):
+        text = rendered(test_cmd=["web: bun test", "api: pytest"], deploy="fly deploy")
+        commands, unreadable = dc.parse(text)
+        self.assertEqual(commands["test"], ["web: bun test", "api: pytest"])
+        self.assertEqual(unreadable, [])
+
+    def test_crlf_reads_the_same(self):
+        text = rendered(test_cmd=["make test"]).replace("\n", "\r\n")
+        self.assertEqual(dc.parse(text)[0]["test"], ["make test"])
+
+    def test_an_annotated_line_is_reported_not_silently_dropped(self):
+        text = rendered(test_cmd=["make test"]).replace(
+            "- test: `make test`", "- test: `make test` (needs docker)"
+        )
+        commands, unreadable = dc.parse(text)
+        self.assertIsNone(commands["test"])
+        self.assertEqual(unreadable, ["test"])
+
+    def test_not_configured_is_null_and_readable(self):
+        commands, unreadable = dc.parse(rendered(test_cmd=["make test"]))
+        self.assertIsNone(commands["typecheck"])
+        self.assertEqual(unreadable, [])
 
     def test_this_repos_own_block(self):
         root = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
@@ -87,6 +110,7 @@ class CliTests(unittest.TestCase):
         out = json.loads(r.stdout)
         self.assertIsNone(out["source"])
         self.assertEqual(out["commands"], dict.fromkeys(dc.NAMES))
+        self.assertEqual(out["unreadable"], [])
 
     def test_current_block_is_not_stale(self):
         with open(os.path.join(self.root, "AGENTS.md"), "w") as f:
@@ -113,15 +137,41 @@ class CliTests(unittest.TestCase):
 
 
 class GateUsesItTests(unittest.TestCase):
-    def test_gate_reads_declared_commands_before_the_table(self):
+    def setUp(self):
         with open(GATE_MD) as f:
-            text = f.read()
-        section = text.split("## Auto-detection", 1)[1]
-        self.assertIn("declared_commands.py", section)
+            text = " ".join(f.read().split("## Auto-detection", 1)[1].split())
+        self.section = text
+
+    def test_gate_reads_declared_commands_before_the_table(self):
+        self.assertIn("declared_commands.py", self.section)
         self.assertLess(
-            section.index("declared_commands.py"), section.index("**Test runner:**")
+            self.section.index("declared_commands.py"),
+            self.section.index("**Test runner:**"),
         )
-        self.assertIn("AGENTS.md wins", section)
+        self.assertIn("AGENTS.md wins", self.section)
+
+    def test_root_is_the_repo_toplevel_not_the_cwd(self):
+        self.assertIn(
+            '--root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"', self.section
+        )
+
+    def test_format_is_never_run_and_monorepo_areas_are_split(self):
+        self.assertIn("never run `format`", self.section)
+        self.assertIn("run each part after the colon in that area", self.section)
+        self.assertIn("`unreadable`", self.section)
+
+    def test_shellcheck_stays_additive_to_a_declared_lint(self):
+        self.assertIn("a declared `lint` that doesn't already run it", self.section)
+
+
+class IsolatedModeTest(unittest.TestCase):
+    def test_runs_under_python_isolated_mode(self):
+        r = subprocess.run(
+            [sys.executable, "-I", SCRIPT, "--root", tempfile.gettempdir()],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":

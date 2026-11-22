@@ -16,10 +16,15 @@ Prints one JSON object:
   {"source": "AGENTS.md" | null,      # null: no file, or no managed block
    "version": "4.19.0" | "" | null,   # sdlc version stamped in the block
    "stale": true | false,             # stamped by a different sdlc than this
-   "commands": {"test": [...] | null, "lint": ..., "format": ..., "typecheck": ...}}
+   "commands": {"test": [...] | null, "lint": ..., "format": ..., "typecheck": ...},
+   "unreadable": ["test", ...]}       # lines a human edited past parsing
 
-A command is a list (a monorepo declares one per area) or null when the block
-says "not configured" or omits it. Exit 0, or 2 when AGENTS.md can't be read
+A command is a list (a monorepo declares one per area, the area named inside
+the value, e.g. "web: bun test") or null when the block says "not
+configured" or omits it. A line that is neither a backticked command nor
+"not configured" (an annotation added inside the markers) reads as null and
+is listed in `unreadable`, so the gate can say so instead of silently
+falling back. Exit 0, or 2 when AGENTS.md can't be read
 or its markers are broken. Pure stdlib.
 """
 
@@ -29,7 +34,9 @@ import os
 import re
 import sys
 
-import agents_md as am
+# Same-directory sibling, the way agents_md.py imports gate_store.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import agents_md as am  # noqa: E402
 
 NAMES = ("test", "lint", "format", "typecheck")
 _ENTRY = re.compile(r"^- (%s):(.*)$" % "|".join(NAMES))
@@ -37,21 +44,25 @@ _NESTED = re.compile(r"^\s+- `(.+)`\s*$")
 
 
 def _unquote(value):
+    """(command | None, readable). Readable is False for a value that is
+    neither one backticked command nor init's "not configured" line."""
     value = value.strip()
     if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
-        return value[1:-1]
-    return None  # "not configured — …", or anything that isn't a command
+        inner = value[1:-1].strip()
+        return (inner or None), True
+    return None, (not value or value == am.NOT_CONFIGURED)
 
 
 def parse(text):
-    """{name: [commands] | None} from AGENTS.md text, or None when the text
-    has no managed block. Only the `### Commands` section inside the markers
+    """({name: [commands] | None}, [unreadable names]) from AGENTS.md text,
+    or None when the text has no managed block. Only the `### Commands` section inside the markers
     counts; prose elsewhere that looks like a command list is ignored."""
     lines = text.splitlines()
     span = am.marker_span(lines)
     if not span:
         return None
     commands = dict.fromkeys(NAMES)
+    unreadable = []
     in_section = False
     current = None
     for line in lines[span[0] + 1 : span[1]]:
@@ -64,15 +75,17 @@ def parse(text):
         entry = _ENTRY.match(line)
         if entry:
             current, rest = entry.group(1), entry.group(2).strip()
-            value = _unquote(rest) if rest else None
+            value, readable = _unquote(rest)
             commands[current] = [value] if value else None
+            if not readable:
+                unreadable.append(current)
             continue
         nested = _NESTED.match(line)
         if nested and current:
             commands[current] = (commands[current] or []) + [nested.group(1)]
             continue
         current = None
-    return commands
+    return commands, unreadable
 
 
 def read(root):
@@ -82,20 +95,23 @@ def read(root):
     else:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-    commands = parse(text) if text is not None else None
-    if commands is None:
+    parsed = parse(text) if text is not None else None
+    if parsed is None:
         return {
             "source": None,
             "version": None,
             "stale": False,
             "commands": dict.fromkeys(NAMES),
+            "unreadable": [],
         }
+    commands, unreadable = parsed
     version = am.block_version(text)
     return {
         "source": "AGENTS.md",
         "version": version,
         "stale": version != am.plugin_version(),
         "commands": commands,
+        "unreadable": unreadable,
     }
 
 

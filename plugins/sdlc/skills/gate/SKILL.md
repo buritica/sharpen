@@ -419,10 +419,10 @@ For **Docs-only** (no executable files in the diff, any size): use the `tiny` cy
 Declared commands come first: `/sdlc:init` writes the repo's own into the AGENTS.md block.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/declared_commands.py" --root "${WT:-.}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/declared_commands.py" --root "$(git -C "${WT:-.}" rev-parse --show-toplevel)"
 ```
 
-Run each non-null command it prints for its gate (`test` → 1, `lint` → 7, `typecheck` → 8). **AGENTS.md wins** when it and the tables below disagree; the tables only fill a command it leaves null (all of them when `source` is null). Name the source in the mode line, e.g. `Commands: AGENTS.md (test, lint); detected (typecheck)`. A `stale` block is still the repo's declaration: use it, and suggest re-running `/sdlc:init` step 10. Otherwise detect from config files:
+`test` runs at gate 1, `lint` at 7, `typecheck` at 8; never run `format` (it rewrites files, no gate uses it). **AGENTS.md wins** over the tables below, which only fill a null (all three when `source` is null); shellcheck stays additive. A monorepo list names each area before a colon (`web: bun test`): run each part after the colon in that area. Say which source each came from (`Commands: AGENTS.md (test, lint); detected (typecheck)`), name any `unreadable` line, and if `stale`, still use it but suggest `/sdlc:init` step 10. Otherwise detect from config files:
 
 **Test runner:**
 ```
@@ -454,7 +454,7 @@ these lines the lint gate silently does nothing. If `.ansible-lint`/`.yamllint`
 exist, the lint gate is `ansible-lint` + `yamllint .` — not a no-op.
 
 `shellcheck` is additive, not exclusive: run it alongside whatever else this
-table matched whenever the repo has `.sh` files at all (an Ansible repo with
+table matched, or a declared `lint` that doesn't already run it, whenever the repo has `.sh` files at all (an Ansible repo with
 shell scripts under `files/` or `scripts/` needs both ansible-lint AND
 shellcheck — CI running four linters while the gate only reproduces one or
 two is exactly the false-confidence gap this table exists to close). If
