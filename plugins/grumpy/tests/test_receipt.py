@@ -60,6 +60,14 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(self.receipt("fix-review")["stage"], "review")
         self.assertEqual(self.receipt("fix")["stage"], "review")
 
+    def test_a_second_stage_refreshes_fix_json(self):
+        self.report()
+        self.assertEqual(self.run_receipt("fix", "--stage", "review").returncode, 0)
+        self.report()
+        self.assertEqual(self.run_receipt("fix", "--stage", "imagine").returncode, 0)
+        self.assertEqual(self.receipt("fix")["stage"], "imagine")
+        self.assertEqual(self.receipt("fix-review")["stage"], "review")
+
     def test_bad_stage_arguments_are_refused(self):
         self.report()
         for args in (

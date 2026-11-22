@@ -285,11 +285,15 @@ the whole gate chain and writes `.claude/sdlc/<branch>/base.json`
 applies the same order itself: `git config branch.<branch>.sdlcBase`, the open
 PR's base (via `gh`), the branch's local upstream parent, then the default branch.
 On a stack (main <- A <- B <- yours) the passes review only your layer, and
-`/grumpy:fix` refuses to modify an existing file outside it: such a finding is
-recorded as new capability for the branch that owns the file.
+`/grumpy:fix` refuses to modify an existing file outside it: a finding there
+that this diff didn't cause is recorded as new capability. A Critical, or a bug
+this diff caused in a file it didn't touch, is asked about (fix here, or in the
+branch that owns the file); an unattended run fixes it here, the one case where
+fix edits another layer's file.
 
 Each fix run writes its own receipt, `receipt.py fix --stage review` (gate 4)
-or `--stage imagine` (gate 6), so one run can never earn both fix gates.
+or `--stage imagine` (gate 6), so with sdlc 4.17+ one run can never earn both fix
+gates. It refreshes `fix.json` too, which an older sdlc reads.
 
 ## Keeping review loops short (sharpen#37)
 
@@ -302,8 +306,8 @@ every one built there needs its own review round. Three rules keep the loop shor
   this diff didn't cause, is **new capability**: it is not built and leaves no marker in
   the code. Every host gets it recorded in the fix report under `## New capability`,
   with a ready-to-paste issue. With `--file-issues` and `gh`, it is also filed. A
-  Critical finding is never sorted this way on the agent's own judgment; fix asks the
-  person.
+  Critical finding is never sorted this way: fix asks the person where to fix it, and an
+  unattended run fixes it here.
 - **Settled findings.** The fix report keeps a `## Settled` list: one line per decided
   finding (new capability, `ponytail:` deferral, or declined by the person), each with
   its `file:line` and a reason. `/grumpy:review` and `/grumpy:imagine` hold back a

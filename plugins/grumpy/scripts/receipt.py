@@ -115,9 +115,14 @@ def write_receipt(pass_name, worktree=".", stage=None):
     # A stage receipt also refreshes fix.json, the one name sdlc before 4.17
     # reads, so a newer grumpy with an older installed sdlc still records the
     # fix gates. sdlc 4.17+ prefers the stage file.
-    if stage:
-        _write_json(directory, os.path.join(directory, "fix.json"), receipt)
+    # The stage file first: if the fix.json refresh then fails, sdlc 4.17+
+    # still has the receipt it reads, and the error names what is missing.
     _write_json(directory, path, receipt)
+    if stage:
+        try:
+            _write_json(directory, os.path.join(directory, "fix.json"), receipt)
+        except OSError as e:
+            raise OSError(f"wrote {path}, but not fix.json for older sdlc: {e}") from e
     return path, receipt
 
 

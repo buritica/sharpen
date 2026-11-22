@@ -293,7 +293,8 @@ _[One grumpy sentence summarizing your overall impression]_
 covered them: one line, `Deferred findings honored: N — already marked at
 the line, not re-raised.` Omit entirely when the count is zero.]
 
-[If any finding was held back as settled: `Settled findings held back: N`,
+[If any finding was held back as settled: `Settled findings held back: N`
+(a finding already skipped for its `ponytail:` marker counts there, not here),
 then one line each, `- [file:line]: [finding] — settled as [decision]:
 [reason]`. Omit entirely when the count is zero.]
 
@@ -311,10 +312,11 @@ then one line each, `- [file:line]: [finding] — settled as [decision]:
 the rest, split it, or burn it down and start over. Say "ship it and file the
 rest" when nothing Critical remains and every remaining finding is new
 capability (as `/grumpy:fix` Step 1a sorts it: the remedy adds behavior the
-branch's plan and diff never set out to provide, for a problem the diff did
-not introduce) or a Questionable nit. Say "split it" when fixing the findings
-would add files outside the branch's plan or grow the diff past its original
-size; name the part to move to its own branch.]
+branch's plan and diff never set out to provide, or touches a file outside
+the branch's diff, for a problem the diff did not introduce) or a Questionable
+nit. Say "split it" when fixing the findings would add files outside the
+branch's plan or roughly double the diff's added lines; name the part to move
+to its own branch. When both apply, "split it" wins.]
 ```
 
 ## Step 5: Persist Review Output

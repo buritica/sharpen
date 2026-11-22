@@ -195,7 +195,7 @@ def main():
         f"signal ratio:      {result['signal_ratio']:.0%} (matched a planted issue / total findings)"
     )
     print(f"output size:       {output_chars} bytes ({fmt} format)")
-    for fid in args.expect_absent:
+    for fid in sorted(set(args.expect_absent)):
         state = (
             "PRESENT, should have been held back"
             if fid in result["present"]

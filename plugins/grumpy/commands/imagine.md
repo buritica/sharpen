@@ -632,7 +632,8 @@ actually present, design choices that hold up. One sentence per area. Required.]
 covered them: one line, `Deferred findings honored: N — already marked at
 the line, not re-raised.` Omit entirely when the count is zero.]
 
-[If any finding was held back as settled: `Settled findings held back: N`,
+[If any finding was held back as settled: `Settled findings held back: N`
+(a finding already skipped for its `ponytail:` marker counts there, not here),
 then one line each, `- [file:line]: [finding] — settled as [decision]:
 [reason]`. Omit entirely when the count is zero.]
 
@@ -642,8 +643,8 @@ then one line each, `- [file:line]: [finding] — settled as [decision]:
 you be able to debug it at 3am? End with one of: fix and reship, ship it and
 file the rest (nothing Critical remains, and every remaining finding is new
 capability as `/grumpy:fix` Step 1a sorts it, or a Questionable nit), or split
-it (the fixes would add files outside the branch's plan or grow the diff past
-its original size; name the part to move).]
+it (the fixes would add files outside the branch's plan or roughly double the
+diff's added lines; name the part to move; it wins when both apply).]
 ```
 
 ## Step 4: Persist Imagine Output

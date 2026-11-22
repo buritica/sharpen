@@ -1,7 +1,7 @@
 {
   "description": "Expected /grumpy:fix sorting for fix-scope/review.md against fix-scope/plan.md and sample.diff. Run fix in a scratch repo holding these files; compare its report.",
   "findings": [
-    {"site": "src/notes/ingest.py:40", "severity": "CRIT", "expect": "ask", "why": "looks like new capability (a lock in code the diff never touched) but is Critical, so fix asks the person instead of sorting it"},
+    {"site": "src/notes/ingest.py:40", "severity": "CRIT", "expect": "ask", "why": "looks like new capability (a lock in code the diff never touched) but is Critical, so fix asks the person instead of sorting it; an unattended run fixes it here and lists it under Open questions"},
     {"site": "src/notes/merge.py:8", "severity": "WARN", "expect": "fix", "why": "the diff introduced the ordering problem"},
     {"site": "src/notes/merge.py:5", "severity": "WARN", "expect": "new-capability", "why": "a new event and a red exit: behavior the plan never set out to add; recorded under ## New capability and ## Settled, no code marker"},
     {"site": "src/notes/test_merge.py:12", "severity": "NOTE", "expect": "fix", "why": "a test inside the plan's own files and scope; Optional bucket, offered in Step 5"}

@@ -384,6 +384,17 @@ class FixReceiptTest(ReceiptTestBase):
         fixes = [g for g in self.gates() if g.startswith("grumpy-fix")]
         self.assertEqual(len(fixes), 1, self.gates())
 
+    def test_a_review_stage_receipt_after_imagine_cannot_earn_gate_six(self):
+        # review was re-run after imagine, so fix labels its run `review`:
+        # the refreshed fix.json is newer than imagine but names the wrong stage.
+        self.write_stage_receipt("review")
+        self.assertEqual(self.verify("fix").returncode, 0)
+        self.receipt("imagine")
+        self.assertEqual(self.verify("imagine").returncode, 0)
+        self.write_stage_receipt("review")
+        self.assertNotEqual(self.verify("fix").returncode, 0)
+        self.assertNotIn("grumpy-fix-post-imagine", self.gates())
+
     def test_stage_receipts_earn_their_own_gates(self):
         self.write_stage_receipt("review")
         self.assertEqual(self.verify("fix").returncode, 0)

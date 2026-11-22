@@ -65,6 +65,11 @@ settled list, so their recall must stay 100% on all seven.
 lock finding is asked about, never sorted on its own; the ordering bug and the
 test gap are fixes; the event-and-red-exit finding is new capability, recorded
 under `## New capability` and `## Settled` with no code marker. Run fix on a
-scratch repo holding these files (plan at `.claude/sdlc/<branch>/plan.md`,
-review at `.claude/grumpy/<branch>/review.md`) and compare by hand. This one has
+scratch repo: commit the pre-images (`src/notes/*.py` before `sample.diff`) on
+main, apply `sample.diff` on a branch and commit it, so `$SCOPE` holds only the
+diff's files and `ingest.py` is outside it; put the plan at
+`.claude/sdlc/<branch>/plan.md` and the review at
+`.claude/grumpy/<branch>/review.md`, and compare by hand. `ask` is the attended
+answer; an unattended run fixes the lock here and lists it under Open
+questions. This one has
 no scorer yet; area 6's benchmark is where a capability-bait scorer belongs.

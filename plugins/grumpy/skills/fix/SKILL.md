@@ -121,6 +121,7 @@ belong to other branches and other reviews; a fix there lands in the wrong
 PR. Resolve the same base the review used and list the branch's files:
 
 ```bash
+WT="${WT:-.}"
 DIFF_BASE_PY="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/diff_base.py"
 BASE=""; SCOPE=""
 if [ -f "$DIFF_BASE_PY" ]; then
@@ -137,21 +138,27 @@ fi
 [ -n "$BASE" ] && SCOPE=$(git -C "$WT" diff --name-only "$BASE"...HEAD) && echo "base: $BASE"
 ```
 
-Shell state does not persist between calls: run this block again in the same
-call as the Step 4 check below, and pass `$SCOPE`'s file list (not the
-variable) to the fixers.
+Shell state does not persist between calls: Step 4 runs this block again
+before its scope check, and you pass `$SCOPE`'s file list (not the variable)
+to the fixers.
 
-A finding whose fix would modify an existing file that is not in `$SCOPE` is
-not fixed here: sort it as **new capability** (Step 1a) with the reason
-"outside this branch's diff (base `<BASE>`)". It lands in this branch's
+A finding whose fix would modify an existing file that is not in `$SCOPE`,
+for a problem this diff did **not** cause, is not fixed here: sort it as **new
+capability** (Step 1a) with the reason "outside this branch's diff (base
+`<BASE>`)". It lands in this branch's
 `## New capability` and `## Settled`, so this branch's reviews stop raising
 it. The branch that owns the file never reads that report: the owner hears
 about it only through the filed issue (`--file-issues`), or, without one,
 from the `## Would file` entry the person passes on. The exception is a 🚨
-Critical: it is never new capability (Step 1a), so ask the person whether to
-fix it here or in the branch that owns the file first; on an unattended run,
-fix it here. A Critical fixed here is exempt from the revert below, and the
-summary names its file as outside the diff.
+Critical, and any finding this diff caused in a file it didn't touch (a
+caller left stale by a signature change, say): those are fixes, never new
+capability (Step 1a), so ask the person whether to fix it here or in the
+branch that owns the file first; on an unattended run, fix it here. A finding
+fixed here this way is exempt from the revert below, and the summary names its
+file as outside the diff. When the person says to fix it in the owning branch,
+list it under the summary's and the report's **Blocked elsewhere** block with
+that branch: gates 4 and 6 stay open for a Critical until that fix lands and
+this branch is restacked on it.
 
 Adding a new file (a test for this branch's code, say) is fine. Pass the
 scope to every fixer sub-agent in Step 3 as the files it may modify, and
@@ -518,6 +525,20 @@ clean fix, or flagged structural problems beyond the scope of a minimal fix:
 - Note which files have uncertain fixes in the summary
 - Recommend the developer review those files manually before committing
 
+Then check the scope: run the scope block from "This branch's files" again in
+this same call, and revert any change to an existing file outside `$SCOPE`
+that isn't an approved exception (a Critical, or a diff-caused finding, fixed
+here). Say in the summary what you reverted. With an empty `$SCOPE`, skip the
+check and say so.
+
+```bash
+WT="${WT:-.}"
+# (scope block from "This branch's files" here, then:)
+for f in $(git -C "$WT" diff --name-only); do
+  printf '%s\n' "$SCOPE" | grep -qxF "$f" || echo "outside scope: $f"   # revert unless approved
+done
+```
+
 Then stage and commit only the clean fixes:
 
 ```bash
@@ -547,6 +568,10 @@ New capability [N]: [not built here — this branch fixes what it set out to fix
 
 Open questions [N]: [Critical findings that looked like new capability, asked and not yet answered; fixed meanwhile]
 - [file:line]: [the question as asked]
+...
+
+Blocked elsewhere [N]: [findings the person chose to fix in the branch that owns the file]
+- [file:line]: [one-line summary] — fix in [branch]; gates 4/6 wait on it for a Critical
 ...
 
 [If all fixes applied cleanly]: "You're welcome."
@@ -584,6 +609,9 @@ imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fi
 
 ## Settled
 - [file:line] | [finding text, first 120 chars] | [new-capability|deferred|declined] | [reason]
+
+## Blocked elsewhere
+- [file:line]: [finding text] — fix in [branch] (omit the section when empty)
 
 ## Deferred
 - [Serious|Questionable] [file:line]: [marker text] — [#issue or "not filed"]
@@ -642,11 +670,13 @@ wait for the answer before going on):
 }
 ```
 
-If yes, repeat Steps 2–4 for the Optional bucket. If no, add each declined
-finding to `## Settled` as `declined`, with what the person said as the
-reason ("the person chose not to fix it here" when they gave none). Step 4b
-already saved `fix.md`: add these entries to that file, and save it again
-before Step 6, so the receipt covers the final report.
+If yes, repeat Steps 2–4b for the Optional bucket (fixed findings go in the
+run section's `## Fixed`). If no, add each declined finding to `## Settled` as
+`declined`, with what the person said as the reason ("the person chose not to
+fix it here" when they gave none). Write these entries into this run's
+section of `fix.md`; on the Optional-only path Step 4b has not run yet, so
+write the run section now (Step 4b's format, with only what this run did).
+Save `fix.md` before Step 6, so the receipt covers the final report.
 
 ## Step 6: Leave a Receipt
 
@@ -684,6 +714,10 @@ if [ -f "$RECEIPT" ]; then
   STAGE=review
   [ -f "$A/imagine.md" ] && [ "$A/imagine.md" -nt "$A/review.md" ] && STAGE=imagine
   python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
+  # If sdlc then refuses gate 6 with "is for the fix after review" (review
+  # was re-run after imagine, so review.md is newer), re-run /grumpy:imagine
+  # and fix its findings; or, if this run did fix imagine.md's findings, save
+  # fix.md again and run: python3 "$RECEIPT" fix --stage imagine --worktree "$WT"
 else
   echo "receipt.py not found at '$RECEIPT': no receipt written, say so in the summary"
 fi
