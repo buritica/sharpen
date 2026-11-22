@@ -39,7 +39,7 @@ Usage:
                                       # its grumpy pass left (review, fix,
                                       # imagine, simplify, or grumpy:<name>);
                                       # `all` sweeps every receipt on disk
-  record-gate.py --carry [--reason "<text>"]
+  record-gate.py --carry [--reason "<text>"] [--reviewed-base <ref>]
                                       # carry the skill gates over commits
                                       # that can't change what the review
                                       # saw (clean rebase, release
@@ -330,7 +330,7 @@ def _set_base(path, branch, ref):
     return 0
 
 
-def _carry(path, branch, reason):
+def _carry(path, branch, reason, reviewed_base_ref=None):
     """`--carry`: carry the skill gates over commits classify_carry allows."""
     bd = gs.load_store(path).get(branch)
     if not isinstance(bd, dict):
@@ -361,7 +361,17 @@ def _carry(path, branch, reason):
     stored = (bd.get(gc.BASE_KEY) or {}).get("commit")
     # The reviewed patch is taken against the base it was reviewed on, the
     # current one against the base resolved now; only then are they compared.
-    old_base = gc.reviewed_base(old, stored, (base or {}).get("ref"))
+    if reviewed_base_ref:
+        # For a cycle that never recorded its base (armed before 4.17): the
+        # operator names the base the review ran on, so the reviewed patch
+        # doesn't count every lower layer.
+        named = gb.base_commit(reviewed_base_ref, old)
+        if not named:
+            _log(f'[gate] error: "{reviewed_base_ref}" is not a commit here')
+            return 1
+        stored = old_base = named
+    else:
+        old_base = gc.reviewed_base(old, stored, (base or {}).get("ref"))
     klass, why = gc.classify_carry(
         old,
         head,
@@ -420,6 +430,7 @@ def main(argv):
     capabilities_file = None
     attach_review_file = None
     reason = None
+    reviewed_base_ref = None
     new_rounds = False
     set_base = None
     rest = []
@@ -459,6 +470,10 @@ def main(argv):
             attach_review_file = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--reviewed-base" and i + 1 < len(argv):
+            reviewed_base_ref = argv[i + 1]
+            i += 2
+            continue
         if argv[i] == "--reason" and i + 1 < len(argv):
             reason = argv[i + 1]
             i += 2
@@ -482,6 +497,9 @@ def main(argv):
         return 1
     if command not in ("--attest", "--carry") and reason is not None:
         _log("[gate] error: --reason is only valid with --attest or --carry")
+        return 1
+    if reviewed_base_ref is not None and command != "--carry":
+        _log("[gate] error: --reviewed-base is only valid with --carry")
         return 1
     if set_base is not None and command != "--set-base":
         _log(
@@ -763,7 +781,7 @@ def main(argv):
                 f"{reason.strip()}. {done}"
             )
         elif command == "--carry":
-            return _carry(path, branch, reason)
+            return _carry(path, branch, reason, reviewed_base_ref)
         elif command == "--status":
             data = gs.load_store(path)
             out = gs.format_status(data.get(branch), branch)
@@ -809,7 +827,8 @@ def main(argv):
                 "Usage: record-gate.py [--init <tier> [--new-rounds] | "
                 "--record <gate> | "
                 "--attest <gate> --reason <text> | --verify <skill|all> | "
-                "--carry [--reason <text>] | --set-base <ref|auto> | "
+                "--carry [--reason <text>] [--reviewed-base <ref>] | "
+                "--set-base <ref|auto> | "
                 "--status | --oneline | "
                 "--unroute] [--branch <name>] [--route-from <path>] "
                 "[--profile <name> --capabilities-file <path>] "

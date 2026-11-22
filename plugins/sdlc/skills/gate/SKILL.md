@@ -323,7 +323,10 @@ was reviewed on and the current patch against the base resolved now, so a
 parent that moved in between is not read as your change. Once a review gate is
 recorded, `--set-base` leaves the cycle's base alone and only `--carry` (or a
 re-init) moves it; a cycle with no recorded base uses where the reviewed commit
-forked from the new base. After the parent merges, `--set-base auto` (or the
+forked from the new base. When that guess is wrong (a cycle armed before 4.17
+on a parent since rewritten, with no reflog of the old parent), name the base
+the review ran on: `--carry --reviewed-base <old-parent-sha>`. `--set-base`
+accepts a parent that exists here only as `origin/<name>`. After the parent merges, `--set-base auto` (or the
 PR's new base) moves you back to main.
 
 ### Check status

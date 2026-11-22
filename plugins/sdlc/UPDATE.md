@@ -31,7 +31,8 @@ A two-line fix once took 13 gate rounds. Five changes cut the rounds that review
   so a stacked branch no longer reviews (or edits) the layers below it. With an older
   grumpy the passes still diff against the default branch. `--carry` takes the reviewed
   patch against the base it was reviewed on, so a parent that moved between review and
-  restack is not read as the branch's own change.
+  restack is not read as the branch's own change (`--carry --reviewed-base <ref>` names
+  that base for a cycle armed before 4.17).
 - **One fix run earns one fix gate.** A fix receipt that earned one fix gate can't earn
   the other; grumpy 2.11+ writes `fix-review.json` and `fix-imagine.json` separately.
 - **An advisory round counter.** Each `--init` that replaces a cycle with earned skill

@@ -196,6 +196,30 @@ class StackTest(ReceiptTestBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("is not below", r.stderr)
 
+    def test_reviewed_base_lets_a_cycle_with_no_recorded_base_carry(self):
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        self.edit_store(lambda data: data[BRANCH].pop("base"))
+        old_b = self.rewrite_parent_and_restack()
+        # No reflog of the old parent: the fork point can't be found.
+        git(self.repo, "reflog", "expire", "--expire=now", "--all")
+        self.assertEqual(self.carry().returncode, 1)
+        self.assert_carried(self.carry("--reviewed-base", old_b), "rebase")
+
+    def test_reviewed_base_is_only_for_carry(self):
+        r = self.cli("--status", "--reviewed-base", "layer-b")
+        self.assertEqual(r.returncode, 1)
+
+    def test_set_base_accepts_a_remote_only_parent(self):
+        head = git(self.repo, "rev-parse", "layer-b").strip()
+        git(self.repo, "remote", "add", "origin", self.repo)
+        git(self.repo, "update-ref", "refs/remotes/origin/parent-x", head)
+        r = self.cli("--set-base", "parent-x")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = git(self.repo, "config", f"branch.{BRANCH}.sdlcBase").strip()
+        self.assertEqual(cfg, "origin/parent-x")
+
     def test_set_base_refuses_refs_that_move_with_head(self):
         for ref in ("HEAD", "HEAD~1", BRANCH):
             r = self.cli("--set-base", ref)

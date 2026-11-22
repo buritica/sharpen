@@ -69,6 +69,14 @@ def set_configured(branch, ref, cwd=None):
     # (`HEAD`, `HEAD~2`, `@{u}` is stored as the branch it names), and never
     # the branch itself: a base at HEAD measures an empty patch.
     full = _git(["rev-parse", "--symbolic-full-name", ref], cwd)
+    if not full:
+        # A parent that exists here only as a remote-tracking branch
+        # (`origin/<ref>`), with no local branch of that name.
+        for remote in _git(["remote"], cwd).split():
+            candidate = f"refs/remotes/{remote}/{ref}"
+            if _exists(candidate, cwd):
+                full = candidate
+                break
     if not full.startswith(("refs/heads/", "refs/remotes/")) or not _exists(full, cwd):
         return f'"{ref}" is not a local or remote branch here'
     own_remote = full.startswith("refs/remotes/") and (full.split("/", 3)[-1] == branch)
