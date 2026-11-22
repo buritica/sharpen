@@ -24,8 +24,9 @@ Regenerate it with:
 python3 plugins/sdlc/scripts/hosts.py --write docs/hosts.md
 ```
 
-"Unverified" means nobody has watched it happen on that host yet. The three
-open Codex questions are listed under [Verifying Codex](#verifying-codex).
+"Unverified" means nobody has watched it happen on that host yet. The open
+Codex questions are listed under [Verifying Codex](#verifying-codex), and the
+one open pi question under [Verifying pi](#verifying-pi).
 
 ## What every native host gets
 
@@ -132,9 +133,36 @@ records a gate. `npx skills add` copies the SKILL.md files without the
 (sharpen#46). Treat these as a way to read the workflow, not to enforce it;
 enforcement needs the Claude Code or Codex plugin install, or `pi install`.
 
+## Where sharpen writes
+
+Plans, specs, review reports and receipts go under `.sharpen/sdlc/<branch>/`
+and `.sharpen/grumpy/<branch>/` (sdlc 4.21, grumpy 2.15), next to the gate
+state in `.sharpen/data/`. They used to go under `.claude/`, which Claude Code
+treats as its own configuration. The old folders are still read, never
+written: a receipt counts by whichever copy is newer, a plan or `fix.md` found
+only there is copied into `.sharpen/` before a pass appends to it, and other
+files are read from there when the new copy is missing.
+
+What is known about writing under `.claude/`, per host:
+
+- **Claude Code, checked in the 2.1.42 binary:** `.claude` is on its list of
+  sensitive directory names, and a file-tool write there gets a safety check
+  marked not classifier-approvable, with the `restrictedMode` circuit breaker.
+  `.claude/commands`, `.claude/agents`, `.claude/skills` and the settings
+  files are treated as config outright.
+- **Claude Code, inferred, not run:** interactively that check is a prompt a
+  person can accept; headless (`claude -p`), nobody can, so the write is
+  refused. The review benchmark saw exactly that: the pass printed its report
+  instead of saving it. The check covers the file tools, not a shell, which is
+  why receipts written by `receipt.py` and worktrees made by `git worktree add`
+  were not affected. Whether `--dangerously-skip-permissions` lifts it is
+  unverified.
+- **Codex and pi:** no rule about `.claude/` was found in either; unverified.
+  Check 5 below and the one under [Verifying pi](#verifying-pi) settle it.
+
 ## Verifying Codex
 
-Three Codex behaviours are marked unverified until someone runs them in a
+Five Codex behaviours are marked unverified until someone runs them in a
 throwaway repo, with sharpen installed in Codex:
 
 1. **Plugin root in skill text.** Run `/sdlc:gate --status`, or any skill step
@@ -152,6 +180,22 @@ throwaway repo, with sharpen installed in Codex:
    `models.yaml` only says which model to start the session on. Its ids are
    unverified: run `python3 scripts/bench-grumpy.py run --host codex --model
    <id>` for each and compare.
+5. **Writes under `.claude/`.** Ask Codex to save a one-line file to
+   `.claude/grumpy/probe.md` with its file-editing tool (not a shell
+   command), non-interactively (`codex exec`). It passes if the file exists
+   afterwards. Nothing depends on it any more, but a failure would mean a
+   Codex user on an older grumpy loses reports the same way headless Claude
+   Code did.
 
-When one is confirmed, update `HOSTS` in `hosts.py` (and `detect_host()` for
+When one of the first three is confirmed, update `HOSTS` in `hosts.py` (and `detect_host()` for
 the third), regenerate this page, and the `unverified` marks go with it.
+
+## Verifying pi
+
+One pi behaviour is unverified:
+
+1. **Writes under `.claude/`.** In a pi session with sharpen installed, ask pi
+   to save a one-line file to `.claude/grumpy/probe.md` with its write tool,
+   once interactively and once headless. It passes if the file exists both
+   times. As with Codex check 5, nothing depends on it since grumpy 2.15; it
+   says whether an older grumpy works there.

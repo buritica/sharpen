@@ -7,11 +7,13 @@ Usage:
 On a stacked branch (main <- A <- B <- this one), diffing against main
 reviews every layer below: the passes re-review A and B, and a fix pass edits
 their code. The base is owned by sdlc, which resolves it for the whole gate
-chain and writes `.claude/sdlc/<branch>/base.json`; this reads that file
+chain and writes `.sharpen/sdlc/<branch>/base.json` (`.claude/sdlc/` before
+sdlc 4.21); this reads that file
 first. Without sdlc (or before its first `--init`), it applies the same
 order itself:
 
-  1. `.claude/sdlc/<branch>/base.json` (sdlc's resolved base)
+  1. `.sharpen/sdlc/<branch>/base.json`, or the legacy `.claude/sdlc/` one
+     (sdlc's resolved base)
   2. `git config branch.<branch>.sdlcBase`
   3. the open PR's base branch, via `gh pr view`, when `gh` is installed
   4. the branch's upstream, when it is a local branch
@@ -51,15 +53,37 @@ def _note(msg):
     print(f"[grumpy] {msg}", file=sys.stderr)
 
 
+# Where sdlc writes its per-branch files. grumpy can't import sdlc, so this is
+# a copy of `artifact_dirs.SDLC_ROOT`; a test in sdlc pins the two together.
+# The legacy root is where sdlc before 4.21 wrote them, read only when the new
+# one has no base.json.
+SDLC_ROOT = (".sharpen", "sdlc")
+LEGACY_SDLC_ROOT = (".claude", "sdlc")
+
+
 def _from_sdlc(wt, root, branch):
-    path = os.path.join(root, ".claude", "sdlc", branch, "base.json")
-    try:
-        with open(path) as f:
-            base = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        _note(f"sdlc's base.json is unreadable ({e}); trying the next source")
+    """The stack base sdlc recorded for `branch`, or None.
+
+    The first READABLE base.json wins, new folder first. A readable new file
+    whose ref no longer exists returns None and does not fall through to the
+    legacy file, on purpose: the new file means this sdlc owns the base, and a
+    missing ref means the base moved, so an older sdlc's file would be staler
+    still. Don't "fix" this into a fall-through."""
+    # ponytail: new file wins without comparing ages (sdlc 4.21 removes the legacy copy on every write); compare mtimes if sdlc 4.20 and 4.21 are ever seen writing the same branch's base.json
+    for sdlc_root in (SDLC_ROOT, LEGACY_SDLC_ROOT):
+        path = os.path.join(root, *sdlc_root, branch, "base.json")
+        try:
+            with open(path) as f:
+                base = json.load(f)
+            if sdlc_root == LEGACY_SDLC_ROOT:
+                _note(f"read the legacy {path} (written by an sdlc before 4.21)")
+            break
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as e:
+            _note(f"sdlc's {path} is unreadable ({e}); trying the next source")
+            return None
+    else:
         return None
     ref = base.get("ref") if isinstance(base, dict) else None
     if _exists(wt, ref):
@@ -140,7 +164,7 @@ def resolve(wt="."):
         return None, "not on a named branch"
     steps = (
         (
-            "sdlc's resolved base (.claude/sdlc/<branch>/base.json)",
+            "sdlc's resolved base (.sharpen/sdlc/<branch>/base.json)",
             lambda: _from_sdlc(wt, root, branch),
         ),
         (

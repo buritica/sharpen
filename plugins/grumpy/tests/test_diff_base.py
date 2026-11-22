@@ -72,7 +72,7 @@ class DiffBaseTest(unittest.TestCase):
         return git(self.repo, "diff", "--name-only", f"{ref}...HEAD").split()
 
     def test_sdlc_base_file_wins(self):
-        d = os.path.join(self.repo, ".claude", "sdlc", "top")
+        d = os.path.join(self.repo, ".sharpen", "sdlc", "top")
         os.makedirs(d)
         with open(os.path.join(d, "base.json"), "w") as f:
             json.dump({"ref": "layer-b", "source": "config"}, f)
@@ -92,8 +92,23 @@ class DiffBaseTest(unittest.TestCase):
         self.assertEqual(self.base(), ("main", "the default branch"))
         self.assertEqual(sorted(self.changed("main")), ["a.py", "b.py", "c.py"])
 
-    def test_a_stale_base_file_falls_through(self):
+    def test_a_base_file_an_older_sdlc_wrote_is_read(self):
         d = os.path.join(self.repo, ".claude", "sdlc", "top")
+        os.makedirs(d)
+        with open(os.path.join(d, "base.json"), "w") as f:
+            json.dump({"ref": "layer-b", "source": "config"}, f)
+        self.assertEqual(self.base()[0], "layer-b")
+
+    def test_the_new_base_file_wins_over_the_legacy_one(self):
+        for root, ref in ((".claude", "layer-a"), (".sharpen", "layer-b")):
+            d = os.path.join(self.repo, root, "sdlc", "top")
+            os.makedirs(d)
+            with open(os.path.join(d, "base.json"), "w") as f:
+                json.dump({"ref": ref}, f)
+        self.assertEqual(self.base()[0], "layer-b")
+
+    def test_a_stale_base_file_falls_through(self):
+        d = os.path.join(self.repo, ".sharpen", "sdlc", "top")
         os.makedirs(d)
         with open(os.path.join(d, "base.json"), "w") as f:
             json.dump({"ref": "gone-branch"}, f)

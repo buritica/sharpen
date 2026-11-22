@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Artifact folders keep themselves out of git.
 
-Every folder sharpen writes inside a repo (`.sharpen/data/`, `.claude/sdlc/`,
-`.claude/grumpy/`, `.claude/worktrees/`) drops a `.gitignore` holding `*` into
+Every folder sharpen writes inside a repo (`.sharpen/data/`, `.sharpen/sdlc/`,
+`.sharpen/grumpy/`, `.claude/worktrees/`) drops a `.gitignore` holding `*` into
 itself when it is created, so a repo that never ran `/sdlc:init` (or ran an
 older one) still never sees gate state or reports in `git status`. These
 tests run the real writers in throwaway repos with no `.gitignore` of their
@@ -53,6 +53,8 @@ BRANCH = "feat/x"
 # block documents, and what this repo ignores.
 ARTIFACT_DIRS = (
     ".sharpen/data/",
+    ".sharpen/sdlc/",
+    ".sharpen/grumpy/",
     ".claude/data/",
     ".claude/sdlc/",
     ".claude/grumpy/",
@@ -69,7 +71,7 @@ def git(repo, *args, check=True):
 def make_repo():
     repo = os.path.realpath(tempfile.mkdtemp())
     # A real default branch, so a cycle resolves a base and writes
-    # `.claude/sdlc/<branch>/base.json` too.
+    # `.sharpen/sdlc/<branch>/base.json` too.
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "t@t")
     git(repo, "config", "user.name", "t")
@@ -119,10 +121,11 @@ class GateStateTest(RepoTest):
     def test_the_base_record_never_shows_up_in_git_status(self):
         # gate_base.write_base_file, called whenever a cycle resolves a base.
         self.init_cycle()
-        base = os.path.join(self.repo, ".claude", "sdlc", BRANCH, "base.json")
+        base = os.path.join(self.repo, ".sharpen", "sdlc", BRANCH, "base.json")
         self.assertTrue(os.path.isfile(base), "no base resolved; fixture broken")
         self.assertEqual(untracked(self.repo), [])
-        self.assertTrue(ignored(self.repo, f".claude/sdlc/{BRANCH}/base.json"))
+        self.assertTrue(ignored(self.repo, f".sharpen/sdlc/{BRANCH}/base.json"))
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")))
 
     def test_an_existing_state_folder_heals_on_its_next_write(self):
         data = os.path.join(self.repo, ".sharpen", "data")
@@ -178,7 +181,7 @@ class GateStateTest(RepoTest):
 class GrumpyReceiptTest(RepoTest):
     def test_receipt_folder_never_shows_up_in_git_status(self):
         # A receipt needs the pass's non-empty report next to it.
-        art = os.path.join(self.repo, ".claude", "grumpy", BRANCH)
+        art = os.path.join(self.repo, ".sharpen", "grumpy", BRANCH)
         os.makedirs(art)
         with open(os.path.join(art, "review.md"), "w") as f:
             f.write("# Review\n")
@@ -190,13 +193,31 @@ class GrumpyReceiptTest(RepoTest):
         self.assertTrue(
             os.path.isfile(
                 os.path.join(
-                    self.repo, ".claude", "grumpy", BRANCH, "receipts", "review.json"
+                    self.repo, ".sharpen", "grumpy", BRANCH, "receipts", "review.json"
                 )
             )
         )
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")))
         self.assertEqual(untracked(self.repo), [])
-        with open(os.path.join(self.repo, ".claude", "grumpy", ".gitignore")) as f:
+        with open(os.path.join(self.repo, ".sharpen", "grumpy", ".gitignore")) as f:
             self.assertEqual(f.read(), "*\n")
+
+    def test_receipt_folder_leaves_simplify_config_tracked(self):
+        art = os.path.join(self.repo, ".sharpen", "grumpy", BRANCH)
+        os.makedirs(art)
+        with open(os.path.join(art, "review.md"), "w") as f:
+            f.write("# Review\n")
+        with open(os.path.join(self.repo, ".sharpen", "simplify.json"), "w") as f:
+            json.dump({"thresholds": {}}, f)
+        subprocess.run(
+            [sys.executable, RECEIPT, "review", "--worktree", self.repo],
+            capture_output=True,
+            check=True,
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.repo, ".sharpen", ".gitignore"))
+        )
+        self.assertEqual(untracked(self.repo), [".sharpen/simplify.json"])
 
 
 def _command_files():
@@ -205,8 +226,8 @@ def _command_files():
 
 MKDIR = 'mkdir -p "$ARTIFACT_DIR"'
 IGNORE_LINE = re.compile(
-    r'^\[ -e "\$GIT_ROOT/\.claude/(grumpy|sdlc)/\.gitignore" \] \|\| '
-    r"printf '\*\\n' > \"\$GIT_ROOT/\.claude/\1/\.gitignore\""
+    r'^\[ -e "\$GIT_ROOT/\.sharpen/(grumpy|sdlc)/\.gitignore" \] \|\| '
+    r"printf '\*\\n' > \"\$GIT_ROOT/\.sharpen/\1/\.gitignore\""
 )
 
 
@@ -232,7 +253,7 @@ class CommandProseTest(RepoTest):
                     ),
                     "",
                 )
-                folder = "grumpy" if "/.claude/grumpy/" in dir_line else "sdlc"
+                folder = "grumpy" if "/.sharpen/grumpy/" in dir_line else "sdlc"
                 nxt = lines[i + 1] if i + 1 < len(lines) else ""
                 m = IGNORE_LINE.match(nxt)
                 self.assertIsNotNone(m, f"{where}: no ignore line after mkdir")
@@ -253,7 +274,7 @@ class CommandProseTest(RepoTest):
         snippets = self._distinct_ignore_lines()
         self.assertEqual(len(snippets), 2)  # one for grumpy, one for sdlc
         for folder in ("grumpy", "sdlc"):
-            art = os.path.join(self.repo, ".claude", folder, BRANCH)
+            art = os.path.join(self.repo, ".sharpen", folder, BRANCH)
             os.makedirs(art)
             with open(os.path.join(art, "report.md"), "w") as f:
                 f.write("report\n")
@@ -342,12 +363,18 @@ class WriteFailureTest(RepoTest):
     def test_only_sharpens_own_folders_get_one(self):
         import artifact_dirs
 
-        for rel in (".sharpen", ".claude/data", "custom/data", ".claude/sdlc/x"):
+        for rel in (".sharpen", ".claude/data", "custom/data", ".sharpen/sdlc/x"):
             folder = os.path.join(self.repo, rel)
             os.makedirs(folder, exist_ok=True)
             artifact_dirs.ensure_self_ignored(folder)
             self.assertFalse(os.path.exists(os.path.join(folder, ".gitignore")), rel)
-        for rel in (".sharpen/data", ".claude/sdlc", ".claude/grumpy"):
+        for rel in (
+            ".sharpen/data",
+            ".sharpen/sdlc",
+            ".sharpen/grumpy",
+            ".claude/sdlc",
+            ".claude/grumpy",
+        ):
             folder = os.path.join(self.repo, rel)
             os.makedirs(folder, exist_ok=True)
             artifact_dirs.ensure_self_ignored(folder)
@@ -371,8 +398,8 @@ class LayersAgreeTest(unittest.TestCase):
             section = f.read().split("### Artifacts", 1)[1]
         for folder in (
             ".sharpen/data/",
-            ".claude/sdlc/",
-            ".claude/grumpy/",
+            ".sharpen/sdlc/",
+            ".sharpen/grumpy/",
             ".claude/worktrees/",
         ):
             self.assertIn(folder, section)

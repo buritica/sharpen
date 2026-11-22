@@ -247,10 +247,15 @@ Each agent returns raw pipe-delimited lines, not prose — the persona voice and
 ### Settled findings (held back, never hidden)
 
 Before rendering, read the `## Settled` sections of
-`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (every dated run in it; set
+`$GIT_ROOT/.sharpen/grumpy/$BRANCH/fix.md` (every dated run in it; set
 `GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
 `BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
-file exists. Each entry is
+file exists, or else the `## Settled` sections of the legacy
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (a grumpy before 2.15 wrote it). Read
+the legacy file only when the new one is missing: `/grumpy:fix` copies it
+whole into the new folder before appending, so the new file already holds
+every entry it had.
+Each entry is
 `- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
 written by `/grumpy:fix` for a finding it already decided. Hold back a
 finding of yours only when ALL of these hold:
@@ -345,9 +350,9 @@ Save the full review report so `/grumpy:fix` can find it even after context comp
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/grumpy/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/grumpy/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/grumpy/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write the complete Step 4 report (everything from `# Code Review:` through `## Verdict`) to `$ARTIFACT_DIR/review.md` using the Write tool.
@@ -360,7 +365,14 @@ If a plan artifact exists for the current branch, append a review summary to its
 WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
-PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"
+PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
+LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21; read, never written
+if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
+  mkdir -p "$(dirname "$PLAN")"
+  [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
+  # ponytail: copied once, never synced; if plan notes turn up split between .claude/sdlc and .sharpen/sdlc (an sdlc before 4.21 still appending on another host), merge the legacy notes in here
+  cp -p "$LEGACY_PLAN" "$PLAN"  # -p keeps its mtime, so it never passes for a file this run wrote
+fi
 ```
 
 If `$PLAN` exists, append under `## Notes`:
@@ -380,7 +392,7 @@ If `$PLAN` does not exist, skip this step silently.
 
 Last step, after everything above: leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
-the same gitignored `.claude/grumpy/<branch>/` directory as the report, and a
+the same gitignored `.sharpen/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
 writer refuses uncommitted changes. This pass changes nothing, so a dirty
 tree means it reviewed work in progress: don't commit someone's work just to
@@ -390,7 +402,7 @@ it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
 The receipt records the sha256 of `review.md`, so it is refused unless this
-run saved that report under `.claude/grumpy/<branch>/` first. If the host
+run saved that report under `.sharpen/grumpy/<branch>/` first. If the host
 would not let you write there and you printed the report instead, no receipt
 is written and no gate can be earned from this run: say so plainly, and don't
 write the report somewhere else to get one.

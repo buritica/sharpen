@@ -45,8 +45,8 @@ Then create the PR with `gh pr create`. Follow these conventions:
 
 **Body:** Include `Closes #XXX` when a linked issue exists. Include `## Deferred`
 only when the branch added at least one `ponytail:` marker — check
-`.claude/grumpy/<branch>/fix.md`'s own `## Deferred` section first; if that
-artifact doesn't exist (gated with an older installed grumpy, or fixed by
+`.sharpen/grumpy/<branch>/fix.md`'s own `## Deferred` section first, or, only when that file is missing, the legacy `.claude/grumpy/<branch>/fix.md`'s (a grumpy before 2.15 wrote it; `/grumpy:fix` copies it whole into the new folder before appending, so reading both would list its entries twice); if neither
+artifact exists (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
 `git diff "$BASE"...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
 — anchored to an actual comment prefix (not a bare substring match, which a
@@ -104,7 +104,14 @@ After the PR is created, update the plan artifact if it exists:
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
-PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"
+PLAN="$GIT_ROOT/.sharpen/sdlc/$BRANCH/plan.md"
+LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sdlc 4.21; read, never written
+if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
+  mkdir -p "$(dirname "$PLAN")"
+  [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
+  # ponytail: copied once, never synced; if plan notes turn up split between .claude/sdlc and .sharpen/sdlc (an sdlc before 4.21 still appending on another host), merge the legacy notes in here
+  cp -p "$LEGACY_PLAN" "$PLAN"  # -p keeps its mtime, so it never passes for a file this run wrote
+fi
 ```
 
 If `$PLAN` exists, append:
@@ -115,7 +122,7 @@ PR #<number> — YYYY-MM-DD
 <diff stats from `git diff --stat "$BASE"...HEAD` — e.g. "+342/-28 across 6 files">
 ```
 
-If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.claude/sdlc/`, so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).
+If the PR closes an issue, add `Closes #XXX` on the next line. `plan.md` lives under the gitignored `.sharpen/sdlc/` (or `.claude/sdlc/` for an older plan), so this is a local note: do not commit it, and do not push a new commit for it (a commit after the chain makes the review gates stale).
 
 ## Merge
 

@@ -48,7 +48,7 @@ Everything below runs inside the worktree.
 
 Before writing, gather context from the codebase:
 - Search for related existing commands, patterns, or prior art (`Grep`, `Glob`)
-- Check if a spec or plan already exists: `ls .claude/sdlc/` across branches
+- Check if a spec or plan already exists: `ls .sharpen/sdlc/ .claude/sdlc/` across branches (`.claude/sdlc/` holds plans from before sdlc 4.21)
 - Look for related tests or interfaces that constrain the design
 
 Don't over-research. One pass with targeted searches is enough.
@@ -63,7 +63,7 @@ One paragraph. What pain does this solve? Who feels it? Why now? Be concrete —
 ### Goals
 Concrete, testable outcomes. 3–5 bullets. Each starts with a verb and names an observable behavior:
 - "Users can run `/sdlc:spec <description>` and receive a structured spec artifact."
-- "The spec artifact saves to `.claude/sdlc/<branch>/spec.md`."
+- "The spec artifact saves to `.sharpen/sdlc/<branch>/spec.md`."
 
 Not: "Improve the workflow." Not: "Make specs easier."
 
@@ -102,16 +102,16 @@ Related commands, issues, prior art, or external specs. One line each.
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git rev-parse --show-toplevel)
-ARTIFACT_DIR="$GIT_ROOT/.claude/sdlc/$BRANCH"
+ARTIFACT_DIR="$GIT_ROOT/.sharpen/sdlc/$BRANCH"
 mkdir -p "$ARTIFACT_DIR"
-[ -e "$GIT_ROOT/.claude/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.claude/sdlc/.gitignore"  # the folder ignores itself, on any host
+[ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"  # the folder ignores itself, on any host
 ```
 
 Write to `$ARTIFACT_DIR/spec.md` using the Write tool.
 
 After saving, output exactly:
 ```
-Spec saved to .claude/sdlc/<branch>/spec.md
+Spec saved to .sharpen/sdlc/<branch>/spec.md
 
 Review the open questions above, then run /sdlc:plan with this spec as the task description.
 ```

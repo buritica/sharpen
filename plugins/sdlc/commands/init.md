@@ -155,8 +155,10 @@ chain's floor, not an echo of CI.)
   of changes. If one already exists, leave it.
 - Copy `${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/templates/editorconfig` → `.editorconfig` if absent.
 - **Ignore the agent scratch directories.** These commands write gate state
-  under `.sharpen/data/` and per-branch artifacts under `.claude/`; none of it
-  belongs in git. Each of those folders already ignores itself when sharpen
+  under `.sharpen/data/` and per-branch plans and reports under `.sharpen/sdlc/`
+  and `.sharpen/grumpy/`; none of it belongs in git. The `.claude/` lines cover
+  checkouts that sdlc before 4.21 and grumpy before 2.15 wrote there, and the
+  `/sdlc:plan` worktrees, which still live under `.claude/worktrees/`. Each of those folders already ignores itself when sharpen
   creates it (a `.gitignore` holding `*` inside it), so this block is the
   second layer: it keeps the repo's own `.gitignore` honest about what lives
   there, and covers folders created before that. Append whichever are missing
@@ -165,6 +167,8 @@ chain's floor, not an echo of CI.)
   ```
   # Agent scratch — gate state, plans, specs, review reports
   .sharpen/data/
+  .sharpen/sdlc/
+  .sharpen/grumpy/
   .claude/data/
   .claude/sdlc/
   .claude/grumpy/
@@ -182,15 +186,16 @@ chain's floor, not an echo of CI.)
   covered only when that source is a repo-level file (`.gitignore`, a parent
   folder's `.gitignore`, `.git/info/exclude`), a blanket `.claude/` included.
   A match whose source is the folder's own `.gitignore` (for example
-  `.sharpen/data/.gitignore:2:*`, or `.claude/sdlc/.gitignore:1:*`; the
+  `.sharpen/data/.gitignore:2:*`, or `.sharpen/sdlc/.gitignore:1:*`; the
   line number depends on which writer made it) is sharpen's self-ignore, not the repo
   saying so: append the line anyway, unless the repo's `.gitignore` already
-  has a rule naming that folder's contents (`.claude/sdlc/*`, `.claude/sdlc/**`),
+  has a rule naming that folder's contents (`.sharpen/sdlc/*`, `.sharpen/sdlc/**`),
   which git reports from the deeper self-ignore file instead. Probe one path
   at a time; with several paths git only tells you about the ones that matched. If the repo deliberately *tracks* `.claude/`
   for shared commands or `settings.json`, add only the lines above, never a
   blanket ignore. **Never ignore `.sharpen/` as a whole**: it holds the
-  committed `.sharpen/simplify.json` (grumpy's simplify policy), and a
+  committed `.sharpen/simplify.json` (grumpy's simplify policy) and
+  `.sharpen/models.yaml` (grumpy's model overrides), and a
   blanket entry silently drops it from the next commit.
 
   **If you replace an existing agent-scratch ignore entry with these**, delete the

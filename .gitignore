@@ -9,6 +9,9 @@ __pycache__/
 .sharpen/bench/
 .claude/data/
 # Per-branch agent artifacts (generated locally; scratch, never committed)
+.sharpen/grumpy/
+.sharpen/sdlc/
+# Where sdlc < 4.21 and grumpy < 2.15 wrote them; still read, never written
 .claude/grumpy/
 .claude/sdlc/
 # Temp worktrees

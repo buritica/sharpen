@@ -1,101 +1,70 @@
-# sdlc UPDATE — v4.20.0
+# sdlc UPDATE — v4.21.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.20.0 — CI no longer checks gate state
+## New in 4.21.0 — plans and reports move out of `.claude/`
 
-`ci-validate.py` and the `gates` CI job it backed are gone. They read the gate store in CI,
-but the store is gitignored, so the job never had a store to read and always passed. sharpen
-is local and pre-PR: the gate chain runs on your machine and blocks the PR (every path 4.16.0
-gates, plus the pre-push floor); CI checks the code through `ci-pass`, and never gate
-evidence.
+Plans and specs are now written to `.sharpen/sdlc/<branch>/`, and grumpy 2.15 writes its
+reports and pass receipts to `.sharpen/grumpy/<branch>/`. Headless Claude Code refuses to
+write under `.claude/`, which it treats as its own configuration, so a pass run with
+`claude -p` printed its report instead of saving it. `.sharpen/` already held gate state,
+and no host treats it specially.
 
-- **If your CI has a `gates` job** that runs `plugins/sdlc/scripts/ci-validate.py`, delete
-  the job and drop it from `ci-pass`'s `needs`. `/sdlc:init` never scaffolded one and the
-  script only ever existed in sharpen's own checkout, so most repos have nothing to do.
-- `record-gate.py --attach-review` and `--status` are unchanged: an attached review report is
-  still shown locally.
-- The README, this plugin's README, `docs/portable-core.md` and `/sdlc:gate` now describe
-  the local gate as the product and state its limit: opt-out per branch, not adversarial.
+- **Nothing to migrate.** The old `.claude/sdlc/` and `.claude/grumpy/` folders are still
+  read, and never written. A receipt in both places counts by whichever copy is newer. A
+  plan or `fix.md` that only exists in the old folder is copied into `.sharpen/` the first
+  time a pass appends to it (its Settled and Deferred entries come along). Other reports,
+  specs and `base.json` are read from the new folder first and the old one when the new
+  copy is missing.
+- **Rolling back** to sdlc 4.20 and grumpy 2.14 means copying back what was written since,
+  because they read only `.claude/`. Run this in each worktree that holds work in progress
+  (`/sdlc:plan` worktrees included); `-p` keeps the reports' mtimes, so grumpy 2.14 doesn't
+  count a copied report as freshly saved:
+  `mkdir -p .claude/sdlc .claude/grumpy && cp -pR .sharpen/sdlc/. .claude/sdlc/ && cp -pR .sharpen/grumpy/. .claude/grumpy/`.
+- **Upgrade grumpy to 2.15 with this release.** They share the path contract. With an
+  older grumpy, receipts still record (the fallback above), but `/grumpy:review` and
+  `/grumpy:imagine` look for the plan only under `.claude/sdlc/`, so they miss a plan this
+  version wrote, and its `diff_base.py` misses the stack base (`base.json`) and resolves the
+  base on its own (sdlc 4.21 removes a legacy `.claude/sdlc/<branch>/base.json` whenever it
+  writes the new one, so an older grumpy never reads a stale one).
+- **`/sdlc:init` adds `.sharpen/sdlc/` and `.sharpen/grumpy/` to its ignore block.** Both
+  folders also ignore themselves when created, so a repo that skips init stays clean.
+  `.sharpen/` as a whole is still never ignored, because `.sharpen/simplify.json` and
+  `.sharpen/models.yaml` are committed. The `.claude/sdlc/` and `.claude/grumpy/` lines stay, for checkouts that
+  still hold old files there.
+- **A team that commits its plans** keeps the ones already tracked under `.claude/sdlc/`.
+  New plans land in `.sharpen/sdlc/`, which ignores itself; put `!*` in
+  `.sharpen/sdlc/.gitignore` (deleting it doesn't last) to commit them there.
+- `/sdlc:plan` worktrees stay under `.claude/worktrees/`. `git worktree add` creates them
+  from a shell, which Claude Code's check on its file tools doesn't cover.
 
-## New in 4.19.0 — the gate runs the commands AGENTS.md declares
+## Coming from 4.13 or earlier
 
-`/sdlc:init` (step 10) writes the repo's test, lint, format and typecheck commands into
-the AGENTS.md managed block, but `/sdlc:gate` ignored them and re-detected from its own
-table. On a repo whose real runner isn't the obvious one (this repo runs
-`python3 scripts/run-tests.py`; the table said `pytest`), the gate ran something other
-than what the repo says it runs.
+Eight releases (4.14 to 4.21) ship together. In upgrade order, what each one asks of an existing repo
+(full notes for each are in [`CHANGELOG.md`](CHANGELOG.md)):
 
-- `/sdlc:gate` now reads the block first, through the new `scripts/declared_commands.py`
-  (prints the declared commands as JSON; "not configured" reads back as null).
-- **AGENTS.md wins** when it and the detection table disagree. The table only fills a
-  command the block leaves null, or all of them in a repo with no block.
-- The gate names the source of each command in its mode line, e.g.
-  `Commands: AGENTS.md (test, lint); detected (typecheck)`.
-- A block stamped by an older sdlc is still read (it is still the repo's declaration).
-- A declared command whose program isn't installed (`command -v` can't find it) is
-  reported as a wrong declaration: the gate runs the detected command for that run and
-  suggests re-running `/sdlc:init` step 10. A declared command that starts and then
-  fails fails the gate, whatever its exit code. Declared commands run from the repo root.
-- Monorepo entries (`web: bun test`) run per area, split at the first colon; `format` is never run by a gate;
-  shellcheck still runs alongside a declared `lint` that doesn't include it.
-- A line edited inside the markers past parsing (`make test (needs docker)`, an item
-  without backticks, `- Test:`, a duplicate entry) is reported as unreadable and falls
-  back to detection, instead of failing silently.
+- **4.14 — skill gates record from receipts.** Each grumpy pass leaves a receipt naming the
+  commit it ran on, and `record-gate.py --verify <pass>` records the gate from it, on every
+  host. Nothing to do; upgrade grumpy with sdlc (see the bottom of this list).
+- **4.15 — each host declares itself.** The capability manifest becomes
+  `.sharpen/data/capabilities.<host>.json`, and plugin paths in skills are spelled so they
+  resolve on Claude Code, Codex and pi. Nothing to do; `docs/hosts.md` is the support matrix.
+- **4.16 — every way to open a PR is gated**, plus a git pre-push hook as the floor under
+  it. Nothing to do; auto-init installs the hook.
+- **4.17 — a finished chain stops re-running.** `--carry` carries the gates over a clean
+  rebase or a safe docs commit, and `--set-base` pins a stacked branch's review base.
+- **4.18 — artifact folders ignore themselves.** If a repo committed any of them, untrack
+  them once with `git rm -r --cached` (now naming the `.sharpen/` folders below).
+- **4.19 — the gate runs the commands AGENTS.md declares.** Fix a wrong declared command by
+  re-running `/sdlc:init` step 10.
+- **4.20 — CI no longer checks gate state.** Delete a `gates` CI job if your repo has one.
+- **4.21 — plans and reports move out of `.claude/`** (above).
 
-**What an existing repo needs to do:** nothing. A repo without the block behaves exactly
-as before. A repo with one now runs what it declares; if a declared command is wrong or
-out of date, fix it by re-running `/sdlc:init` step 10, not by editing inside the markers.
-
-## New in 4.18.0 — artifact folders keep themselves out of git
-
-Gate state lives in `.sharpen/data/` (since the neutral-root move), but `/sdlc:init`'s
-ignore block still listed only the `.claude/` folders, so a repo initialised by an earlier
-version can have its gate state untracked and one `git add -A` away from a commit. And a
-repo that never ran init (the auto-init hook arms a cycle on the first commit anyway, and
-grumpy runs without sdlc) had nothing ignored at all.
-
-- Every folder sharpen writes inside a repo now **ignores itself** when it is created:
-  `.sharpen/data/`, `.claude/sdlc/`, `.claude/grumpy/` and `.claude/worktrees/` each get
-  a `.gitignore` holding `*`. This works on every host, needs no init, and an existing
-  folder gets the file on its next write. `.sharpen/` itself never gets one, because the
-  committed `.sharpen/simplify.json` lives there.
-- `/sdlc:init`'s ignore block adds `.sharpen/data/`, checks coverage with
-  `git check-ignore` instead of by eye, and never adds a blanket `.sharpen/`.
-- The top-level pi bundle's version now moves with sdlc, and `check-marketplace.py`
-  enforces it (it had drifted to 4.12.1). The pi install URLs point at
-  `github.com/buritica/sharpen` instead of a placeholder.
-
-**What an existing repo needs to do:** nothing required; the next gate write adds
-`.sharpen/data/.gitignore`. To make the repo's own `.gitignore` say so too, re-run
-`/sdlc:init` (it appends only the missing `.sharpen/data/` line) or add it by hand. If
-`git status` already shows `.sharpen/data/` as untracked, it clears on the next write.
-A repo whose live gate state is still in the legacy `.claude/data/` gets no self-ignore
-there (sharpen shares that folder and never marks it); keep its `.gitignore` line.
-A repo that already *committed* any of these folders has to untrack them once: an
-ignore file never untracks anything, so a tracked `gates.json` or `review.md` keeps
-showing as modified, and a grumpy receipt refuses a dirty tree. Run
-`git rm -r --cached .sharpen/data .claude/sdlc .claude/grumpy` (whichever exist) and
-commit that.
-Also dropped from this repo's own `.gitignore`: `.pr-body.md`, which nothing writes any more.
-
-Two side effects of the folders now being *ignored* rather than merely untracked:
-
-- `git clean -fdX` (a common `make clean`) now removes gate state and grumpy receipts in a
-  repo that never ran init, as it already did in repos that did. A cycle cleaned that way
-  loses its recorded gates; re-run the chain.
-- A team that commits plans under `.claude/sdlc/` keeps the ones already tracked, but new
-  ones are skipped by `git add -A`. Deleting `.claude/sdlc/.gitignore` doesn't last (the
-  next command puts it back); replace its contents with `!*` instead, or `git add -f`.
-- A plain `git worktree remove` (what `/sdlc:ship` runs) used to refuse a worktree
-  holding untracked plans and reports. Now that they're ignored, it succeeds and deletes
-  them with the worktree. Copy anything worth keeping out of `.claude/sdlc/<branch>/` or
-  `.claude/grumpy/<branch>/` before shipping.
-
-Update grumpy alongside (2.12.0+) so its report folder ignores itself too.
+Upgrade grumpy to **2.15** at the same time. sdlc 4.21 with an older grumpy still records
+gates, but grumpy 2.15 with an older sdlc never does.
 
 ## What a repo gets
 

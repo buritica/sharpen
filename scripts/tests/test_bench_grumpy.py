@@ -771,7 +771,7 @@ class FixtureTest(unittest.TestCase):
         case = "billing-settled"
         with tempfile.TemporaryDirectory() as d:
             branch = bench.build_repo(case, d)
-            fix = os.path.join(d, ".claude", "grumpy", *branch.split("/"), "fix.md")
+            fix = os.path.join(d, ".sharpen", "grumpy", *branch.split("/"), "fix.md")
             with open(fix, encoding="utf-8") as f:
                 self.assertIn("## Settled", f.read())
             self.assert_clean_worktree(d)
@@ -779,12 +779,12 @@ class FixtureTest(unittest.TestCase):
     def test_find_report_reads_only_the_branch_folder(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(bench.find_report(d, "bench/x", "review"))
-            odd = os.path.join(d, ".claude", "grumpy", "elsewhere")
+            odd = os.path.join(d, ".sharpen", "grumpy", "elsewhere")
             os.makedirs(odd)
             with open(os.path.join(odd, "review.md"), "w") as f:
                 f.write("# Code Review\n")
             self.assertIsNone(bench.find_report(d, "bench/x", "review"))
-            right = os.path.join(d, ".claude", "grumpy", "bench", "x")
+            right = os.path.join(d, ".sharpen", "grumpy", "bench", "x")
             os.makedirs(right)
             with open(os.path.join(right, "review.md"), "w") as f:
                 f.write("# Code Review\n")
@@ -820,7 +820,7 @@ mode = os.environ.get("FAKE_MODE", "report")
 open(os.environ["FAKE_ARGV_LOG"], "a").write(" ".join(sys.argv[1:]) + "\\n")
 if mode == "report":
     branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
-    d = os.path.join(".claude", "grumpy", *branch.split("/"))
+    d = os.path.join(".sharpen", "grumpy", *branch.split("/"))
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, "review.md"), "w").write(
         "## Critical Issues\\n\\n- [code]: ChargeResultFormatter is undefined [src/billing/charge.py:36]\\n"
@@ -1179,6 +1179,28 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("billing-planted", stdout)
         self.assertIn("planted=", stdout)
+
+
+class FindReportTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+
+    def _write(self, *parts):
+        path = os.path.join(self.repo, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write("report\n")
+        return path
+
+    def test_finds_the_report_at_the_new_root(self):
+        path = self._write(".sharpen", "grumpy", "bench", "x", "review.md")
+        self.assertEqual(bench.find_report(self.repo, "bench/x", "review"), path)
+
+    def test_a_report_under_claude_is_not_read(self):
+        # The bench runs this checkout's grumpy, which writes only under
+        # .sharpen/; a report under .claude/ is a contract miss.
+        self._write(".claude", "grumpy", "bench", "x", "review.md")
+        self.assertIsNone(bench.find_report(self.repo, "bench/x", "review"))
 
 
 if __name__ == "__main__":

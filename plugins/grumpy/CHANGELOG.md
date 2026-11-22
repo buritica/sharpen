@@ -3,6 +3,34 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.15.0 — reports and receipts move to `.sharpen/grumpy/`
+
+Every pass now writes its report, and its receipt, to `.sharpen/grumpy/<branch>/` instead of
+`.claude/grumpy/<branch>/`. Claude Code treats `.claude/` as its own configuration, and a
+headless session (`claude -p`, the benchmark) refuses a Write-tool save there, so the pass
+printed its report; with no saved report, a pass leaves no receipt and earns no gate.
+
+**grumpy 2.15 needs sdlc 4.21 or newer, or gates 2–6 never record.** sdlc 4.20 and older
+look for receipts only under `.claude/grumpy/`, never find the ones 2.15 writes, and say
+nothing about it: every review gate just stays open. Upgrade both plugins together
+(`claude plugin marketplace update`, then restart the session). The other skew,
+sdlc 4.21 with an older grumpy, still records gates (sdlc 4.21 reads receipts an older
+grumpy left under `.claude/grumpy/`), but that grumpy misses a plan sdlc 4.21 wrote and
+resolves the stack base on its own. When a legacy receipts folder exists for the branch,
+`receipt.py` now says on stderr that an sdlc 4.20 or older would not see the new receipt.
+
+- `/grumpy:fix` reads each report from the new folder, and from the old one when the new
+  folder has no copy of that report, so a review run before the upgrade is still found. review and imagine read the settled list in `fix.md`
+  the same way.
+- review, imagine, simplify and fix read the sdlc plan from `.sharpen/sdlc/<branch>/plan.md`,
+  falling back to `.claude/sdlc/`, and `diff_base.py` reads sdlc's `base.json` from
+  `.sharpen/sdlc/<branch>/` first. Upgrade sdlc to 4.21 alongside: it writes plans and the
+  base file to the new folder, and reads receipts from both.
+- `/grumpy:simplify` also excludes `.sharpen/grumpy/**` and `.sharpen/sdlc/**` from
+  measurement by default.
+- `.sharpen/grumpy/` ignores itself when created (a `.gitignore` holding `*`). `.sharpen/`
+  as a whole never does, because it holds the committed `simplify.json`.
+
 ## 2.14.0 — current models, a Codex column, review routes
 
 `models.yaml` moves to the current Claude ids (`claude-opus-5-5`, `claude-sonnet-5-5`,

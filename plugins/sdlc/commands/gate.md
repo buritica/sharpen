@@ -26,8 +26,8 @@ Run `--unroute` when you finish gating `$WT` and keep working in this session â€
 
 A gate cycle started by `--init` or by auto-init is **receipt-backed**. Each
 grumpy pass ends by writing a small receipt into the gitignored
-`.claude/grumpy/<branch>/receipts/` directory, naming the commit it ran
-against. A skill gate records only from a receipt that names a commit on the branch
+`.sharpen/grumpy/<branch>/receipts/` directory, naming the commit it ran
+against. (A receipt an older grumpy left under `.claude/grumpy/` still counts.) A skill gate records only from a receipt that names a commit on the branch
 (HEAD, or an ancestor when a later pass has already committed), was written
 after this cycle started, and (for a fix gate) was written after the receipt of
 the pass it follows, and whose report (`review.md`, ...) is still on disk. A
@@ -298,8 +298,10 @@ stale and tells you to reset. Restart the session, update pi, and run
 On a stack (main <- A <- B <- your branch), a diff against main reviews every
 layer below yours: the passes re-review A and B, and a fix pass may edit
 their code. The chain resolves one base for your branch and every part of it
-uses that base: the grumpy passes (grumpy 2.11+ reads `.claude/sdlc/<branch>/base.json`;
-an older grumpy still diffs against the default branch),
+uses that base: the grumpy passes (grumpy 2.15+ reads `.sharpen/sdlc/<branch>/base.json`;
+grumpy 2.11 to 2.14 look only under `.claude/sdlc/`, which sdlc 4.21 empties of
+`base.json` on every write, so they resolve the base on their own from `branch.<branch>.sdlcBase`,
+the PR base, the upstream and then the default branch, as an older grumpy always did),
 `--carry`, the round counter and `--status` (`Base: <ref> at <commit> (why)`).
 First hit wins:
 
