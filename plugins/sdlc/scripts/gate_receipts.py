@@ -184,6 +184,22 @@ def _report_mismatch(path, receipt):
     return None, None
 
 
+def _fix_gate_refusal(path, gate, receipt, branch_data):
+    """Why a fix receipt can't earn `gate`, or None: a stage receipt names its
+    own fix gate, and one receipt never earns both fix gates."""
+    stage = receipt.get("stage")
+    if stage and FIX_STAGE_RECEIPT.get(gate) != f"fix-{stage}":
+        return f"receipt at {path} is for the fix after {stage}, not {gate}"
+    used = (branch_data or {}).get(EVIDENCE_RECEIPT_KEY, {})
+    for other, stamp in (used if isinstance(used, dict) else {}).items():
+        if other != gate and stamp == receipt.get("written_at"):
+            return (
+                f"receipt at {path} already earned {other}; one fix run earns "
+                f"one fix gate, so run /grumpy:fix again for {gate}"
+            )
+    return None
+
+
 def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=()):
     """Return (receipt, None) when the receipt at `path` earns `gate`, else
     (None, reason).
@@ -221,16 +237,9 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     before, prior = _predecessor_written(path, gate, branch_data)
     if prior and written <= prior:
         return None, f"receipt at {path} predates the {before} pass it must follow"
-    stage = receipt.get("stage")
-    if stage and FIX_STAGE_RECEIPT.get(gate) != f"fix-{stage}":
-        return None, f"receipt at {path} is for the fix after {stage}, not {gate}"
-    used = (branch_data or {}).get(EVIDENCE_RECEIPT_KEY, {})
-    for other, stamp in (used if isinstance(used, dict) else {}).items():
-        if other != gate and stamp == receipt.get("written_at"):
-            return None, (
-                f"receipt at {path} already earned {other}; one fix run earns "
-                f"one fix gate, so run /grumpy:fix again for {gate}"
-            )
+    reason = _fix_gate_refusal(path, gate, receipt, branch_data)
+    if reason:
+        return None, reason
     if warning:
         receipt = dict(receipt, warning=warning)
     return receipt, None
