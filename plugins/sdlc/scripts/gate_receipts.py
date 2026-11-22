@@ -24,6 +24,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 
+import gate_convergence as gc
 import gate_store as gs
 
 EVIDENCE_KEY = "evidence"
@@ -40,6 +41,17 @@ RECEIPT_NAME_FOR_SKILL = {
     "grumpy:imagine": "imagine",
     "grumpy:fix": "fix",
 }
+# Fix gate -> the stage-specific receipt grumpy 2.10+ writes for it
+# (`receipt.py fix --stage review|imagine`). An older grumpy writes one
+# `fix.json` for both; that file is still read when no stage file exists.
+FIX_STAGE_RECEIPT = {
+    "grumpy-fix-post-review": "fix-review",
+    "grumpy-fix-post-imagine": "fix-imagine",
+}
+# gate -> written_at of the receipt that earned it, so one receipt can never
+# earn both fix gates (a skipped --verify after the first fix used to let the
+# second fix's receipt record both).
+EVIDENCE_RECEIPT_KEY = "evidence_receipts"
 # Fix gate -> (the gate it follows, that pass's receipt name). A fix receipt
 # must be newer than the receipt of the pass it follows.
 _FIX_PREDECESSOR = {
@@ -78,6 +90,12 @@ def stamp_head(data, branch, gate, head):
         data[branch].setdefault(EVIDENCE_HEADS_KEY, {})[gate] = head
 
 
+def _stamp_receipt_identity(data, branch, gate, receipt):
+    written = receipt.get("written_at")
+    if gate in FIX_STAGE_RECEIPT and written:
+        data[branch].setdefault(EVIDENCE_RECEIPT_KEY, {})[gate] = written
+
+
 def uses_receipts(branch_data):
     """True when this cycle stamps skill gates only on a fresh receipt."""
     return (
@@ -86,18 +104,21 @@ def uses_receipts(branch_data):
     )
 
 
-def receipt_path(worktree_root, branch, skill):
+def receipt_path(worktree_root, branch, skill, gate=None):
     """Where the grumpy pass for `skill` leaves its receipt for `branch`.
 
     Same directory the passes already write their reports to
     (`<worktree>/.claude/grumpy/<branch>/`), which `/sdlc:init` and this
-    repo already gitignore, so receipts never reach git."""
+    repo already gitignore, so receipts never reach git. For a fix gate, the
+    stage-specific receipt wins when it exists."""
     name = RECEIPT_NAME_FOR_SKILL.get(skill)
     if not name or not worktree_root:
         return None
-    return os.path.join(
-        worktree_root, ".claude", "grumpy", branch, "receipts", f"{name}.json"
-    )
+    directory = os.path.join(worktree_root, ".claude", "grumpy", branch, "receipts")
+    stage = FIX_STAGE_RECEIPT.get(gate)
+    if stage and os.path.exists(os.path.join(directory, f"{stage}.json")):
+        name = stage
+    return os.path.join(directory, f"{name}.json")
 
 
 def _parse_ts(value):
@@ -200,6 +221,16 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     before, prior = _predecessor_written(path, gate, branch_data)
     if prior and written <= prior:
         return None, f"receipt at {path} predates the {before} pass it must follow"
+    stage = receipt.get("stage")
+    if stage and FIX_STAGE_RECEIPT.get(gate) != f"fix-{stage}":
+        return None, f"receipt at {path} is for the fix after {stage}, not {gate}"
+    used = (branch_data or {}).get(EVIDENCE_RECEIPT_KEY, {})
+    for other, stamp in (used if isinstance(used, dict) else {}).items():
+        if other != gate and stamp == receipt.get("written_at"):
+            return None, (
+                f"receipt at {path} already earned {other}; one fix run earns "
+                f"one fix gate, so run /grumpy:fix again for {gate}"
+            )
     if warning:
         receipt = dict(receipt, warning=warning)
     return receipt, None
@@ -213,6 +244,7 @@ def stamp_receipt(data, branch, gate, receipt, invalidated, before):
     the gates that stay cleared."""
     bd = data[branch]
     stamp_head(data, branch, gate, receipt.get("head"))
+    _stamp_receipt_identity(data, branch, gate, receipt)
     written = _parse_ts(receipt.get("written_at"))
     cleared = []
     for g in invalidated:
@@ -229,8 +261,12 @@ def receipt_heads(worktree_root, branch, head, cwd=None):
     """Receipt heads on disk for `branch` that are strict ancestors of
     `head`. Runs git, so call it before taking the store lock."""
     found = set()
-    for skill in RECEIPT_NAME_FOR_SKILL:
-        receipt, _ = read_receipt(receipt_path(worktree_root, branch, skill))
+    paths = [receipt_path(worktree_root, branch, s) for s in RECEIPT_NAME_FOR_SKILL]
+    paths += [
+        receipt_path(worktree_root, branch, "grumpy:fix", g) for g in FIX_STAGE_RECEIPT
+    ]
+    for path in paths:
+        receipt, _ = read_receipt(path)
         rhead = (receipt or {}).get("head")
         if isinstance(rhead, str) and rhead and rhead != head:
             found.add(rhead)
@@ -273,7 +309,9 @@ def stale_skill_gates(branch_data, head):
     []. The rule is strict: once the last recorded skill gate's head differs
     from the branch's head, a commit landed after the review chain, and every
     skill gate stamped against an older head is stale. Earlier gates on older
-    heads are normal (fix commits), so only the last one decides."""
+    heads are normal (fix commits), so only the last one decides. A recorded
+    carry (gate_convergence) moves a gate's head forward to the commit it was
+    carried to, so carried gates count as on that commit."""
     if not uses_receipts(branch_data) or not head:
         return []
     heads = branch_data.get(EVIDENCE_HEADS_KEY, {})
@@ -286,9 +324,45 @@ def stale_skill_gates(branch_data, head):
     last = recorded[-1] if recorded else None
     # A headless gate that nobody attested was stamped without a receipt (a
     # session still running a pre-receipt sdlc): no evidence, so stale.
-    if not last or last in attested or heads.get(last) == head:
+    if not last or last in attested or _on(branch_data, heads.get(last), head):
         return []
-    return [g for g in recorded if g not in attested and heads.get(g) != head]
+    return [
+        g
+        for g in recorded
+        if g not in attested and not _on(branch_data, heads.get(g), head)
+    ]
+
+
+def _on(branch_data, evidence, head):
+    """True when a gate earned on `evidence` counts as on `head`: the same
+    commit, or one a recorded carry reached from it."""
+    return bool(evidence) and head in gc.carried_heads(branch_data, evidence)
+
+
+def carry_chain(branch_data):
+    """The commits the last recorded skill gate counts as on: its evidence
+    head, then each commit recorded carries reached from it. [] when no skill
+    gate carries an evidence head."""
+    gates = (branch_data or {}).get("gates", {})
+    recorded = [g for g in SKILL_GATE_ORDER if gates.get(g)]
+    if not recorded:
+        return []
+    head = (branch_data or {}).get(EVIDENCE_HEADS_KEY, {}).get(recorded[-1])
+    return gc.carried_heads(branch_data, head) if head else []
+
+
+def carry_source(branch_data, head=None):
+    """The commit a new carry starts from, or None. With `head`, the newest
+    commit in the chain that is in `head`'s history, so a reset back past a
+    carry and a new commit carries from where HEAD actually forked."""
+    chain = carry_chain(branch_data)
+    if not chain:
+        return None
+    if head:
+        for commit in reversed(chain):
+            if commit == head or gc.is_ancestor(commit, head):
+                return commit
+    return chain[-1]
 
 
 def branch_head(branch, cwd=None):
@@ -311,9 +385,11 @@ def stale_message(branch_data, branch, stale):
     )
     return (
         f"Stale ({len(stale)}): {seen}. A commit landed after the review chain "
-        f'on "{branch}". Re-run it on the current HEAD: /sdlc:gate --init '
-        f"{branch_data.get('tier')} (this also clears tests/lint/typecheck), "
-        "then the passes again."
+        f'on "{branch}". If those commits are a clean rebase, release bookkeeping, whitespace, '
+        "safe docs, or a small comment fix, carry the gates instead: "
+        "record-gate.py --carry (it says which applies, and re-opens "
+        "tests/lint/typecheck). Otherwise re-run the chain on the current "
+        f"HEAD: /sdlc:gate --init {branch_data.get('tier')}, then the passes again."
     )
 
 

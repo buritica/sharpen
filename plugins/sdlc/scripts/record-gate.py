@@ -20,6 +20,13 @@ Usage:
                                         # find this repo's store from <path>'s
                                         # cwd (see gate.md's "cross-repo
                                         # routing" section, sharpen#10)
+  record-gate.py --set-base <ref|auto>  # pin the base the review round
+                                      # covers (a stacked branch's parent);
+                                      # `auto` resolves it again: open PR's
+                                      # base, then upstream, then main
+  record-gate.py --new-rounds           # with --init: start the round count
+                                      # over (a branch name reused for
+                                      # unrelated work)
   record-gate.py --profile <name>       # with --init: record an explicit
                                         # portable profile
   record-gate.py --capabilities-file <path>
@@ -32,6 +39,13 @@ Usage:
                                       # its grumpy pass left (review, fix,
                                       # imagine, simplify, or grumpy:<name>);
                                       # `all` sweeps every receipt on disk
+  record-gate.py --carry [--reason "<text>"]
+                                      # carry the skill gates over commits
+                                      # that can't change what the review
+                                      # saw (clean rebase, release
+                                      # bookkeeping, whitespace, safe docs;
+                                      # or a small comment fix with a
+                                      # reason). Re-opens tests/lint/typecheck
   record-gate.py --attest <gate> --reason "<text>"
                                       # last-resort: stamp a skill-gated gate
                                       # on human attestation instead of the
@@ -45,6 +59,8 @@ Store path: $SDLC_GATES_PATH, or <main-checkout>/.sharpen/data/gates.json
 import sys
 
 import capabilities
+import gate_base as gb
+import gate_convergence as gc
 import gate_receipts as rc
 import gate_store as gs
 import review_report
@@ -76,7 +92,17 @@ def _clear_cross_repo_route(source_root):
 
 
 def _init_with_route(
-    data, branch, tier, route_to_set, route_to_clear, profile=None, capabilities=None
+    data,
+    branch,
+    tier,
+    route_to_set,
+    route_to_clear,
+    profile=None,
+    capabilities=None,
+    round_head=None,
+    round_added=None,
+    new_rounds=False,
+    base=None,
 ):
     """Init the cycle, apply this invocation's routing decision, and report the
     branches it stopped driving as `(branch_data, dropped)`.
@@ -89,6 +115,8 @@ def _init_with_route(
     where this worktree's skill gates land, and an unannounced move is the exact
     failure this whole channel was built to stop.
     """
+    previous = None if new_rounds else data.get(branch)
+    history = gc.next_rounds(previous, round_head, round_added)
     bd = rc.init_gates(
         data,
         branch,
@@ -97,6 +125,9 @@ def _init_with_route(
         capabilities=capabilities,
         evidence=rc.default_evidence(),
     )
+    bd[gc.ROUNDS_KEY] = history
+    if base:
+        bd[gc.BASE_KEY] = base
     dropped = gs.clear_route(data, route_to_clear) if route_to_clear else []
     if route_to_set:
         gs.set_route(data, branch, route_to_set)
@@ -254,6 +285,118 @@ def _verify(target, branch_override):
     return 1
 
 
+def _convergence_suffix(branch_data):
+    """--status lines for the review base, carries and the round count."""
+    lines = [gb.describe((branch_data or {}).get(gc.BASE_KEY))]
+    lines = [line for line in lines if line] + gc.format_carries(branch_data)
+    summary = gc.round_summary(branch_data)
+    if summary:
+        lines.append(summary)
+    return "".join(f"\n{line}" for line in lines)
+
+
+def _set_base(path, branch, ref):
+    """`--set-base <ref|auto>`: pin (or unpin) the review round's base and
+    refresh the cycle's stored base and the passes' base.json."""
+    err = gb.set_configured(branch, None if ref == "auto" else ref)
+    if err:
+        _log(f"[gate] error: {err}")
+        return 1
+    head = rc.branch_head(branch)
+    base = gb.snapshot(branch, head, use_host=True) if head else None
+    if base and isinstance(gs.load_store(path).get(branch), dict):
+
+        def mutate(d):
+            if isinstance(d.get(branch), dict):
+                d[branch][gc.BASE_KEY] = base
+
+        gs.update_store(path, mutate)
+    if base:
+        gb.write_base_file(branch, base)
+        _log(f"[gate] {gb.describe(base)}")
+    else:
+        _log("[gate] no base resolves for this branch")
+    _log(
+        "[gate] a different base changes what the review covers; if review "
+        "gates are already recorded, re-init before relying on them"
+    )
+    return 0
+
+
+def _carry(path, branch, reason):
+    """`--carry`: carry the skill gates over commits classify_carry allows."""
+    bd = gs.load_store(path).get(branch)
+    if not isinstance(bd, dict):
+        _log(f'[gate] error: no gate cycle on "{branch}"; start one with --init')
+        return 1
+    if not rc.uses_receipts(bd):
+        _log(
+            f'[gate] error: no receipt-backed cycle on "{branch}"; only those '
+            "go stale, so there is nothing to carry"
+        )
+        return 1
+    head = rc.branch_head(branch)
+    if not head:
+        _log(
+            f'[gate] error: "{branch}" is not a local branch here, so its head is unknown'
+        )
+        return 1
+    old = rc.carry_source(bd, head)
+    if not old:
+        _log("[gate] nothing to carry: no review gate is recorded from a receipt yet")
+        return 0
+    if not rc.stale_skill_gates(bd, head):
+        _log("[gate] nothing to carry: the review gates are not stale")
+        return 0
+    chain = rc.carry_chain(bd)
+    spent = gc.manual_lines_spent(bd)
+    old_base = (bd.get(gc.BASE_KEY) or {}).get("commit")
+    base = gb.snapshot(branch, head, use_host=True)
+    klass, why = gc.classify_carry(
+        old,
+        head,
+        reason=reason,
+        spent=spent,
+        old_base=old_base,
+        new_base=(base or {}).get("commit"),
+    )
+    if not klass:
+        if why.startswith("git could not"):
+            _log(f"[gate] cannot carry: {why}.")
+        else:
+            _log(
+                f"[gate] cannot carry: {why}. Re-run the chain: --init "
+                f"{bd.get('tier')} (with the same --branch/--route-from you "
+                "started the cycle with)"
+            )
+        return 1
+    note = reason.strip() if reason and reason.strip() else None
+    lines = gc.change_size(old, head) if klass == "manual" else None
+
+    def mutate(d):
+        # Classification ran on a snapshot outside the lock; refuse if the
+        # cycle changed meanwhile (a concurrent --init or another carry).
+        current = d.get(branch)
+        if not isinstance(current, dict) or rc.carry_chain(current) != chain:
+            raise ValueError(
+                f'the gate cycle on "{branch}" changed while --carry was '
+                "classifying; run --carry again"
+            )
+        if base:
+            current[gc.BASE_KEY] = base
+        return gc.apply_carry(d, branch, old, head, klass, note, lines)
+
+    cleared = gs.update_store(path, mutate)
+    gb.write_base_file(branch, base)
+    _log(
+        f"[gate] carried the review gates from {old[:12]} to {head[:12]} "
+        f"({klass}{': ' + note if note else ''})."
+    )
+    if cleared:
+        _log(f"[gate] re-run {', '.join(cleared)}: a carry re-opens them")
+    return 0
+
+
 def main(argv):
     branch_override = None
     route_from = None
@@ -261,9 +404,20 @@ def main(argv):
     capabilities_file = None
     attach_review_file = None
     reason = None
+    new_rounds = False
+    set_base = None
     rest = []
     i = 0
     while i < len(argv):
+        if argv[i] == "--set-base" and i + 1 < len(argv):
+            set_base = argv[i + 1]
+            rest.append("--set-base")
+            i += 2
+            continue
+        if argv[i] == "--new-rounds":
+            new_rounds = True
+            i += 1
+            continue
         if argv[i] == "--branch" and i + 1 < len(argv):
             branch_override = argv[i + 1]
             i += 2
@@ -305,8 +459,11 @@ def main(argv):
     if attach_review_file and requested_profile:
         _log("[gate] error: --attach-review does not accept --profile")
         return 1
-    if command != "--attest" and reason is not None:
-        _log("[gate] error: --reason is only valid with --attest")
+    if command not in ("--attest", "--carry") and reason is not None:
+        _log("[gate] error: --reason is only valid with --attest or --carry")
+        return 1
+    if new_rounds and command != "--init":
+        _log("[gate] error: --new-rounds is only valid with --init")
         return 1
     if "--attest" in rest and command != "--attest":
         # Without this, `--init <tier> --attest <gate>` parses to command
@@ -358,6 +515,13 @@ def main(argv):
 
     if command == "--verify":
         return _verify(rest[1] if len(rest) > 1 else None, branch_override)
+
+    if command == "--set-base":
+        target = branch_override or gs.detect_branch()
+        if not target or target == "HEAD":
+            _log("[gate] error: --set-base needs a named branch")
+            return 1
+        return _set_base(path, target, set_base)
 
     branch = branch_override or gs.detect_branch()
     if not branch or branch == "HEAD":
@@ -435,7 +599,12 @@ def main(argv):
                 branch, route_from
             )
             existing = gs.load_store(path).get(branch)
-            had = gs.completed_gates(existing) if existing else []
+            had = gs.completed_gates(existing) if isinstance(existing, dict) else []
+            round_head = rc.branch_head(branch)
+            base = (
+                gb.snapshot(branch, round_head, use_host=True) if round_head else None
+            )
+            round_added = gc.added_lines(round_head, base=(base or {}).get("commit"))
             bd, dropped = gs.update_store(
                 path,
                 lambda d: _init_with_route(
@@ -446,6 +615,10 @@ def main(argv):
                     route_to_clear,
                     profile=profile,
                     capabilities=capability_snapshot,
+                    round_head=round_head,
+                    round_added=round_added,
+                    new_rounds=new_rounds,
+                    base=base,
                 ),
             )
             if route_to_clear:
@@ -510,6 +683,12 @@ def main(argv):
                     f"[gate] reset {len(had)} recorded gate(s): {', '.join(had)}. "
                     "The skill-gated ones need their skills run again."
                 )
+            summary = gc.round_summary(bd)
+            if summary:
+                _log(f"[gate] {summary}")
+            if base:
+                gb.write_base_file(branch, base)
+                _log(f"[gate] {gb.describe(base)}")
             sources = gs.route_sources(bd)
             if sources:
                 _log(
@@ -552,9 +731,12 @@ def main(argv):
                 f"[gate] ⚠ {gate} attested (not hook-verified) for {branch}: "
                 f"{reason.strip()}. {done}"
             )
+        elif command == "--carry":
+            return _carry(path, branch, reason)
         elif command == "--status":
             data = gs.load_store(path)
             out = gs.format_status(data.get(branch), branch)
+            out += _convergence_suffix(data.get(branch))
             out += rc.stale_suffix(data.get(branch), branch)
             # `format_status`'s own "Driven from:" line only reaches whoever
             # asks about the branch being routed TO. The source side — the
@@ -595,6 +777,7 @@ def main(argv):
             _log(
                 "Usage: record-gate.py [--init <tier> | --record <gate> | "
                 "--attest <gate> --reason <text> | --verify <skill|all> | "
+                "--carry [--reason <text>] | "
                 "--status | --oneline | "
                 "--unroute] [--branch <name>] [--route-from <path>] "
                 "[--profile <name> --capabilities-file <path>] "

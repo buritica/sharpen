@@ -19,7 +19,13 @@ Before opening, verify:
    gates stale and the PR hook (and the pre-push floor) will name them. Bring the
    branch up to date *before* `/sdlc:gate` (`git fetch origin main && git rebase
    origin/main`). If main moves while the PR is open, let the PR's merge handle it;
-   a real conflict is a code change, so it re-runs the chain.
+   a real conflict is a code change, so it re-runs the chain. If the branch was
+   rebased after the chain anyway, `record-gate.py --carry` carries the review
+   gates when the branch's own patch is byte-for-byte unchanged, or differs only
+   in release bookkeeping such as a renumbered version (and re-opens tests, lint
+   and typecheck). A rebase that needed conflict resolution in the branch's own
+   hunks does not qualify, and neither does one that merely shifted context next
+   to them.
 
 ## Open the PR
 
@@ -58,6 +64,11 @@ primary source. So a marker never ships invisibly just because the report
 wasn't written. Omit the whole section when neither source finds anything —
 most PRs defer nothing.
 
+Include `## Carried` when `record-gate.py --status` lists any `Carried
+(manual)` line: one line per manual carry with its reason, so the reviewer of
+the PR sees every change that was carried rather than reviewed. Mechanical
+carries (rebase, format, docs, bookkeeping) need no line.
+
 ```bash
 gh pr create --title "<prefix>(<scope>): <short description>" --body "$(cat <<'EOF'
 ## Summary
@@ -71,6 +82,10 @@ Closes #XXX
 ## Deferred
 <one line per marker this branch added: [Serious|Questionable] file:line — ceiling/trigger — #issue or "not filed" (carry the severity tag straight from fix.md's own report when it exists; the grep fallback can't recover severity, so mark those lines "severity unknown — fix report missing" instead of guessing)>
 <omit this whole section when the branch added no markers>
+
+## Carried
+<one line per `Carried (manual)` line in `--status`: from -> to: reason>
+<omit this whole section when there was no manual carry>
 
 <your host's attribution line, if it adds one to PRs; omit otherwise>
 EOF

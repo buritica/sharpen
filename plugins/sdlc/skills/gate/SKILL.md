@@ -1,6 +1,6 @@
 ---
 name: gate
-description: "Run the quality gate chain on current changes. Gates run in order; fix failures before advancing. Re-run from the top after any post-gate code change."
+description: "Run the quality gate chain on current changes. Gates run in order; fix failures before advancing. After the chain, a commit that can't change what review saw carries with --carry; any other change resets it."
 ---
 
 # Gate
@@ -73,10 +73,13 @@ skipping its own steps; it is not meant to stop a person.
 **Staleness.** Every receipt-recorded gate stores the commit it saw. Earlier
 gates sitting on older commits is normal (fix passes commit); what counts is
 the last skill gate. If a commit lands after it, `enforce-sdlc-gates.py`
-blocks `gh pr create` and names the stale gates. Re-init and re-run the chain
-on the new HEAD (see **Reset** below). A rebase moves HEAD too, so rebase
-before running the chain, not after. An attested last gate (`--attest`) is not
-judged on staleness.
+blocks `gh pr create` and names the stale gates. If those commits can't
+change what the review saw, carry the gates instead of re-running them (see
+**Carry** below): a clean rebase, a whitespace-only change, safe docs, or a
+small comment fix with a stated reason, or release bookkeeping (version
+numbers and release notes renumbered while restacking). Anything else means re-init and
+re-run the chain on the new HEAD (see **Reset** below). An attested last gate
+(`--attest`) is not judged on staleness.
 
 **Legacy cycles** (started before receipts, no `evidence` key in the store)
 keep the old event-only recording until their next `--init`. Setting
@@ -230,6 +233,8 @@ python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --re
 
 Re-run `--init` with the same tier — it clears all timestamps (the route survives, but pass `--route-from` anyway so the reset is identical to the init):
 
+**Try `--carry` first** if the review gates went stale over a commit that can't change what the review saw (see **Carry** below).
+
 **Know the price before you type it.** A reset clears the skill-gated gates too, and those can only be re-earned by running their skills again — there is no `--record` for them. On a `small-medium` cycle that is five invocations across four grumpy skills (`/grumpy:simplify`, `/grumpy:review`, `/grumpy:imagine`, and `/grumpy:fix` twice — once after review, once after imagine). That is the correct cost when the code actually changed (a gate that passed against different code proved nothing), but it means "just re-init" is not a cheap reflex. Batch your fixes and reset once.
 
 ```bash
@@ -237,6 +242,82 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --init <tier> --branch "$BRANCH" --route-from "$PWD"
 ```
+
+### Carry (after a post-chain commit that can't change what the review saw)
+
+When the review gates go stale, try a carry before a reset:
+
+```bash
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH"
+# a comment, docstring or rename fix that touches code or agent-executed files:
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH" --reason "<what changed and why it needs no review>"
+```
+
+It classifies the commits since the last skill gate, measured from the
+review base (below), and carries the gates only for one of these:
+
+| Class | When | Needs |
+|---|---|---|
+| `rebase` | HEAD is exactly what git produces replaying the reviewed commits onto the new base with no conflicts and no hand edits (`git merge-tree`), or the branch's own patch is byte-for-byte unchanged. A clean restack after the layer below was rewritten or squash-merged qualifies | nothing |
+| `format` | Only trailing whitespace and blank lines changed; re-indenting, whitespace inside a line, and renames are not format | nothing |
+| `docs` | Every changed file is on the docs safe list: README, CHANGELOG, CHANGES, HISTORY, LICENSE, NOTICE, COPYING, CONTRIBUTING or AUTHORS by name, a prose file under `docs/`, or a raster image. `UPDATE.md` is not on it: the sdlc commands read it | nothing |
+| `bookkeeping` | The patch differs only in release bookkeeping: the `"version"` field of `.claude-plugin/marketplace.json`, `package.json`, `plugins/*/.claude-plugin/plugin.json` and `plugins/*/package.json`; the render stamp in `AGENTS.md`/`CLAUDE.md`; and `plugins/*/UPDATE.md`/`CHANGELOG.md`, which may renumber and pick up text already on the default branch but must keep every reviewed line. Everything else is compared exactly | nothing |
+| `manual` | A comment, docstring or wording fix: at most 30 changed lines (added plus deleted) across all manual carries in the cycle, no new files (moving a file counts as one), no binary files. It may touch code or agent-executed files; the reason is what makes it honest | `--reason` |
+
+The docs safe list never covers a file an agent executes: anything under
+`commands/`, `skills/`, `agents/`, `hooks/`, `templates/`, `prompts/`,
+`extensions/`, `scripts/` or a host directory (`.claude/`, `.codex/`,
+`.github/`, ...), and any `SKILL.md`, `AGENTS.md` or `CLAUDE.md`. A change to
+`gate.md` itself is not docs; if it is a small wording fix, it is a `manual`
+carry with a reason.
+
+A carry is recorded as a carry, never as a review: `--status` lists each one
+(`Carried (manual): <from> -> <to>: <reason>`), the skill gates keep the commit
+they were earned on, and tests, lint and typecheck are cleared so they run
+again on the new HEAD. Mention a manual carry and its reason in the PR body. A
+mix the rule can't classify (a rebase plus an edit) is refused; then reset.
+
+`format` covers trailing spaces and tabs and blank lines only: a CR (LF to
+CRLF), indentation, a mode change or whitespace inside a line is not format.
+A refusal caused by git itself (a shallow clone, no default branch, a pruned
+commit) says what git said; fix the repo and carry again rather than reset.
+
+**Undoing a carry.** There is no un-carry. If a carry let through something
+that needed review, reset (`--init <tier>`): that clears every carry with the
+review gates, and the chain re-runs on the new HEAD.
+
+**Rolling out.** Only sdlc 4.17.0 and later read carries. An older copy (a
+session not restarted after the update, a pi install not yet updated, or a
+pre-push hook installed by an older `/sdlc:gate`) still sees the chain as
+stale and tells you to reset. Restart the session, update pi, and run
+`/sdlc:gate` once to refresh the pre-push hook before relying on `--carry`.
+
+### Review base (stacked branches)
+
+On a stack (main <- A <- B <- your branch), a diff against main reviews every
+layer below yours: the passes re-review A and B, and a fix pass may edit
+their code. The chain resolves one base for your branch and every part of it
+uses that base: the grumpy passes (they read `.claude/sdlc/<branch>/base.json`),
+`--carry`, the round counter and `--status` (`Base: <ref> at <commit> (why)`).
+First hit wins:
+
+1. `--set-base <ref>` (stored as `git config branch.<branch>.sdlcBase`);
+   `--set-base auto` removes it.
+2. The open PR's base branch, from `gh pr view`, when `gh` is installed
+   (`--init`, `--carry` and `--set-base` only; hooks never call the network).
+3. The branch's upstream, when it is another branch
+   (`git branch --set-upstream-to=<parent>`).
+4. The default branch.
+
+```bash
+python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --set-base <parent-branch> --branch "$BRANCH"
+```
+
+Set it before `--init`. When the layer below is rewritten or squash-merged,
+restack with `git rebase --onto <new-base> <old-base>` and run `--carry`: it
+replays only your layer's commits onto the new base, so a clean restack
+carries as `rebase`. After the parent merges, `--set-base auto` (or the PR's
+new base) moves you back to main.
 
 ### Check status
 
@@ -388,9 +469,27 @@ Run each gate in order. After each gate passes:
 On failure:
 1. **Stop.** Do not advance to the next gate.
 2. **Fix the issue.** Apply the minimal fix.
-3. **Reset gate tracking** and re-run from gate 1. A fix for one gate can break an earlier one.
+3. **Re-run the gates the fix can affect.** A failing test before the skill gates: fix it, then continue the chain. After the skill gates (the gate-1 re-run after gate 6, lint, typecheck), commit the fix and run `--carry`: a whitespace-only autofix is a `format` carry, and a comment or wording fix carries with `--reason`. A code change, including a typecheck guard or a fix that makes a test pass, is not a manual carry: reset and re-run from gate 1.
 
 Lint and typecheck run last because the review/fix gates modify code.
+
+### When the chain is done
+
+**The chain is complete when gate 8 records** and gate 1 is recorded again
+after gate 6. The fixes in gates 4 and 6 are part of the chain, not changes
+after it: imagine (gate 5) already runs on the code gate 4 fixed, and lint and
+typecheck run on what gate 6 fixed. Each fix gate clears `tests`, so re-run
+gate 1 after gate 6; that is the only gate you repeat. Do not
+re-run review or imagine to "verify" the fixes; that re-run is a new round,
+and it is how a two-line fix took 13 rounds in sharpen#37.
+
+Each `--init` that replaces a cycle which had earned skill gates counts as a
+new round. From round 2, `--init` and `--status` say which round this is and
+how much the branch grew since round 1; from round 3 they suggest shipping
+what is there and filing the rest as issues, or splitting the branch. The
+count is advice. It never blocks. The history belongs to the branch name and
+survives `--init`; when a branch name is reused for unrelated work,
+`--init <tier> --new-rounds` starts the count over.
 
 ## Self-review (gates 2-6, when grumpy is not installed)
 
@@ -419,14 +518,11 @@ Fix anything you find, then proceed.
 
 ## Post-gate changes
 
-**Gates are not one-time checkboxes.** Any code change after the full chain completes invalidates prior gates. This includes:
-- Fixes from review/imagine
-- Manual edits
-- Lint auto-fixes
+**Gates are not one-time checkboxes.** A change after the full chain completes (gate 8 recorded) invalidates prior gates. The fixes made by gates 4 and 6 are inside the chain and do not count. After the chain:
+- A clean rebase, a whitespace-only change, safe docs, release bookkeeping, or a small comment fix with a reason: `--carry` (see **Carry**).
+- Any other change, including a fix you apply yourself from review or imagine findings outside `/grumpy:fix`: reset and re-run the full chain from gate 1.
 
-After any post-chain modification, reset gate tracking and re-run the full chain from gate 1.
-
-**Simplify and the fix gates enforce this mechanically for `tests`/`lint`/`typecheck`, so you don't have to remember to.** `simplify`, `grumpy-fix-post-review`, and `grumpy-fix-post-imagine` all pass by *editing code*, not just reporting on it — see each one's own "no actionable findings, or findings fixed" criterion above. `record_gate()` clears any already-recorded `tests`/`lint`/`typecheck` the instant one of those three records, so a stamp from before the edit can never silently outlive it: `--status` shows them missing again, and `gh pr create` blocks until they're re-run. This closes exactly the gap this section used to only describe in prose — but it covers those three gates specifically, not every case. A manual edit you make yourself outside any gate skill, or a fix you apply from `grumpy-review`/`grumpy-imagine` findings without going through `/grumpy:fix`, still needs the full manual reset above; nothing watches for those.
+**Simplify and the fix gates enforce this mechanically for `tests`/`lint`/`typecheck`, so you don't have to remember to.** `simplify`, `grumpy-fix-post-review`, and `grumpy-fix-post-imagine` all pass by *editing code*, not just reporting on it — see each one's own "no actionable findings, or findings fixed" criterion above. `record_gate()` clears any already-recorded `tests`/`lint`/`typecheck` the instant one of those three records, so a stamp from before the edit can never silently outlive it: `--status` shows them missing again, and `gh pr create` blocks until they're re-run. This closes exactly the gap this section used to only describe in prose — but it covers those three gates specifically, not every case. A manual edit you make yourself outside any gate skill, or a fix you apply from `grumpy-review`/`grumpy-imagine` findings without going through `/grumpy:fix`, is not caught by those three gates: once committed, the staleness check blocks the PR, and it needs a carry (if it qualifies) or the full reset above.
 
 A cleared gate isn't left looking identical to one that never ran: `--status` marks it `(cleared by <gate> at <timestamp>)`, and the `gh pr create` denial explains the same thing in prose, so you don't have to already know to go check `--status` to tell "never ran" from "ran, then got invalidated."
 
@@ -439,7 +535,8 @@ A cleared gate isn't left looking identical to one that never ran: `--status` ma
 ## Gotchas
 
 - Gate ordering is load-bearing: earlier gates are cheaper to fix. Running typecheck before review wastes time when review finds logic bugs.
-- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1. This is mandatory, not advisory — `simplify`/`grumpy-fix-post-review`/`grumpy-fix-post-imagine` enforce it mechanically for `tests`/`lint`/`typecheck` (see "Post-gate changes" above), but a manual edit or a fix applied outside `/grumpy:fix` is not covered and still needs the full reset.
+- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1, unless `--carry` accepts the change (clean rebase, whitespace, safe docs, release bookkeeping, or a small comment fix with a reason). This is mandatory, not advisory — `simplify`/`grumpy-fix-post-review`/`grumpy-fix-post-imagine` enforce it mechanically for `tests`/`lint`/`typecheck` (see "Post-gate changes" above), but a manual edit or a fix applied outside `/grumpy:fix` is not covered and still needs the full reset or a carry.
+- Don't re-run review to check gate 4's or gate 6's own fixes. The chain already covers them, and the re-run is a new round (see **When the chain is done**).
 - When grumpy is not installed, the self-review fallback is significantly less thorough. Acknowledge this in the PR description.
 - The simplify gate (gate 2) is the most commonly skipped. If no grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.
 - `--worktree` without `--route-from` is the quiet failure: the bash gates land on `$WT`'s branch and the skill gates land on this session's, so the chain never completes and nothing says why. `--status --branch "$BRANCH"` shows `Driven from:` when the route is in place.

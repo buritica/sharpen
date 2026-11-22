@@ -31,7 +31,8 @@ Arming a cycle also installs (or refreshes) sdlc's git pre-push floor via
 install-pre-push.py, so the default path gets it without /sdlc:gate. It is
 named in the arming message only on a first install, and never fails the hook.
 
-No third-party dependencies. Requires gate_store.py, hook_out.py and
+No third-party dependencies. Requires capabilities.py, gate_store.py,
+gate_receipts.py, gate_convergence.py, gate_base.py, hook_out.py and
 shell_parse.py in the same directory.
 @fires-on Bash tool (PostToolUse)
 """
@@ -43,6 +44,8 @@ import subprocess
 import sys
 
 import capabilities
+import gate_base as gb
+import gate_convergence as gc
 import gate_receipts as rc
 import gate_store as gs
 import hook_out as ho
@@ -328,38 +331,30 @@ def _is_docs_path(path):
     return ext.lower() in DOCS_EXTENSIONS
 
 
-def _default_branch_candidates(workdir):
-    """Branches to try as the diff base, most-authoritative first.
-
-    `origin/HEAD`'s symbolic ref names the actual default branch when it's
-    known (set by `git remote set-head origin --auto`, or by some clones) —
-    checked first so a repo whose default branch isn't `main`/`master` (e.g.
-    `trunk`, `develop`) isn't silently unclassifiable forever. It isn't
-    always set, so the hardcoded names remain as a fallback, in the same
-    origin-before-local order as before (see _merge_base)."""
-    candidates = []
-    symbolic = _git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=workdir)
-    if symbolic and symbolic.startswith("refs/remotes/"):
-        resolved = symbolic[len("refs/remotes/") :]
-        candidates.append(resolved)
-    for base in ("origin/main", "origin/master", "main", "master"):
-        if base not in candidates:
-            candidates.append(base)
-    return candidates
+def _base(workdir):
+    """The review round's base for the branch checked out in `workdir`
+    (gate_base.snapshot, without the network `gh` lookup a hook must not
+    make), or None."""
+    branch = _git_output(["rev-parse", "--abbrev-ref", "HEAD"], cwd=workdir)
+    if not branch or branch == "HEAD":
+        return None
+    return gb.snapshot(branch, "HEAD", cwd=workdir)
 
 
 def _merge_base(workdir):
-    """Merge-base with the first resolvable candidate from
-    _default_branch_candidates, or None. origin/* before local: /sdlc:gate's
-    own documented docs-only check runs `git diff --name-only
-    origin/main...HEAD` (gate.md), and a stale local `main` (nobody fetches
-    before every commit) would otherwise let this hook and that documented
-    check disagree about the same branch."""
-    for base in _default_branch_candidates(workdir):
-        merge_base = _git_output(["merge-base", base, "HEAD"], cwd=workdir)
-        if merge_base:
-            return merge_base
-    return None
+    """The base commit the branch's diff is measured from (gate_base: an
+    explicit --set-base, then the branch's upstream parent, then the default
+    branch), or None. origin/* before local for the default branch:
+    /sdlc:gate's own docs-only check diffs against origin, and a stale local
+    `main` would otherwise let this hook and that check disagree."""
+    return (_base(workdir) or {}).get("commit")
+
+
+def _with_rounds(entry, rounds, base=None):
+    entry[gc.ROUNDS_KEY] = rounds
+    if base:
+        entry[gc.BASE_KEY] = base
+    return entry
 
 
 def _changed_paths_since(merge_base, workdir):
@@ -536,22 +531,35 @@ def main():
         # declaration that this session drives another worktree's gates, and a
         # background hook firing on an incidental commit has no business
         # revoking it. Only an explicit --init/--unroute tears a route down.
+        # Round 1 of the advisory counter starts here on the default path.
+        rounds = base = None
+        if not cycle_exists:
+            head = _git_output(["rev-parse", "HEAD"], cwd=workdir)
+            base = _base(workdir)
+            added = gc.added_lines(head, cwd=workdir, base=(base or {}).get("commit"))
+            rounds = gc.next_rounds(None, head, added)
         result = gs.update_store(
             path,
             lambda d: (
                 None
                 if d.get(branch)
-                else rc.init_gates(
-                    d,
-                    branch,
-                    tier,
-                    tier_reason=tier_reason,
-                    profile=profile,
-                    capabilities=capability_snapshot,
-                    evidence=evidence,
+                else _with_rounds(
+                    rc.init_gates(
+                        d,
+                        branch,
+                        tier,
+                        tier_reason=tier_reason,
+                        profile=profile,
+                        capabilities=capability_snapshot,
+                        evidence=evidence,
+                    ),
+                    rounds,
+                    base,
                 )
             ),
         )
+        if result is not None and base:
+            gb.write_base_file(branch, base, cwd=workdir)
     # Every failure here leaves the branch with no cycle, same as above.
     except gs.StoreCorruptError as e:
         # Same reason the write-failure branch below drops the advice:

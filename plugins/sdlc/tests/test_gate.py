@@ -1337,6 +1337,14 @@ class AutoInitTest(unittest.TestCase):
         self.assertNotIn("succeeded", r.stderr.decode())
         self.assertFalse(os.path.exists(self.gp))
 
+    def test_auto_init_starts_round_one(self):
+        # The round counter must not depend on how the cycle was armed: an
+        # auto-inited cycle starts the same history a manual --init does.
+        r = self._commit()
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        rounds = read_json(self.gp)["feat/x"]["rounds"]
+        self.assertEqual(len(rounds), 1)
+
     def test_failed_non_commit_stays_quiet(self):
         payload = {
             "tool_name": "Bash",
@@ -1562,10 +1570,10 @@ class AutoInitTest(unittest.TestCase):
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
 
-        def fake_git_output(args, cwd=None):
-            return "deadbeef" if args[0] == "merge-base" else None
-
-        m._git_output = fake_git_output
+        # The merge base now comes from gate_convergence; stub it on this
+        # module only, and fail every other git call.
+        m._merge_base = lambda workdir: "deadbeef"
+        m._git_output = lambda args, cwd=None: None
         tier, reason = m._pick_tier(self.repo)
         self.assertEqual(tier, "small-medium")
         self.assertIn("git failure", reason)
