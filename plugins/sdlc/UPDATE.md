@@ -20,10 +20,11 @@ than what the repo says it runs.
 - The gate names the source of each command in its mode line, e.g.
   `Commands: AGENTS.md (test, lint); detected (typecheck)`.
 - A block stamped by an older sdlc is still read (it is still the repo's declaration).
-- A declared command that no longer exists (exit 127) is reported as a wrong
-  declaration: the gate runs the detected command for that run and suggests
-  re-running `/sdlc:init` step 10.
-- Monorepo entries (`web: bun test`) run per area; `format` is never run by a gate;
+- A declared command whose program isn't installed (`command -v` can't find it) is
+  reported as a wrong declaration: the gate runs the detected command for that run and
+  suggests re-running `/sdlc:init` step 10. A declared command that starts and then
+  fails fails the gate, whatever its exit code. Declared commands run from the repo root.
+- Monorepo entries (`web: bun test`) run per area, split at the first colon; `format` is never run by a gate;
   shellcheck still runs alongside a declared `lint` that doesn't include it.
 - A line edited inside the markers past parsing (`make test (needs docker)`, an item
   without backticks, `- Test:`, a duplicate entry) is reported as unreadable and falls

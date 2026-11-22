@@ -190,6 +190,18 @@ class GateUsesItTests(unittest.TestCase):
         self.assertIn("fails the gate, whatever its exit code", self.section)
         self.assertNotIn("not found (exit 127)", self.section)
 
+    def test_commands_run_from_the_root_and_skip_env_assignments(self):
+        self.assertIn("from the repo root", self.section)
+        self.assertIn("never the session's cwd", self.section)
+        self.assertIn("skipping leading `NAME=value` words", self.section)
+        self.assertIn("single space-free token", self.section)
+
+    def test_update_notes_carry_the_install_check_rule(self):
+        with open(os.path.join(os.path.dirname(GATE_MD), "..", "UPDATE.md")) as f:
+            notes = " ".join(f.read().split())
+        self.assertNotIn("(exit 127)", notes)
+        self.assertIn("fails the gate, whatever its exit code", notes)
+
     def test_package_json_lint_never_overrides_a_declared_lint(self):
         self.assertIn(
             "When AGENTS.md declares no `lint` and package.json", self.section
