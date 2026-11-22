@@ -58,7 +58,7 @@ class TestCiPassJob(unittest.TestCase):
         self.assertIn("success", self.block, "ci-pass must require 'success'")
 
     def test_ci_pass_needs_validation_jobs(self):
-        for job in ("lint", "test", "marketplace", "pi", "gates"):
+        for job in ("lint", "test", "marketplace", "pi"):
             pattern = rf"needs:.*?{re.escape(job)}"
             self.assertIsNotNone(
                 re.search(pattern, self.block, re.DOTALL), f"ci-pass must need '{job}'"
@@ -94,7 +94,7 @@ class TestCiPassJob(unittest.TestCase):
     def test_ci_pass_script_passes_only_when_every_job_succeeded(self):
         # Runs the real script, so an inverted grep or a broken parse fails
         # here instead of greening (or blocking) every PR.
-        jobs = ("lint", "test", "marketplace", "pi", "gates")
+        jobs = ("lint", "test", "marketplace", "pi")
         ok = self._run_ci_pass({j: "success" for j in jobs})
         self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
         for bad in ("failure", "cancelled", "skipped"):
@@ -128,6 +128,13 @@ class TestCiTriggers(unittest.TestCase):
 
     def test_tests_run_on_the_python_floor(self):
         self.assertRegex(self.content, r'python:\s*\[[^\]]*"3\.9"')
+
+    def test_no_gate_evidence_job(self):
+        # sharpen is pre-PR and local: CI checks the code, never gate
+        # evidence. Gate state is gitignored, so a CI job reading it could
+        # only ever pass vacuously (the retired ci-validate.py did).
+        self.assertNotIn("ci-validate", self.content)
+        self.assertNotRegex(self.content, r"(?m)^\s{2}gates:")
 
 
 if __name__ == "__main__":

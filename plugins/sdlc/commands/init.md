@@ -144,8 +144,10 @@ anything hand-tuned.
 
 ## 5. Local dev setup (pattern 6 — feedback only)
 
-Local hooks are *echoes* of CI for fast signal, never the enforcement point.
-Keep them cheap and changed-files-scoped.
+The pre-commit hooks scaffolded here are *echoes* of CI for fast signal, never
+the enforcement point for the code. Keep them cheap and changed-files-scoped.
+(The pre-push hook `/sdlc:gate` installs is a different thing: the local gate
+chain's floor, not an echo of CI.)
 
 - **Formatter/linter:** if the repo has none, set up the stack's idiomatic one
   (biome for Node, ruff for Python, gofmt+golangci-lint for Go, etc.) with its

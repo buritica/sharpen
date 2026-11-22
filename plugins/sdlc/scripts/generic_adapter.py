@@ -210,7 +210,7 @@ def main(argv):
 
     report = build_review_report(manifest, results)
 
-    # Attach the review report to the gate store so ci-validate.py can read it.
+    # Attach the review report to the gate store; `record-gate.py --status` shows it.
     path = gs.default_store_path()
     try:
         gs.update_store(path, lambda d: review_report.attach_report(d, branch, report))

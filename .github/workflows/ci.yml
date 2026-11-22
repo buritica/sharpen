@@ -1,6 +1,6 @@
-# Lint, test, marketplace consistency, the pi extension smoke test and the
-# portable gate check. lint, test and marketplace fan through the shared setup
-# workflow; pi and gates set up their own. Every job runs on every event:
+# Lint, test, marketplace consistency and the pi extension smoke test. lint,
+# test and marketplace fan through the shared setup workflow; pi sets up its
+# own. Every job runs on every event:
 # there is no path filter, because a filter that misses one file the checks
 # depend on (it once missed package.json, pyproject.toml and schemas/) turns
 # into a green ci-pass that validated nothing.
@@ -89,29 +89,11 @@ jobs:
           --import ./scripts/tests/pi/register.mjs
           --test scripts/tests/pi/extensions.test.mjs
 
-  # Portable gate enforcement: validates the PR head's gate cycle and review
-  # report against the commit being merged. This is the cross-clone authority
-  # the local hook cannot be — forked PRs and agents without local hooks are
-  # held to the same standard here.
-  gates:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Validate gate cycle
-        run: python3 plugins/sdlc/scripts/ci-validate.py
-        env:
-          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
-          SDLC_GATES_PATH: .sharpen/data/gates.json
-
   # Aggregator and the one required check: always runs, fails if any job it
   # needs failed, was cancelled, timed out or was skipped. Nothing is
   # path-gated any more, so a skip means something went wrong.
   ci-pass:
-    needs: [lint, test, marketplace, pi, gates]
+    needs: [lint, test, marketplace, pi]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

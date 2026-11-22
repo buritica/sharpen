@@ -44,8 +44,10 @@ It exists because agents legitimately wrap commands — `bash -c "…"`, `cd x &
 applying. It closes that gap. It cannot close every gap: `printf 'gh pr create'
 | sh`, `$(echo gh) pr create`, a shell function, a script file, or a PATH shim
 all still read as something else, and `_MAX_DEPTH` is an admission of the same
-limit. Local hooks are the fast signal; CI stays the authoritative check. Don't
-grow this module chasing adversarial evasions.
+limit. The gate is not an adversarial control (docs/portable-core.md,
+"Enforcement model"): it stops an agent talking itself past its own process,
+not someone hiding a command from it. Don't grow this module chasing
+adversarial evasions.
 
 ## Newlines and heredocs (deliberate, and different from sdlc-guardrails)
 

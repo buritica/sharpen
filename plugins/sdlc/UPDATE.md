@@ -1,9 +1,25 @@
-# sdlc UPDATE — v4.19.0
+# sdlc UPDATE — v4.20.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
+
+## New in 4.20.0 — CI no longer checks gate state
+
+`ci-validate.py` and the `gates` CI job it backed are gone. They read the gate store in CI,
+but the store is gitignored, so the job never had a store to read and always passed. sharpen
+is local and pre-PR: the gate chain runs on your machine and blocks the PR (every path 4.16.0
+gates, plus the pre-push floor); CI checks the code through `ci-pass`, and never gate
+evidence.
+
+- **If your CI has a `gates` job** that runs `plugins/sdlc/scripts/ci-validate.py`, delete
+  the job and drop it from `ci-pass`'s `needs`. `/sdlc:init` never scaffolded one and the
+  script only ever existed in sharpen's own checkout, so most repos have nothing to do.
+- `record-gate.py --attach-review` and `--status` are unchanged: an attached review report is
+  still shown locally.
+- The README, this plugin's README, `docs/portable-core.md` and `/sdlc:gate` now describe
+  the local gate as the product and state its limit: opt-out per branch, not adversarial.
 
 ## New in 4.19.0 — the gate runs the commands AGENTS.md declares
 

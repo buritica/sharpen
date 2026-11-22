@@ -1,7 +1,7 @@
 {
   "name": "sharpen",
-  "version": "4.19.0",
-  "description": "An SDLC where one required CI check is the gate, an adversarial code reviewer, and opt-in branch protection — shipped as a pi package. Bundles the sdlc, grumpy, and sdlc-guardrails plugins for `pi install`.",
+  "version": "4.20.0",
+  "description": "A local, pre-PR SDLC gate chain, an adversarial code reviewer, and opt-in branch protection — shipped as a pi package. Bundles the sdlc, grumpy, and sdlc-guardrails plugins for `pi install`.",
   "private": true,
   "type": "module",
   "keywords": ["pi-package"],

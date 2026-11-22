@@ -20,7 +20,7 @@ Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-runni
 - lint: {lint_cmd}
 - format: {format_cmd}
 - typecheck: {typecheck_cmd}
-{deploy_line}- CI runs the same commands; `ci-pass` is the single required check on `{default_branch}`.
+{deploy_line}- CI runs these commands, and may run more; `ci-pass` is the single required check on `{default_branch}`. CI checks the code; it never reads gate state.
 
 ### Pull requests
 - Title: conventional-commit prefix (`feat`, `fix`, `chore`, `docs`, `refactor`) with a scope, under 70 characters.
