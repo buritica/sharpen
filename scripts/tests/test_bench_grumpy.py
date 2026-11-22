@@ -1202,5 +1202,6 @@ class FindReportTest(unittest.TestCase):
         self._write(".claude", "grumpy", "bench", "x", "review.md")
         self.assertIsNone(bench.find_report(self.repo, "bench/x", "review"))
 
+
 if __name__ == "__main__":
     unittest.main()
