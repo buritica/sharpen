@@ -299,8 +299,9 @@ On a stack (main <- A <- B <- your branch), a diff against main reviews every
 layer below yours: the passes re-review A and B, and a fix pass may edit
 their code. The chain resolves one base for your branch and every part of it
 uses that base: the grumpy passes (grumpy 2.15+ reads `.sharpen/sdlc/<branch>/base.json`;
-grumpy 2.11 to 2.14 look only under `.claude/sdlc/`, and an older grumpy never reads it,
-so both diff against the default branch),
+grumpy 2.11 to 2.14 look only under `.claude/sdlc/`, which sdlc 4.21 empties of
+`base.json` on every write, so they resolve the base on their own from `branch.<branch>.sdlcBase`,
+the PR base, the upstream and then the default branch, as an older grumpy always did),
 `--carry`, the round counter and `--status` (`Base: <ref> at <commit> (why)`).
 First hit wins:
 

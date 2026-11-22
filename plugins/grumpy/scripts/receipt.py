@@ -42,6 +42,7 @@ PASSES = ("simplify", "review", "imagine", "fix")
 # Before grumpy 2.15 this was `.claude/grumpy/`, which Claude Code treats as
 # its own config and a headless session refuses to write.
 GRUMPY_ROOT = (".sharpen", "grumpy")
+LEGACY_GRUMPY_ROOT = (".claude", "grumpy")
 FIX_STAGES = ("review", "imagine")
 # The report each pass writes next to its receipt, before the receipt.
 REPORT_FOR = {p: f"{p}.md" for p in PASSES}
@@ -129,14 +130,14 @@ def write_receipt(pass_name, worktree=".", stage=None):
     report = os.path.join(artifacts, REPORT_FOR[pass_name])
     # Every fix receipt counts as "the last receipt": the second fix run must
     # leave a newer report than the first one's receipt, whatever its name.
-    siblings = (
-        [
-            os.path.join(directory, f"{n}.json")
-            for n in ("fix", "fix-review", "fix-imagine")
-        ]
-        if pass_name == "fix"
-        else [path]
-    )
+    # The legacy folder's receipts count too: the first fix run after an
+    # upgrade copies the old fix.md over, and that copy must not pass for a
+    # report this run saved.
+    legacy = os.path.join(root, *LEGACY_GRUMPY_ROOT, branch, "receipts")
+    names = ("fix", "fix-review", "fix-imagine") if pass_name == "fix" else (name,)
+    siblings = [
+        os.path.join(d, f"{n}.json") for d in (directory, legacy) for n in names
+    ]
     digest = _report_digest(report, siblings)
     os.makedirs(directory, exist_ok=True)
     _ensure_self_ignored(os.path.join(root, *GRUMPY_ROOT))
@@ -170,6 +171,23 @@ def write_receipt(pass_name, worktree=".", stage=None):
             if os.path.exists(stale):
                 os.unlink(stale)
     return path, receipt
+
+
+def legacy_receipts_note(worktree="."):
+    """A hint for stderr when an older grumpy left receipts for this branch
+    under `.claude/grumpy/`: a session there may still run sdlc 4.20 or older,
+    which reads receipts only from that folder and never sees this one. None
+    when there is no such folder."""
+    root = _git(worktree, "rev-parse", "--show-toplevel")
+    branch = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
+    if not os.path.isdir(os.path.join(root, *LEGACY_GRUMPY_ROOT, branch, "receipts")):
+        return None
+    return (
+        f"[grumpy] note: receipts from an older grumpy are under "
+        f"{os.path.join(*LEGACY_GRUMPY_ROOT, branch)}/. sdlc 4.21+ reads this "
+        f"receipt; sdlc 4.20 or older reads only that folder and will say "
+        f"'no receipt yet'. If it does, upgrade sdlc to 4.21+.\n"
+    )
 
 
 class PartialReceipt(OSError):
@@ -233,6 +251,12 @@ def main(argv):
         f"[grumpy] {receipt['skill']} receipt for {receipt['branch']} "
         f"@ {receipt['head'][:12]} -> {path}\n"
     )
+    try:
+        note = legacy_receipts_note(worktree)
+    except (OSError, subprocess.CalledProcessError):
+        note = None
+    if note:
+        sys.stderr.write(note)
     return 0
 
 

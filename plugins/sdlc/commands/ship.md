@@ -46,7 +46,7 @@ Then create the PR with `gh pr create`. Follow these conventions:
 
 **Body:** Include `Closes #XXX` when a linked issue exists. Include `## Deferred`
 only when the branch added at least one `ponytail:` marker — check
-`.sharpen/grumpy/<branch>/fix.md`'s own `## Deferred` section first, plus the legacy `.claude/grumpy/<branch>/fix.md`'s if that exists too (a grumpy before 2.15 wrote it; read both, since a mid-chain upgrade can split entries across them); if neither
+`.sharpen/grumpy/<branch>/fix.md`'s own `## Deferred` section first, or, only when that file is missing, the legacy `.claude/grumpy/<branch>/fix.md`'s (a grumpy before 2.15 wrote it; `/grumpy:fix` copies it whole into the new folder before appending, so reading both would list its entries twice); if neither
 artifact exists (gated with an older installed grumpy, or fixed by
 hand with no `/grumpy:fix` run), fall back to
 `git diff "$BASE"...HEAD -- . ':!*.md' ':!*.mdx' | grep -E '^\+[[:space:]]*(#|//|--|<!--)[[:space:]]*ponytail:'`
@@ -110,7 +110,8 @@ LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sd
 if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
   mkdir -p "$(dirname "$PLAN")"
   [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
-  cp "$LEGACY_PLAN" "$PLAN"
+  # ponytail: copied once, never synced; if plan notes turn up split between .claude/sdlc and .sharpen/sdlc (an sdlc before 4.21 still appending on another host), merge the legacy notes in here
+  cp -p "$LEGACY_PLAN" "$PLAN"  # -p keeps its mtime, so it never passes for a file this run wrote
 fi
 ```
 

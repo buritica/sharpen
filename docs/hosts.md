@@ -197,5 +197,5 @@ One pi behaviour is unverified:
 1. **Writes under `.claude/`.** In a pi session with sharpen installed, ask pi
    to save a one-line file to `.claude/grumpy/probe.md` with its write tool,
    once interactively and once headless. It passes if the file exists both
-   times. As with Codex check 4, nothing depends on it since grumpy 2.15; it
+   times. As with Codex check 5, nothing depends on it since grumpy 2.15; it
    says whether an older grumpy works there.

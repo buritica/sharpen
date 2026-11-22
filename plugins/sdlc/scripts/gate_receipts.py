@@ -142,8 +142,11 @@ def _receipt_copies(worktree_root, branch, name):
 
 
 def _age_key(path):
-    """Sort key for how recent a receipt is: its written_at, else its mtime.
-    An unreadable receipt sorts by mtime too (it is refused later, by name)."""
+    """Sort key for a receipt: (readable, how recent). Recency is its
+    written_at, else its mtime. An unreadable copy sorts below every readable
+    one, so a corrupt or truncated receipt in one folder never shadows a good
+    one in the other; with no readable copy it is still returned, and refused
+    later by name."""
     receipt, _ = read_receipt(path)
     ts = _parse_ts((receipt or {}).get("written_at"))
     if ts is None:
@@ -151,15 +154,17 @@ def _age_key(path):
             ts = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
         except OSError:
             ts = datetime.min.replace(tzinfo=timezone.utc)
-    return ts
+    return (receipt is not None, ts)
 
 
 def _newest(paths):
-    """The most recent of `paths`, the first one on a tie, or None."""
-    best = None
+    """The most recent readable one of `paths`, the first one on a tie, or
+    None."""
+    best, best_key = None, None
     for path in paths:
-        if best is None or _age_key(path) > _age_key(best):
-            best = path
+        key = _age_key(path)
+        if best is None or key > best_key:
+            best, best_key = path, key
     return best
 
 
@@ -215,6 +220,8 @@ def _predecessor_written(path, gate, branch_data, branch=None):
     if gate not in _FIX_PREDECESSOR:
         return None, None
     before, name = _FIX_PREDECESSOR[gate]
+    # A path receipt_path didn't lay out (`<wt>/<root>/<branch>/receipts/`)
+    # has no second folder to look in; its own sibling is the only candidate.
     sibling = os.path.join(os.path.dirname(path), f"{name}.json")
     worktree = _worktree_of(path, branch) if branch else None
     if worktree:

@@ -53,6 +53,7 @@ ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
 LEGACY_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written before grumpy 2.15; read, never written
 ```
 
+<!-- ponytail: legacy reports are not age-checked against the cycle; compare their mtime to the cycle start if a fix summary ever names a legacy report older than the current gate cycle -->
 Look for each artifact **per file**: read `$ARTIFACT_DIR/<name>` when it
 exists, and `$LEGACY_DIR/<name>` only when the new copy of that same file is
 missing. Never pick one folder for all of them: after a mid-chain upgrade
@@ -613,7 +614,9 @@ mkdir -p "$ARTIFACT_DIR"
 # entries stay in the one file every later pass reads. A shell copy, not a
 # file-tool write, and only into the new folder.
 LEGACY_FIX="$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md"
-[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || cp "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"
+# -p keeps the old mtime, so receipt.py's leftover check (which also reads the
+# legacy receipts) refuses the copy unless this run appends its own section.
+[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || cp -p "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"
 ```
 
 Write (or append to, with a dated `### Fix — YYYY-MM-DD` header — this
@@ -751,16 +754,24 @@ if [ -f "$RECEIPT" ]; then
   # receipt an older grumpy left under .claude/ still counts, newest copy wins.
   T="$(git -C "$WT" rev-parse --show-toplevel)"
   B="$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
+  # Same order as sdlc's: written_at, else the file's mtime; a receipt that
+  # can't be read is named on stderr instead of silently ignored.
   STAGE=$(python3 -c 'import json,os,sys
+from datetime import datetime, timezone
+def age(p):
+    try:
+        t = datetime.fromisoformat(json.load(open(p))["written_at"])
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"[grumpy] {p}: no readable written_at ({e}); using its mtime", file=sys.stderr)
+        return datetime.fromtimestamp(os.path.getmtime(p), timezone.utc)
 def at(n):
-    best = ""
-    for d in sys.argv[1:]:
-        try:
-            best = max(best, json.load(open(os.path.join(d, n + ".json")))["written_at"])
-        except Exception:
-            pass
-    return best
-print("imagine" if at("imagine") > at("review") else "review")' "$T/.sharpen/grumpy/$B/receipts" "$T/.claude/grumpy/$B/receipts")
+    ps = [os.path.join(d, n + ".json") for d in sys.argv[1:]]
+    return max([age(p) for p in ps if os.path.exists(p)], default=None)
+r, i = at("review"), at("imagine")
+if r is None and i is None:
+    print("[grumpy] no review or imagine receipt found; writing the review stage", file=sys.stderr)
+print("imagine" if i and (r is None or i > r) else "review")' "$T/.sharpen/grumpy/$B/receipts" "$T/.claude/grumpy/$B/receipts")
   python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
   # If sdlc refuses the fix gate, its message names the receipt it read and
   # what that receipt predates or belongs to. Re-run the pass it names

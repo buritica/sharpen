@@ -13,8 +13,11 @@ printed its report; with no saved report, a pass leaves no receipt and earns no 
 **grumpy 2.15 needs sdlc 4.21 or newer, or gates 2–6 never record.** sdlc 4.20 and older
 look for receipts only under `.claude/grumpy/`, never find the ones 2.15 writes, and say
 nothing about it: every review gate just stays open. Upgrade both plugins together
-(`claude plugin marketplace update`, then restart the session). The other skew is safe:
-sdlc 4.21 still reads receipts an older grumpy left under `.claude/grumpy/`.
+(`claude plugin marketplace update`, then restart the session). The other skew,
+sdlc 4.21 with an older grumpy, still records gates (sdlc 4.21 reads receipts an older
+grumpy left under `.claude/grumpy/`), but that grumpy misses a plan sdlc 4.21 wrote and
+resolves the stack base on its own. When a legacy receipts folder exists for the branch,
+`receipt.py` now says on stderr that an sdlc 4.20 or older would not see the new receipt.
 
 - `/grumpy:fix` reads each report from the new folder, and from the old one when the new
   folder has no copy of that report, so a review run before the upgrade is still found. review and imagine read the settled list in `fix.md`

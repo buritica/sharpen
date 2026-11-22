@@ -263,6 +263,57 @@ class WriterReaderTest(unittest.TestCase):
         self.assertIsNone(diff_base._from_sdlc(self.repo, self.repo, BRANCH))
         self.assertFalse(os.path.exists(os.path.join(legacy, gate_base.BASE_FILE)))
 
+    def test_writing_a_base_removes_a_stale_legacy_base_file(self):
+        # grumpy 2.11 to 2.14 read only the legacy file: a copy left behind
+        # after a restack would hand them the old base.
+        git(self.repo, "branch", "parent")
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        legacy = os.path.join(self.repo, *artifact_dirs.LEGACY_SDLC_ROOT, BRANCH)
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, gate_base.BASE_FILE), "w") as f:
+            json.dump({"ref": "main", "commit": head}, f)
+        self.assertIsNone(
+            gate_base.write_base_file(
+                BRANCH, {"ref": "parent", "commit": head}, self.repo
+            )
+        )
+        self.assertFalse(os.path.exists(os.path.join(legacy, gate_base.BASE_FILE)))
+        self.assertEqual(diff_base._from_sdlc(self.repo, self.repo, BRANCH), "parent")
+
+    def test_a_corrupt_receipt_never_shadows_a_good_copy(self):
+        new = self._write()
+        legacy = self._legacy(body={"written_at": "2020-01-01T00:00:00+00:00"})
+        with open(new, "w") as f:
+            f.write("{truncated")  # fresh mtime, unreadable
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), legacy
+        )
+        os.unlink(legacy)
+        # With no readable copy, the corrupt one is still returned, to be refused by name.
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), new
+        )
+
+    def test_a_copied_legacy_report_does_not_pass_for_a_fresh_one(self):
+        # The first fix after an upgrade copies the old fix.md over with cp -p;
+        # the legacy fix receipt is newer than it, so no receipt is written.
+        old = os.path.join(self.repo, ".claude", "grumpy", BRANCH)
+        os.makedirs(old)
+        with open(os.path.join(old, "fix.md"), "w") as f:
+            f.write("# old fix\n")
+        os.utime(os.path.join(old, "fix.md"), (1, 1))
+        self._legacy("fix-review", {"written_at": "2020-01-01T00:00:00+00:00"})
+        new = os.path.join(self.repo, *receipt.GRUMPY_ROOT, BRANCH)
+        os.makedirs(new, exist_ok=True)
+        subprocess.run(["cp", "-p", os.path.join(old, "fix.md"), new], check=True)
+        with self.assertRaisesRegex(ValueError, "predates the last receipt"):
+            receipt.write_receipt("fix", self.repo, stage="review")
+
+    def test_receipt_notes_a_legacy_receipts_folder(self):
+        self.assertIsNone(receipt.legacy_receipts_note(self.repo))
+        self._legacy()
+        self.assertIn("sdlc 4.20 or older", receipt.legacy_receipts_note(self.repo))
+
     def test_sdlc_and_grumpy_folders_ignore_themselves(self):
         for name in ("sdlc", "grumpy"):
             folder = os.path.join(self.repo, ".sharpen", name)
@@ -346,7 +397,7 @@ class CommandsTest(unittest.TestCase):
             self.assertIn(
                 'LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"', snippet, where
             )
-            self.assertIn('cp "$LEGACY_PLAN" "$PLAN"', snippet, where)
+            self.assertIn('cp -p "$LEGACY_PLAN" "$PLAN"', snippet, where)
             # The plan is appended to at $PLAN, which never moves to .claude/.
             self.assertNotIn('PLAN="$LEGACY_PLAN"', snippet, where)
 
@@ -373,11 +424,15 @@ class CommandsTest(unittest.TestCase):
             text = f.read()
         self.assertIn(
             '[ -f "$ARTIFACT_DIR/fix.md" ] || [ ! -f "$LEGACY_FIX" ] || '
-            'cp "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"',
+            'cp -p "$LEGACY_FIX" "$ARTIFACT_DIR/fix.md"',
             text,
         )
 
-    def test_settled_and_deferred_readers_read_both_fix_reports(self):
+    def test_settled_and_deferred_readers_read_the_legacy_report_only_as_a_fallback(
+        self,
+    ):
+        # fix copies the legacy fix.md whole before appending, so reading both
+        # would list every pre-upgrade entry twice (in ship's PR body, say).
         for rel in (
             ("grumpy", "commands", "review.md"),
             ("grumpy", "commands", "imagine.md"),
@@ -387,10 +442,77 @@ class CommandsTest(unittest.TestCase):
                 text = " ".join(f.read().split())
             self.assertIn(".claude/grumpy/", text, "/".join(rel))
             self.assertRegex(
-                text,
-                r"(also|plus) the (`## Settled` sections of|legacy)",
-                "/".join(rel),
+                text, r"only when (the new one|that file) is missing", "/".join(rel)
             )
+            self.assertNotRegex(text, r"read both", "/".join(rel))
+
+    def test_carry_overs_keep_the_legacy_mtime(self):
+        for rel in (
+            ("grumpy", "commands", "review.md"),
+            ("grumpy", "commands", "imagine.md"),
+            ("grumpy", "commands", "simplify.md"),
+            ("grumpy", "commands", "fix.md"),
+            ("sdlc", "commands", "ship.md"),
+        ):
+            with open(os.path.join(PLUGINS, *rel)) as f:
+                text = f.read()
+            self.assertNotRegex(text, r'cp "\$LEGACY', "/".join(rel))
+            self.assertRegex(text, r'cp -p "\$LEGACY', "/".join(rel))
+
+    def _stage_picker(self):
+        with open(os.path.join(PLUGINS, "grumpy", "commands", "fix.md")) as f:
+            text = f.read()
+        start = text.index("  STAGE=$(python3 -c")
+        end = text.index('/receipts")', start) + len('/receipts")')
+        return text[start:end]
+
+    def _run_picker(self, receipts):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        for root, name, body in receipts:
+            d = os.path.join(repo, root, "grumpy", BRANCH, "receipts")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, name + ".json"), "w") as f:
+                f.write(body)
+        script = self._stage_picker() + '\necho "$STAGE"'
+        env = {**os.environ, "T": repo, "B": BRANCH}
+        r = subprocess.run(
+            ["bash", "-c", script], env=env, capture_output=True, text=True
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip(), r.stderr
+
+    def test_stage_picker_takes_the_newer_receipt_across_folders(self):
+        stage, _ = self._run_picker(
+            [
+                (
+                    ".sharpen",
+                    "review",
+                    json.dumps({"written_at": "2026-01-01T00:00:00+00:00"}),
+                ),
+                (
+                    ".claude",
+                    "imagine",
+                    json.dumps({"written_at": "2026-01-02T00:00:00+00:00"}),
+                ),
+            ]
+        )
+        self.assertEqual(stage, "imagine")
+
+    def test_stage_picker_names_an_unreadable_receipt(self):
+        stage, err = self._run_picker(
+            [
+                (".sharpen", "imagine", "{not json"),
+                (".sharpen", "review", json.dumps({})),
+            ]
+        )
+        self.assertIn(stage, ("review", "imagine"))
+        self.assertIn("no readable written_at", err)
+
+    def test_stage_picker_says_when_no_receipt_exists(self):
+        stage, err = self._run_picker([])
+        self.assertEqual(stage, "review")
+        self.assertIn("no review or imagine receipt found", err)
 
 
 if __name__ == "__main__":

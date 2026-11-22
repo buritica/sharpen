@@ -591,7 +591,8 @@ LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sd
 if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
   mkdir -p "$(dirname "$PLAN")"
   [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
-  cp "$LEGACY_PLAN" "$PLAN"
+  # ponytail: copied once, never synced; if plan notes turn up split between .claude/sdlc and .sharpen/sdlc (an sdlc before 4.21 still appending on another host), merge the legacy notes in here
+  cp -p "$LEGACY_PLAN" "$PLAN"  # -p keeps its mtime, so it never passes for a file this run wrote
 fi
 ```
 

@@ -74,7 +74,7 @@ does the same on Claude Code. `--cmd` replaces the whole command line (`{model}`
 token after its flag, so both drop when no model is given), so a wrong flag can be fixed
 without a code change. Claude Code runs get `acceptEdits` plus an allowlist of what a
 review or imagine pass needs (git, python3, read-only file tools, file writes scoped to
-the report folder with `Edit(.claude/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
+the report folder with `Edit(.sharpen/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
 `workspace-write` sandbox inside the temp repo.
 
 ## Cost

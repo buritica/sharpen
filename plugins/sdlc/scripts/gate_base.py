@@ -188,23 +188,31 @@ def write_base_file(branch, base, cwd=None):
     """Write `.sharpen/sdlc/<branch>/base.json` (gitignored, and the folder
     ignores itself) for the grumpy passes, or remove a stale one when no base
     resolves (`base` None), so the passes never read a base the cycle no
-    longer has. A stale legacy `.claude/sdlc/` copy goes too, since grumpy
-    falls back to it. Returns None, or a one-line warning for the caller to
-    print: without the file, grumpy 2.11+ passes diff against the default
-    branch."""
+    longer has.
+
+    A legacy `.claude/sdlc/<branch>/base.json` (sdlc before 4.21) is removed
+    on every call, never refreshed: grumpy 2.11 to 2.14 read only that file,
+    and grumpy 2.15 falls back to it, so a copy left behind after a restack
+    would hand either one a stale base. Without it they resolve the base on
+    their own (`branch.<b>.sdlcBase`, the PR base, the upstream, then the
+    default branch). Removing it is a plain unlink, not a file-tool write.
+
+    Returns None, or a one-line warning for the caller to print."""
     root = worktree_of(branch, cwd)
     if not root:
         return None
     directory = os.path.join(root, *SDLC_ROOT, branch)
     path = os.path.join(directory, BASE_FILE)
+    legacy = os.path.join(root, *LEGACY_SDLC_ROOT, branch, BASE_FILE)
+    stale = [legacy] if isinstance(base, dict) else [legacy, path]
+    for p in stale:
+        try:
+            os.unlink(p)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return f"could not remove the stale {p} ({e})"
     if not isinstance(base, dict):
-        for stale in (path, os.path.join(root, *LEGACY_SDLC_ROOT, branch, BASE_FILE)):
-            try:
-                os.unlink(stale)
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                return f"could not remove the stale {stale} ({e})"
         return None
     tmp = None
     try:
@@ -220,8 +228,9 @@ def write_base_file(branch, base, cwd=None):
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
         return (
-            f"could not write {path} ({e}): grumpy passes will diff against "
-            "the default branch and review the layers below"
+            f"could not write {path} ({e}): grumpy passes will resolve the "
+            "base on their own (branch.<b>.sdlcBase, the PR base, the "
+            "upstream, then the default branch) and may review the layers below"
         )
 
 

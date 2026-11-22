@@ -69,11 +69,14 @@ def _from_sdlc(wt, root, branch):
     legacy file, on purpose: the new file means this sdlc owns the base, and a
     missing ref means the base moved, so an older sdlc's file would be staler
     still. Don't "fix" this into a fall-through."""
+    # ponytail: new file wins without comparing ages (sdlc 4.21 removes the legacy copy on every write); compare mtimes if sdlc 4.20 and 4.21 are ever seen writing the same branch's base.json
     for sdlc_root in (SDLC_ROOT, LEGACY_SDLC_ROOT):
         path = os.path.join(root, *sdlc_root, branch, "base.json")
         try:
             with open(path) as f:
                 base = json.load(f)
+            if sdlc_root == LEGACY_SDLC_ROOT:
+                _note(f"read the legacy {path} (written by an sdlc before 4.21)")
             break
         except FileNotFoundError:
             continue

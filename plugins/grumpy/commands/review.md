@@ -250,9 +250,11 @@ Before rendering, read the `## Settled` sections of
 `$GIT_ROOT/.sharpen/grumpy/$BRANCH/fix.md` (every dated run in it; set
 `GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)` and
 `BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)` first), if the
-file exists, and also the `## Settled` sections of
-`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` if that legacy file exists (a grumpy
-before 2.15 wrote it; a mid-chain upgrade can leave settled entries in both).
+file exists, or else the `## Settled` sections of the legacy
+`$GIT_ROOT/.claude/grumpy/$BRANCH/fix.md` (a grumpy before 2.15 wrote it). Read
+the legacy file only when the new one is missing: `/grumpy:fix` copies it
+whole into the new folder before appending, so the new file already holds
+every entry it had.
 Each entry is
 `- <file:line> | <finding text> | <new-capability|deferred|declined> | <reason>`,
 written by `/grumpy:fix` for a finding it already decided. Hold back a
@@ -368,7 +370,8 @@ LEGACY_PLAN="$GIT_ROOT/.claude/sdlc/$BRANCH/plan.md"  # a plan written before sd
 if [ ! -f "$PLAN" ] && [ -f "$LEGACY_PLAN" ]; then  # carry it over, so the append below never writes under .claude/
   mkdir -p "$(dirname "$PLAN")"
   [ -e "$GIT_ROOT/.sharpen/sdlc/.gitignore" ] || printf '*\n' > "$GIT_ROOT/.sharpen/sdlc/.gitignore"
-  cp "$LEGACY_PLAN" "$PLAN"
+  # ponytail: copied once, never synced; if plan notes turn up split between .claude/sdlc and .sharpen/sdlc (an sdlc before 4.21 still appending on another host), merge the legacy notes in here
+  cp -p "$LEGACY_PLAN" "$PLAN"  # -p keeps its mtime, so it never passes for a file this run wrote
 fi
 ```
 
