@@ -314,11 +314,12 @@ def has_severity_sections(markdown):
 
 
 def section_body_lines(markdown):
-    """Non-empty lines inside severity sections that aren't placeholders.
+    """Lines inside severity sections that look like findings the parser
+    skips: table rows, indented bullets, or prose citing a file:line.
 
     With zero parsed findings, a positive count means the parser dropped
-    content (indented bullets, a table, prose findings): the run is
-    'unparsed', not quiet.
+    content: the run is 'unparsed', not quiet. Plain prose ("None worth
+    raising: the rename is complete") is commentary, not a dropped finding.
     """
     severity, in_fence, count = None, False, 0
     for raw in markdown.splitlines():
@@ -337,7 +338,13 @@ def section_body_lines(markdown):
             continue
         bullet = _BULLET.match(raw)
         text = bullet.group(2).strip() if bullet else raw.strip()
-        if not _EMPTY_BULLET.match(text):
+        if _EMPTY_BULLET.match(text):
+            continue
+        if (
+            raw.lstrip().startswith("|")
+            or (bullet and len(bullet.group(1)) >= 2)
+            or any(loc["line"] for loc in parse_locations(text))
+        ):
             count += 1
     return count
 

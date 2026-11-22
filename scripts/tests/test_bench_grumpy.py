@@ -216,6 +216,14 @@ class ParseReportTest(unittest.TestCase):
         self.assertEqual(
             bench.section_body_lines("## Serious Concerns\n\n| a | b |\n"), 1
         )
+        prose = "## Questionable Decisions\n\nNone worth raising. `grep -w calc` is clean.\n"
+        self.assertEqual(bench.section_body_lines(prose), 0)
+        self.assertEqual(
+            bench.section_body_lines(
+                "## Serious Concerns\n\nThe loop at a.py:3 leaks.\n"
+            ),
+            1,
+        )
 
     def test_has_severity_sections(self):
         self.assertTrue(bench.has_severity_sections("## Serious Concerns\n"))
