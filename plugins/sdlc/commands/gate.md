@@ -307,8 +307,9 @@ First hit wins:
    `--set-base auto` removes it.
 2. The open PR's base branch, from `gh pr view`, when `gh` is installed
    (`--init`, `--carry` and `--set-base` only; hooks never call the network).
-3. The branch's upstream, when it is another branch
-   (`git branch --set-upstream-to=<parent>`).
+3. The branch's upstream, when it is a local branch
+   (`git branch --set-upstream-to=<parent>`). A remote-tracking upstream is never
+   used: after a rename or `push -u origin HEAD:other` it is the branch's own copy.
 4. The default branch.
 
 ```bash
@@ -330,7 +331,10 @@ on a parent since rewritten, with no reflog of the old parent), name the base
 the review ran on: `--carry --reviewed-base <old-parent-sha>`. `--set-base`
 accepts a parent that exists here only as `origin/<name>`. After the parent merges, `--set-base auto` (or the
 PR's new base) moves you back to main; the cycle's base follows on the next
-`--carry`.
+`--carry`. Retargeting the PR alone does not: a `--set-base` config outranks the
+PR's base while the parent branch still exists. When a carry refuses, its
+message names the base the current patch was measured from; a wrong base is
+fixed with `--set-base`, not a reset.
 
 ### Check status
 
@@ -407,7 +411,7 @@ The fix is always to make the gate genuinely pass, not to skip checking it:
 
 For **Tiny** (≤3 lines, no executable code): gates 1, 7, 8 only.
 
-For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only "$BASE"...HEAD`, where `$BASE` is the `Base:` ref `--status` prints (origin/main when the branch isn't stacked): only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
+For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only "$BASE"...HEAD`, where `$BASE` is the `Base:` ref `--status` prints (origin/main when the branch isn't stacked; a cycle armed before 4.17 prints no `Base:` line, so on a stack use the parent branch): only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
 
 `auto-init-gate-cycle.py` already runs this same check automatically on the first commit to a new branch — a confidently docs-only diff arms `tiny` on its own, no `--init` needed. This manual path still matters for a branch that *starts* with code (so the hook already armed `small-medium`) but later turns out to be docs-only, or for confirming what the hook decided.
 

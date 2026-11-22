@@ -25,8 +25,8 @@ A two-line fix once took 13 gate rounds. Five changes cut the rounds that review
   at it.
 - **A review base for stacked branches.** The chain resolves the base your branch's
   review covers: `record-gate.py --set-base <branch>` (a branch name, never `HEAD` or the
-  branch itself), else the open PR's base (via `gh`),
-  else the branch's upstream parent, else main. `--carry`, the round counter and
+  branch itself; `--set-base auto` unpins it), else the open PR's base (via `gh`),
+  else the branch's local upstream parent, else main. `--carry`, the round counter and
   `--status` use it, and grumpy 2.11+ passes read it from `.claude/sdlc/<branch>/base.json`,
   so a stacked branch no longer reviews (or edits) the layers below it. With an older
   grumpy the passes still diff against the default branch. `--carry` takes the reviewed
@@ -38,7 +38,8 @@ A two-line fix once took 13 gate rounds. Five changes cut the rounds that review
 - **An advisory round counter.** Each `--init` that replaces a cycle with earned skill
   gates is a new round. From round 2, `--init` and `--status` say which round it is and
   how much the branch grew since round 1; from round 3 they suggest shipping and filing
-  the rest, or splitting. It never blocks.
+  the rest, or splitting. It never blocks. `--init <tier> --new-rounds` starts the count
+  over (a reused branch name, say).
 
 **What an existing repo needs to do:** re-run `/sdlc:init` to refresh the managed
 `AGENTS.md` block, which now carries the completion rule and `--carry`. Nothing else: the

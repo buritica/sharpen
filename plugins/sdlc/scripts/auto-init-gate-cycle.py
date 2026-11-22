@@ -343,7 +343,7 @@ def _base(workdir):
 
 def _merge_base(workdir):
     """The base commit the branch's diff is measured from (gate_base: an
-    explicit --set-base, then the branch's upstream parent, then the default
+    explicit --set-base, then the branch's local upstream parent, then the default
     branch, origin/* before local), or None. /sdlc:gate's docs-only check
     diffs against the same `Base:` ref, so the two agree on a stack too."""
     return (_base(workdir) or {}).get("commit")
@@ -557,8 +557,10 @@ def main():
                 )
             ),
         )
-        if result is not None and base:
-            gb.write_base_file(branch, base, cwd=workdir)
+        if result is not None:
+            problem = gb.write_base_file(branch, base, cwd=workdir)
+            if problem:
+                sys.stderr.write(f"[sdlc] warning: {problem}\n")
     # Every failure here leaves the branch with no cycle, same as above.
     except gs.StoreCorruptError as e:
         # Same reason the write-failure branch below drops the advice:

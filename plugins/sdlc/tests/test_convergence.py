@@ -246,6 +246,43 @@ class StackTest(ReceiptTestBase):
         self.start()
         self.assertEqual(self.bd()["base"]["source"], "default")
 
+    def test_a_renamed_branch_s_old_remote_copy_is_not_its_parent(self):
+        # Pushed as feat/old, renamed, then a new commit: the old remote tip
+        # must not become the base (auto-init would pick `tiny` from it).
+        git(self.repo, "remote", "add", "origin", self.repo)
+        head = git(self.repo, "rev-parse", "HEAD").strip()
+        git(self.repo, "update-ref", "refs/remotes/origin/old-name", head)
+        git(self.repo, "config", f"branch.{BRANCH}.remote", "origin")
+        git(self.repo, "config", f"branch.{BRANCH}.merge", "refs/heads/old-name")
+        self.commit_file("README.md", "docs\n")
+        self.start()
+        self.assertEqual(self.bd()["base"]["source"], "default")
+
+    def test_a_refusal_names_the_base_and_points_at_set_base(self):
+        self.cli("--set-base", "layer-b")
+        self.start()
+        self.run_chain()
+        self.commit_file("c.py", "C = 9\n" * 3, msg="code change")
+        r = self.carry()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("measured from layer-b", r.stderr)
+        self.assertIn("--set-base <parent>", r.stderr)
+
+    def test_an_unwritable_base_file_is_reported(self):
+        # A file where the directory should be blocks the write, even as root.
+        sdlc = os.path.join(self.repo, ".claude", "sdlc")
+        os.makedirs(sdlc, exist_ok=True)
+        blocker = os.path.join(sdlc, BRANCH.split("/")[0])
+        if os.path.isdir(blocker):
+            import shutil
+
+            shutil.rmtree(blocker)
+        with open(blocker, "w") as f:
+            f.write("not a directory\n")
+        r = self.cli("--init", "small-medium")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: could not write", r.stderr)
+
     def test_reviewed_base_is_only_for_carry(self):
         r = self.cli("--status", "--reviewed-base", "layer-b")
         self.assertEqual(r.returncode, 1)

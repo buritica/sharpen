@@ -291,12 +291,20 @@ def _verify(target, branch_override):
 
 def _convergence_suffix(branch_data):
     """--status lines for the review base, carries and the round count."""
-    lines = [gb.describe((branch_data or {}).get(gc.BASE_KEY))]
-    lines = [line for line in lines if line] + gc.format_carries(branch_data)
+    stored = gb.describe((branch_data or {}).get(gc.BASE_KEY))
+    # The stored base: what this cycle's review gates were earned on. A carry
+    # resolves the base again and names it if it differs.
+    lines = [f"{stored}; the cycle's review base"] if stored else []
+    lines += gc.format_carries(branch_data)
     summary = gc.round_summary(branch_data)
     if summary:
         lines.append(summary)
     return "".join(f"\n{line}" for line in lines)
+
+
+def _warn_base_file(problem):
+    if problem:
+        _log(f"[gate] warning: {problem}")
 
 
 def _set_base(path, branch, ref):
@@ -326,7 +334,7 @@ def _set_base(path, branch, ref):
         if not earned:
             # Not after gates are earned: the passes still to run must see
             # the same base the earned gates and --carry use.
-            gb.write_base_file(branch, base)
+            _warn_base_file(gb.write_base_file(branch, base))
         _log(f"[gate] {gb.describe(base)}")
     else:
         _log("[gate] no base resolves for this branch")
@@ -417,12 +425,22 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
             )
         if why.startswith("git could not"):
             _log(f"[gate] cannot carry: {why}.")
-        else:
-            _log(
-                f"[gate] cannot carry: {why}. Re-run the chain: --init "
-                f"{bd.get('tier')} (with the same --branch/--route-from you "
-                "started the cycle with)"
-            )
+            return 1
+        # A wrong current base (a stale --set-base after the parent merged, a
+        # PR still aimed at main) reads exactly like a changed patch: name it,
+        # and send that case to the base before the five-skill reset.
+        now = gb.describe(base) or "Base: none resolves"
+        manual = reason is None and "--carry --reason" in why
+        _log(
+            f"[gate] cannot carry: {why}.\n"
+            f"[gate] The current patch was measured from {now[len('Base: ') :]}. "
+            "If that is not this branch's parent (the parent merged, or a "
+            "stale --set-base), fix it with --set-base <parent> (or auto) and "
+            "--carry again. Otherwise "
+            + ("a wording fix can use --reason; anything else needs " if manual else "")
+            + f"a re-run of the chain: --init {bd.get('tier')} (with the same "
+            "--branch/--route-from you started the cycle with)"
+        )
         return 1
     note = reason.strip() if reason and reason.strip() else None
     lines = gc.change_size(old, head) if klass == "manual" else None
@@ -441,7 +459,7 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
         return gc.apply_carry(d, branch, old, head, klass, note, lines)
 
     cleared = gs.update_store(path, mutate)
-    gb.write_base_file(branch, base)
+    _warn_base_file(gb.write_base_file(branch, base))
     _log(
         f"[gate] carried the review gates from {old[:12]} to {head[:12]} "
         f"({klass}{': ' + note if note else ''})."
@@ -766,8 +784,8 @@ def main(argv):
             summary = gc.round_summary(bd)
             if summary:
                 _log(f"[gate] {summary}")
+            _warn_base_file(gb.write_base_file(branch, base))
             if base:
-                gb.write_base_file(branch, base)
                 _log(f"[gate] {gb.describe(base)}")
             sources = gs.route_sources(bd)
             if sources:

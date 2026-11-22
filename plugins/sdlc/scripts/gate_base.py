@@ -16,8 +16,9 @@ Resolution order, first hit wins:
             name (`--set-base auto` unsets it)
   pr        the open PR's base branch, from `gh pr view`, when the host has
             `gh` and the caller allows a network call (never from a hook)
-  upstream  the branch's configured upstream, when it is another branch
-            (`git branch --set-upstream-to=<parent>`), not its own remote copy
+  upstream  the branch's upstream when it is a local branch
+            (`git branch --set-upstream-to=<parent>`); a remote-tracking
+            upstream is never taken, it may be the branch's own pushed copy
   default   the default branch (origin/HEAD, origin/main, origin/master,
             main, master)
 
@@ -30,6 +31,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 
 import gate_convergence as gc
 
@@ -113,17 +115,15 @@ def _pr_base(branch, cwd=None):
 
 
 def _upstream(branch, cwd=None):
+    """A local upstream branch (`git branch --set-upstream-to=<parent>`), or
+    None. A remote-tracking upstream is never taken as the parent: after a
+    rename or `push -u origin HEAD:other` it is the branch's own pushed copy,
+    and taking it would scope the review (and auto-init's tier pick) to the
+    unpushed commits. A remote parent comes from --set-base or the PR."""
     up = _git(["rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}"], cwd)
     if not up or up == branch:
         return None
-    local = _git(["config", "--get", f"branch.{branch}.remote"], cwd) == "."
-    if not local and (
-        up.split("/", 1)[-1] == branch
-        or gc.is_ancestor(_git(["rev-parse", branch], cwd), up, cwd)
-    ):
-        # A remote-tracking upstream with the branch's own name, or one that
-        # already holds the branch's head (pushed under another name), is its
-        # pushed copy, not a parent. A local upstream is always another branch.
+    if _git(["config", "--get", f"branch.{branch}.remote"], cwd) != ".":
         return None
     return up if _exists(up, cwd) else None
 
@@ -185,22 +185,39 @@ def worktree_of(branch, cwd=None):
 
 def write_base_file(branch, base, cwd=None):
     """Write `.claude/sdlc/<branch>/base.json` (gitignored) for the grumpy
-    passes. Best effort: returns the path, or None."""
+    passes, or remove a stale one when no base resolves (`base` None), so
+    the passes never read a base the cycle no longer has. Returns None, or
+    a one-line warning for the caller to print: without the file, grumpy
+    2.11+ passes diff against the default branch."""
     root = worktree_of(branch, cwd)
-    if not root or not isinstance(base, dict):
+    if not root:
         return None
     directory = os.path.join(root, ".claude", "sdlc", branch)
+    path = os.path.join(directory, BASE_FILE)
+    if not isinstance(base, dict):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return f"could not remove the stale {path} ({e})"
+        return None
+    tmp = None
     try:
         os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, BASE_FILE)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".base.", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
             json.dump(base, f, indent=2)
             f.write("\n")
         os.replace(tmp, path)
-        return path
-    except OSError:
         return None
+    except OSError as e:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+        return (
+            f"could not write {path} ({e}): grumpy passes will diff against "
+            "the default branch and review the layers below"
+        )
 
 
 def snapshot(branch, head, cwd=None, use_host=False):

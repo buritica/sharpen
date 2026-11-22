@@ -527,15 +527,13 @@ def _classify_descendant(old, new, reason, cwd=None, spent=0, bases=(None, None)
     old_base, new_base = bases
     old_patch = _branch_patch(old, cwd, old_base)
     new_patch = _branch_patch(new, cwd, new_base)
-    if old_patch is not None and old_patch == new_patch:
+    if old_patch is None or new_patch is None:
+        return None, _git_failure("compute the branch's patch")
+    if old_patch == new_patch:
         # A clean merge of the default branch: the branch's own patch is
         # untouched, exactly as after a clean rebase.
         return "rebase", None
-    if (
-        old_patch is not None
-        and new_patch is not None
-        and _only_bookkeeping(old_patch, new_patch, new, cwd, new_base)[0]
-    ):
+    if _only_bookkeeping(old_patch, new_patch, new, cwd, new_base)[0]:
         return "bookkeeping", None
     if reason is None:
         unsafe = [p for p in paths if not is_docs_safe(p)]
