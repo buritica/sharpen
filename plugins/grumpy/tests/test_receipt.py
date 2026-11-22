@@ -85,7 +85,7 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(self.run_receipt("fix", "--stage", "review").returncode, 0)
         r = self.run_receipt("fix")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("is no newer than the receipt fix", r.stderr)
+        self.assertIn("predates the last receipt (fix", r.stderr)
 
     def test_a_stageless_fix_removes_stale_stage_receipts(self):
         # Left in place, sdlc 4.17+ would read fix-review.json (it prefers a

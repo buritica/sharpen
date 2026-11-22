@@ -68,8 +68,8 @@ def _report_digest(report, previous_receipts):
         newest, newest_path = max(previous)
         if os.path.getmtime(report) <= newest:
             raise ValueError(
-                f"report {report} is no newer than the receipt "
-                f"{os.path.basename(newest_path)}: save it again"
+                f"report predates the last receipt "
+                f"({os.path.basename(newest_path)}): save {report} again"
             )
     return hashlib.sha256(data).hexdigest()
 
