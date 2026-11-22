@@ -16,7 +16,7 @@ command here reads the repo and derives the answer for *that* repo. The files
 under `templates/examples/` are one concrete instantiation, never a thing to
 copy.
 
-This plugin ships the gate commands **and** their enforcement — gate tracking, the PR-blocking hook, and skill auto-recording are pure-python scripts in `scripts/`, wired by `hooks/hooks.json` (auto-loaded). Pair with [sdlc-guardrails](../sdlc-guardrails/) only if you also want opt-in main-branch commit protection.
+This plugin ships the gate commands **and** their enforcement — gate tracking, the PR-blocking hook, and receipt-based skill-gate recording are pure-python scripts in `scripts/`, wired by `hooks/hooks.json` (auto-loaded). Pair with [sdlc-guardrails](../sdlc-guardrails/) only if you also want opt-in main-branch commit protection.
 
 ## Installation
 
