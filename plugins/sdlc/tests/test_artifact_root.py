@@ -13,6 +13,7 @@ Run: python3 plugins/sdlc/tests/test_artifact_root.py
 
 import glob
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -43,6 +44,9 @@ receipt = _load("grumpy_receipt", RECEIPT)
 diff_base = _load("grumpy_diff_base", DIFF_BASE)
 
 BRANCH = "feat/x"
+OLDER = "2020-01-01T00:00:00+00:00"
+OLD = "2021-01-01T00:00:00+00:00"
+NEW = "2099-01-01T00:00:00+00:00"
 
 
 def git(repo, *args):
@@ -74,14 +78,26 @@ class WriterReaderTest(unittest.TestCase):
         git(self.repo, "config", "user.name", "t")
         git(self.repo, "commit", "-q", "--allow-empty", "-m", "init")
 
-    def _legacy(self, name="review"):
+    def _legacy(self, name="review", body=None):
         path = os.path.join(
             self.repo, ".claude", "grumpy", BRANCH, "receipts", f"{name}.json"
         )
-        os.makedirs(os.path.dirname(path))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            f.write("{}\n")
+            f.write(json.dumps(body or {}) + "\n")
         return path
+
+    def _age(self, path, written_at, mtime=None):
+        """Rewrite the receipt at `path` with this written_at (None drops it)."""
+        with open(path) as f:
+            body = json.load(f)
+        body.pop("written_at", None)
+        if written_at:
+            body["written_at"] = written_at
+        with open(path, "w") as f:
+            json.dump(body, f)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
 
     def _write(self, pass_name="review", stage=None):
         """What a pass does: save its report, then leave the receipt."""
@@ -105,12 +121,86 @@ class WriterReaderTest(unittest.TestCase):
             gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), legacy
         )
 
-    def test_the_new_root_wins_when_both_exist(self):
-        self._legacy()
-        written = self._write()
+    def test_the_newer_receipt_wins_when_both_exist(self):
+        legacy = self._legacy(body={"written_at": OLD})
+        written = self._write()  # written now, so newer
         self.assertEqual(
             gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), written
         )
+        self._age(written, OLDER)
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), legacy
+        )
+
+    def test_a_stale_new_receipt_does_not_shadow_a_fresh_legacy_one(self):
+        written = self._write()
+        self._age(written, OLD)
+        legacy = self._legacy(body={"written_at": NEW})
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), legacy
+        )
+
+    def test_age_falls_back_to_mtime_without_written_at(self):
+        written = self._write()
+        self._age(written, None, mtime=1_000_000)
+        legacy = self._legacy()
+        os.utime(legacy, (2_000_000, 2_000_000))
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), legacy
+        )
+        os.utime(legacy, (500_000, 500_000))
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), written
+        )
+
+    def test_a_tie_goes_to_the_new_root(self):
+        written = self._write()
+        self._age(written, NEW)
+        self._legacy(body={"written_at": NEW})
+        self.assertEqual(
+            gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review"), written
+        )
+
+    def test_a_stage_receipt_beats_a_newer_plain_one(self):
+        stage = self._write("fix", stage="review")
+        self._age(stage, OLD)
+        self._legacy("fix", body={"written_at": NEW})
+        self.assertEqual(
+            gate_receipts.receipt_path(
+                self.repo, BRANCH, "grumpy:fix", "grumpy-fix-post-review"
+            ),
+            stage,
+        )
+
+    def test_the_newer_stage_receipt_wins_across_roots(self):
+        stage = self._write("fix", stage="imagine")
+        self._age(stage, OLD)
+        legacy = self._legacy("fix-imagine", body={"written_at": NEW})
+        self.assertEqual(
+            gate_receipts.receipt_path(
+                self.repo, BRANCH, "grumpy:fix", "grumpy-fix-post-imagine"
+            ),
+            legacy,
+        )
+
+    def test_predecessor_receipt_is_found_in_the_legacy_root(self):
+        fix = self._write("fix", stage="review")
+        self._legacy("review", body={"written_at": NEW})
+        before, ts = gate_receipts._predecessor_written(
+            fix, "grumpy-fix-post-review", {}, BRANCH
+        )
+        self.assertEqual(before, "grumpy-review")
+        self.assertEqual(ts, gate_receipts._parse_ts(NEW))
+
+    def test_predecessor_takes_the_newer_of_the_two_roots(self):
+        review = self._write("review")
+        self._age(review, OLD)
+        self._legacy("review", body={"written_at": NEW})
+        fix = self._write("fix", stage="review")
+        _, ts = gate_receipts._predecessor_written(
+            fix, "grumpy-fix-post-review", {}, BRANCH
+        )
+        self.assertEqual(ts, gate_receipts._parse_ts(NEW))
 
     def test_with_neither_the_reader_points_at_the_new_root(self):
         path = gate_receipts.receipt_path(self.repo, BRANCH, "grumpy:review")
@@ -181,25 +271,41 @@ class CommandsTest(unittest.TestCase):
                         legacy = f'"$GIT_ROOT/.claude/{folder}/'
                         if legacy not in line:
                             continue
-                        # The one allowed shape: a read fallback, taken only
-                        # when the new location is missing.
+                        # The allowed shapes: a plan read fallback, taken only
+                        # when the new plan is missing, or naming the legacy
+                        # report folder fix reads per file.
                         self.assertRegex(
-                            line, r"^\[ -[fd] \"\$(PLAN|ARTIFACT_DIR)\" \] \|\| ", where
+                            line,
+                            r'^(\[ -f "\$PLAN" \] \|\| |LEGACY_DIR="\$GIT_ROOT/)',
+                            where,
                         )
 
-    def test_every_artifact_dir_fallback_points_at_the_legacy_root(self):
-        seen = 0
+    def test_fix_falls_back_per_file_and_never_writes_the_legacy_folder(self):
+        with open(os.path.join(PLUGINS, "grumpy", "commands", "fix.md")) as f:
+            text = f.read()
+        lines = text.splitlines()
+        self.assertIn(
+            'LEGACY_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written '
+            "before grumpy 2.15; read, never written",
+            lines,
+        )
+        # No folder-level switch: that picks the new folder even when only
+        # the legacy one holds review.md (a mid-chain upgrade).
+        self.assertNotIn('[ -d "$ARTIFACT_DIR" ] ||', text)
+        self.assertIn("per file", text)
+        for line in lines:
+            if "LEGACY_DIR" in line and line.startswith(("mkdir", "printf", ">")):
+                self.fail(f"fix.md writes the legacy folder: {line}")
+        # The persist step creates only the new folder.
+        self.assertIn('mkdir -p "$ARTIFACT_DIR"', lines)
+        self.assertNotIn('mkdir -p "$LEGACY_DIR"', text)
+
+    def test_no_command_switches_folders_by_directory(self):
         for path in self._commands():
             with open(path) as f:
-                for n, line in enumerate(f, 1):
-                    if line.startswith('[ -d "$ARTIFACT_DIR" ] || '):
-                        seen += 1
-                        self.assertIn(
-                            'ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"',
-                            line,
-                            f"{os.path.relpath(path, PLUGINS)}:{n}",
-                        )
-        self.assertGreaterEqual(seen, 1)  # fix reads earlier passes' reports
+                self.assertNotIn(
+                    '[ -d "$ARTIFACT_DIR" ] ||', f.read(), os.path.relpath(path)
+                )
 
     def test_every_plan_read_falls_back_to_the_legacy_plan(self):
         seen = 0

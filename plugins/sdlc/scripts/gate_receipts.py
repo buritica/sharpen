@@ -114,23 +114,65 @@ def receipt_path(worktree_root, branch, skill, gate=None):
     it in the repo's `.gitignore` too, so receipts never reach git. For a fix
     gate, the stage-specific receipt wins when it exists.
 
-    A grumpy before 2.15 wrote to `.claude/grumpy/` instead. When the new
-    folder has no receipt for this gate and the old one does, the old one is
-    returned, so a pass run with the older grumpy still records; every
-    freshness and report check applies to it unchanged (its report sits next
-    to it, in the old folder)."""
+    A grumpy before 2.15 wrote to `.claude/grumpy/` instead, and two hosts or
+    sessions can run different grumpy versions on one branch. So for each
+    receipt name both folders are read and the newer receipt wins (by its
+    `written_at`, else file mtime), not the one in the newer folder: a stale
+    2.15 receipt never shadows a fresh one an older grumpy wrote. Every
+    freshness and report check applies to a legacy receipt unchanged (its
+    report sits next to it, in the old folder)."""
     name = RECEIPT_NAME_FOR_SKILL.get(skill)
     if not name or not worktree_root:
         return None
     stage = FIX_STAGE_RECEIPT.get(gate)
-    candidates = [stage, name] if stage else [name]
-    for root in (GRUMPY_ROOT, LEGACY_GRUMPY_ROOT):
-        directory = os.path.join(worktree_root, *root, branch, "receipts")
-        for candidate in candidates:
-            path = os.path.join(directory, f"{candidate}.json")
-            if os.path.exists(path):
-                return path
+    for candidate in [stage, name] if stage else [name]:
+        found = _newest(_receipt_copies(worktree_root, branch, candidate))
+        if found:
+            return found
     return os.path.join(worktree_root, *GRUMPY_ROOT, branch, "receipts", f"{name}.json")
+
+
+def _receipt_copies(worktree_root, branch, name):
+    """Existing copies of receipt `name` for `branch`, new folder first."""
+    paths = (
+        os.path.join(worktree_root, *root, branch, "receipts", f"{name}.json")
+        for root in (GRUMPY_ROOT, LEGACY_GRUMPY_ROOT)
+    )
+    return [p for p in paths if os.path.exists(p)]
+
+
+def _age_key(path):
+    """Sort key for how recent a receipt is: its written_at, else its mtime.
+    An unreadable receipt sorts by mtime too (it is refused later, by name)."""
+    receipt, _ = read_receipt(path)
+    ts = _parse_ts((receipt or {}).get("written_at"))
+    if ts is None:
+        try:
+            ts = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+        except OSError:
+            ts = datetime.min.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def _newest(paths):
+    """The most recent of `paths`, the first one on a tie, or None."""
+    best = None
+    for path in paths:
+        if best is None or _age_key(path) > _age_key(best):
+            best = path
+    return best
+
+
+def _worktree_of(path, branch):
+    """The worktree root a receipt at `path` (`<wt>/<root>/<branch>/receipts/
+    <name>.json`) sits under, or None when it isn't laid out that way."""
+    base = os.path.dirname(os.path.dirname(path))  # <wt>/<root>/<branch>
+    for _ in branch.split("/"):
+        base = os.path.dirname(base)
+    root = (os.path.basename(os.path.dirname(base)), os.path.basename(base))
+    if root not in (GRUMPY_ROOT, LEGACY_GRUMPY_ROOT):
+        return None
+    return os.path.dirname(os.path.dirname(base))
 
 
 def _parse_ts(value):
@@ -148,7 +190,10 @@ def read_receipt(path):
     if not path or not os.path.isfile(path):
         if not path:
             return None, "no receipt location"
-        return None, f"no receipt yet at {path} (grumpy 2.9.0+ writes one)"
+        return None, (
+            f"no receipt yet at {path} (grumpy 2.15+ writes one there; "
+            "grumpy 2.9 to 2.14 under .claude/grumpy/ instead)"
+        )
     try:
         with open(path) as f:
             receipt = json.load(f)
@@ -159,16 +204,23 @@ def read_receipt(path):
     return receipt, None
 
 
-def _predecessor_written(path, gate, branch_data):
-    """When the pass a fix gate follows wrote ITS receipt (sibling file), or
-    that gate's stamp when no such receipt is on disk. Comparing against the
-    predecessor's receipt, not its stamp, keeps a late --verify or a sweep
-    that records review AFTER fix finished from refusing the fix receipt."""
+def _predecessor_written(path, gate, branch_data, branch=None):
+    """When the pass a fix gate follows wrote ITS receipt, or that gate's
+    stamp when no such receipt is on disk. The predecessor's receipt is looked
+    for in both folders (the newer copy wins, as in `receipt_path`), so a
+    grumpy upgrade between review and fix keeps the ordering check. Comparing
+    against the predecessor's receipt, not its stamp, keeps a late --verify or
+    a sweep that records review AFTER fix finished from refusing the fix
+    receipt."""
     if gate not in _FIX_PREDECESSOR:
         return None, None
     before, name = _FIX_PREDECESSOR[gate]
-    sibling, _ = read_receipt(os.path.join(os.path.dirname(path), f"{name}.json"))
-    ts = _parse_ts((sibling or {}).get("written_at"))
+    sibling = os.path.join(os.path.dirname(path), f"{name}.json")
+    worktree = _worktree_of(path, branch) if branch else None
+    if worktree:
+        sibling = _newest(_receipt_copies(worktree, branch, name)) or sibling
+    prior, _ = read_receipt(sibling)
+    ts = _parse_ts((prior or {}).get("written_at"))
     if ts is None:
         ts = _parse_ts((branch_data or {}).get("gates", {}).get(before))
     return before, ts
@@ -246,7 +298,7 @@ def check_receipt(path, *, skill, gate, branch, head, branch_data, reachable=())
     started = _parse_ts((branch_data or {}).get("created_at"))
     if started and written < started:
         return None, f"receipt at {path} predates this gate cycle"
-    before, prior = _predecessor_written(path, gate, branch_data)
+    before, prior = _predecessor_written(path, gate, branch_data, branch)
     if prior and written <= prior:
         return None, f"receipt at {path} predates the {before} pass it must follow"
     reason = _fix_gate_refusal(path, gate, receipt, branch_data)

@@ -62,6 +62,13 @@ LEGACY_SDLC_ROOT = (".claude", "sdlc")
 
 
 def _from_sdlc(wt, root, branch):
+    """The stack base sdlc recorded for `branch`, or None.
+
+    The first READABLE base.json wins, new folder first. A readable new file
+    whose ref no longer exists returns None and does not fall through to the
+    legacy file, on purpose: the new file means this sdlc owns the base, and a
+    missing ref means the base moved, so an older sdlc's file would be staler
+    still. Don't "fix" this into a fall-through."""
     for sdlc_root in (SDLC_ROOT, LEGACY_SDLC_ROOT):
         path = os.path.join(root, *sdlc_root, branch, "base.json")
         try:

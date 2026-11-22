@@ -65,10 +65,15 @@ WT="${WT:-.}"
 BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD)
 GIT_ROOT=$(git -C "$WT" rev-parse --show-toplevel)
 ARTIFACT_DIR="$GIT_ROOT/.sharpen/grumpy/$BRANCH"
-[ -d "$ARTIFACT_DIR" ] || ARTIFACT_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written before grumpy 2.15
+LEGACY_DIR="$GIT_ROOT/.claude/grumpy/$BRANCH"  # reports written before grumpy 2.15; read, never written
 ```
 
-Check `$ARTIFACT_DIR/` for any persisted artifacts using the Read tool:
+Look for each artifact **per file**: read `$ARTIFACT_DIR/<name>` when it
+exists, and `$LEGACY_DIR/<name>` only when the new copy of that same file is
+missing. Never pick one folder for all of them: after a mid-chain upgrade
+`$ARTIFACT_DIR` can exist (simplify wrote there) while `review.md` is still
+only in `$LEGACY_DIR`. Say in the summary which artifacts came from
+`$LEGACY_DIR`. Check for any persisted artifacts using the Read tool:
 `audit.md`, `review.md`, `imagine.md`, `architecture.md`, `edge-cases.md`,
 `product.md`, `security.md`, `cleanup.md`, `simplify.md` (unlike `cleanup.md`,
 which stops at a report and waits for the user to pick what to clean up,
@@ -806,6 +811,6 @@ fi
 
 ## Gotchas
 
-- Fix reads persisted artifacts under `.sharpen/grumpy/<branch>/` (or the pre-2.15 `.claude/grumpy/<branch>/`) first (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
+- Fix reads each persisted artifact from `.sharpen/grumpy/<branch>/`, or from the pre-2.15 `.claude/grumpy/<branch>/` when the new folder has no copy of that file (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
 - Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
 - Fix addresses Critical and Serious findings by dispatching a sub-agent, defers what Step 1b's eligibility table allows (never Critical, Serious only when judgment-tagged in a handful of aspects and only with an issue attached), and asks about whatever Optional findings are left. Nothing is silently dropped anymore — check `## Would file` in the persisted report if `--file-issues` wasn't passed.

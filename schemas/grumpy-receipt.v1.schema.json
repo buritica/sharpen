@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sharpen.dev/schemas/grumpy-receipt.v1.schema.json",
   "title": "Sharpen grumpy pass receipt v1",
-  "description": "Written by a grumpy pass as its last step, under the gitignored <worktree>/.claude/grumpy/<branch>/receipts/<skill>.json. The sdlc gate chain records a skill gate only from a receipt naming a commit on the branch, and only while the report it names is still on disk (a changed report records with a warning). A record that the work ran, not a security boundary.",
+  "description": "Written by a grumpy pass as its last step, under the gitignored <worktree>/.sharpen/grumpy/<branch>/receipts/<skill>.json (<worktree>/.claude/grumpy/ before grumpy 2.15; sdlc 4.21+ still reads receipts there). The sdlc gate chain records a skill gate only from a receipt naming a commit on the branch, and only while the report it names is still on disk (a changed report records with a warning). A record that the work ran, not a security boundary.",
   "type": "object",
   "required": ["protocol_version", "skill", "branch", "head", "written_at", "report", "report_sha256"],
   "properties": {
@@ -11,7 +11,7 @@
     "branch": {"type": "string", "minLength": 1},
     "head": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "written_at": {"type": "string", "format": "date-time"},
-    "report": {"description": "The pass's report file, relative to <worktree>/.claude/grumpy/<branch>/.", "enum": ["simplify.md", "review.md", "imagine.md", "fix.md"]},
+    "report": {"description": "The pass's report file, relative to the folder holding receipts/: <worktree>/.sharpen/grumpy/<branch>/ (or .claude/grumpy/<branch>/ before grumpy 2.15).", "enum": ["simplify.md", "review.md", "imagine.md", "fix.md"]},
     "report_sha256": {"description": "sha256 of that report when the receipt was written; links the receipt to the evidence, not a security boundary.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
     "stage": {"description": "fix only: which review the run resolved. Written as receipts/fix-<stage>.json, so one fix run earns one fix gate (grumpy 2.11.0+).", "enum": ["review", "imagine"]}
   },

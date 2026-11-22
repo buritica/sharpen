@@ -10,8 +10,14 @@ Every pass now writes its report, and its receipt, to `.sharpen/grumpy/<branch>/
 headless session (`claude -p`, the benchmark) refuses a Write-tool save there, so the pass
 printed its report; with no saved report, a pass leaves no receipt and earns no gate.
 
-- `/grumpy:fix` reads the old folder when the new one doesn't exist yet, so a review run
-  before the upgrade is still found. review and imagine read the settled list in `fix.md`
+**grumpy 2.15 needs sdlc 4.21 or newer, or gates 2–6 never record.** sdlc 4.20 and older
+look for receipts only under `.claude/grumpy/`, never find the ones 2.15 writes, and say
+nothing about it: every review gate just stays open. Upgrade both plugins together
+(`claude plugin marketplace update`, then restart the session). The other skew is safe:
+sdlc 4.21 still reads receipts an older grumpy left under `.claude/grumpy/`.
+
+- `/grumpy:fix` reads each report from the new folder, and from the old one when the new
+  folder has no copy of that report, so a review run before the upgrade is still found. review and imagine read the settled list in `fix.md`
   the same way.
 - review, imagine, simplify and fix read the sdlc plan from `.sharpen/sdlc/<branch>/plan.md`,
   falling back to `.claude/sdlc/`, and `diff_base.py` reads sdlc's `base.json` from
