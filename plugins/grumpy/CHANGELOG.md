@@ -3,6 +3,26 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.14.0 — current models, per-host columns, review and imagine route
+
+`models.yaml` moves to the current Claude ids (`claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5`, `claude-fable-5-2`). Fable is no longer `wrapper_required`: Claude
+Code's subagent dispatch now takes `fable` as an alias, so `/grumpy:audit` synthesizes on
+it instead of falling back to opus. Note that the `fable` alias resolves to Fable 5.1
+unless `ANTHROPIC_DEFAULT_FABLE_MODEL` is set.
+
+Each role gains `codex` and `pi` columns. Those hosts can't choose a model per subagent,
+so the columns say which model to start the session on, and a pass that can't route says
+which model it ran on. The Codex ids come from OpenAI's Codex models page; which one fits
+which role is unverified until the benchmark has measured it.
+
+`/grumpy:review` and `/grumpy:imagine` now read the map too. Their finding passes run on
+the `analysis` role, so on Claude Code their subagents are dispatched on `opus` instead of
+inheriting the session's model, and the report names the model. This is the one behavior
+change: a review started from a Sonnet session now costs Opus rates for its passes. Pin
+`analysis` lower in a repo's `.sharpen/models.yaml` (new: it overrides individual entries
+of the plugin's map) if that's not wanted.
+
 ## 2.13.0 — a review benchmark replaces the recall eval
 
 The one-fixture recall eval (`scripts/eval-grumpy-findings.py`, `tests/fixtures/sample.diff`,

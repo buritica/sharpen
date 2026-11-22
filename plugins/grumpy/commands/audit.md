@@ -45,26 +45,24 @@ Detect `--worktree <path>` (alias `--path <path>`) from `$ARGUMENTS`; if present
 ## Model routing
 
 This command is the heaviest reasoning grumpy does. Run the synthesis and
-planning (Phases 1, 3, 4) on the strongest available model. Read
-`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` for the role→model map — a repo-relative
-`plugins/grumpy/models.yaml` spelling resolves against the consumer repo's cwd
-in an installed plugin, not this plugin's own directory, and silently fails to
-exist there. If it isn't readable from where you're running, **say so in the
+planning (Phases 1, 3, 4) on the strongest available model. Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
+(it overrides individual entries), then from `models.yaml` in grumpy's plugin
+root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — a
+repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
+consumer repo's cwd in an installed plugin, not this plugin's own directory,
+and silently fails to exist there. If neither is readable, **say so in the
 report's run header** ("models.yaml unreadable — used native defaults") and
 use these native defaults directly rather than guessing: `audit` role →
-`opus`, `analysis` role → `opus`. This is the same "never silently downgrade"
-obligation as the `wrapper-required` substitution below — a user routed
-entirely to opus because the config file failed to load should learn that
-from the report, not discover it later. Use the `audit` role for
-synthesis/planning and `analysis` for the
+`fable`, `analysis` role → `opus`. A user routed by defaults because the
+config failed to load should learn that from the report, not discover it
+later. Use the `audit` role for synthesis/planning and `analysis` for the
 composed reviews. If your harness lets you choose a model per dispatched
-subagent, only `sonnet`/`opus`/`haiku` are natively dispatchable that way;
-map any role whose model is marked `wrapper-required` (e.g. Fable) down to
-its documented native fallback (`opus`) and note the substitution in the
-report's run header. If your harness has no such per-dispatch model
-argument, run every dimension at your own model and say so in the run
-header instead of guessing at a substitution. **Never silently downgrade**
-— say which model actually ran.
+subagent (Claude Code's takes `sonnet`/`opus`/`haiku`/`fable`), pass the
+role's `native` value. If it doesn't (Codex and pi run every dimension on the
+session's model), run every dimension at your own model and say so in the run
+header, naming the model the map suggests for this host (its `codex`/`pi`
+column) so the user can start the session on it next time. **Never silently
+downgrade** — say which model actually ran.
 
 ## Phase 1 — Discovery & Mapping (read before judging)
 
@@ -188,7 +186,7 @@ Produce one document:
 ```markdown
 # Audit: [Project Name]
 
-_Run header: models used (and any wrapper-required substitution), scope, date._
+_Run header: models used (and any substitution or session-model fallback), scope, date._
 
 ## Executive Summary
 [≤10 sentences: health grade A–F with justification, top 3 risks, top 3 opportunities.]
@@ -241,7 +239,7 @@ its `exec:` tier (cheap where it can, strong where it must).
   that says so beats a "complete" one that quietly read three files.
 - **Honest sizing over productive-looking sizing.** The `accept:` command is the
   contract. No runnable check → not small.
-- **Say which model ran.** Never silently downgrade a wrapper-required role.
+- **Say which model ran.** Never silently downgrade a role.
 
 ## Tone Examples
 

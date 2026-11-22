@@ -455,10 +455,12 @@ rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
 strong tier, not a mix. The thrifty split is real, just conditional on going
 through `/grumpy:audit` first.
 
-Read `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` for the role→model map — a
+Read the role→model map from the repo's `.sharpen/models.yaml` if it exists
+(it overrides individual entries), then from `models.yaml` in grumpy's plugin
+root (`${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — a
 repo-relative `plugins/grumpy/models.yaml` spelling resolves against the
 target repo's cwd in an installed plugin, not this plugin's own directory. If
-it isn't readable from where you're running, **say so in the summary**
+neither is readable from where you're running, **say so in the summary**
 ("models.yaml unreadable — used native defaults") and use the native
 defaults below directly — they are the source of truth for dispatch, but a
 user routed by defaults instead of the configured map should learn that from
@@ -471,14 +473,12 @@ subagent dispatch's per-model argument:
 - `exec: strong`, no hint, or `L`/`XL`/no `accept:` → `analysis` role → **`opus`**
 
 Use the ladder's role names everywhere so escalation and clamping line up:
-`exec-trivial < exec < analysis`. `opus` (the `analysis` role) is the top
-**natively dispatchable** model, so it is the ceiling — the `audit` role's real
-model is `wrapper_required` and falls back to opus anyway, so there is no higher
-native rung to climb to.
+`exec-trivial < exec < analysis`. `opus` (the `analysis` role) is the top of
+the ladder, so it is the ceiling. The `audit` role (`fable`) is grumpy:audit's
+synthesis model, not a rung a failed fix escalates to.
 
-Only `sonnet`/`opus`/`haiku` are natively dispatchable. If `models.yaml` resolves
-a role to a `wrapper_required` model (Fable), use its native fallback
-(`opus`) and say so.
+Pass the role's `native` value as the dispatch's model argument (Claude Code
+accepts `sonnet`/`opus`/`haiku`/`fable`).
 
 `--max-tier <role>` **clamps** routing to that ceiling (order:
 `exec-trivial < exec < analysis`). `--max-tier exec` forces everything to

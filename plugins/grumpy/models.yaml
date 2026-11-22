@@ -3,31 +3,56 @@
 # Commands and `exec:` hints reference ROLE names, never raw model strings.
 # To bump a model rev, change one column and nothing downstream changes.
 #
-# Native dispatch: the Task/Agent tool's `model` argument accepts only
-# `sonnet` / `opus` / `haiku`. The `audit` role's real model (Fable) is
-# `wrapper_required` — not reachable through the generic dispatch tool yet —
-# so it falls back to its `native` model. Commands MUST announce the
-# substitution rather than silently downgrade.
+# A repo can override any entry with its own `.sharpen/models.yaml` (same
+# shape; only the keys it sets win). Commands read that file first, then this
+# one.
+#
+# Columns, per host:
+#   claude  Anthropic API id (pinned snapshot). Checked against
+#           platform.claude.com/docs/en/models/overview on 2026-11-22.
+#   native  Claude Code's per-subagent `model` argument. It takes aliases
+#           only: sonnet / opus / haiku / fable. `fable` resolves to Fable 5.1
+#           unless ANTHROPIC_DEFAULT_FABLE_MODEL is set (claude-fable-5-2 to
+#           get 5.2); the others resolve to the 5.5 models.
+#   codex   Model to run a Codex session on for this role. Codex has no
+#           per-subagent model argument, so a pass runs on the session's
+#           model and this column is advice, not dispatch. Ids are from
+#           OpenAI's Codex models page on 2026-11-22; which id suits which
+#           role is UNVERIFIED until scripts/bench-grumpy.py has measured it.
+#   pi      Same idea for pi (`--model provider/id`). null = keep the session
+#           model; pi users pick their own provider.
+
+hosts:
+  claude-code: {column: native, per_agent_model: true}
+  codex: {column: codex, per_agent_model: false, verified: false}
+  pi: {column: pi, per_agent_model: false}
 
 roles:
   audit:        # grumpy:audit synthesis + planning (heaviest reasoning)
-    claude: claude-fable-5
-    native: opus              # Fable is wrapper_required; opus is the native dispatch
-    wrapper_required: [claude-fable-5]
-  analysis:     # review / architecture / security / product / edge-cases finding passes
-    claude: claude-opus-4-8
-    native: opus              # opus is natively dispatchable
+    claude: claude-fable-5-2
+    native: fable
+    codex: gpt-6.2-astra
+    pi: null
+  analysis:     # review / imagine / architecture / security / product / edge-cases finding passes
+    claude: claude-opus-5-5
+    native: opus
+    codex: gpt-6.2-astra
+    pi: null
   exec:         # default fix execution (M steps)
-    claude: claude-sonnet-4-6
+    claude: claude-sonnet-5-5
     native: sonnet
+    codex: gpt-6.2-sol
+    pi: null
   exec-trivial: # S mechanical steps (exec: trivial)
-    claude: claude-haiku-4-5
+    claude: claude-haiku-5-5
     native: haiku
-  escalation:   # gate-failure bump target — one rung up; native ceiling is `analysis` (opus)
+    codex: gpt-6-luna
+    pi: null
+  escalation:   # gate-failure bump target — one rung up; the ladder tops at `analysis`
     order: [exec-trivial, exec, analysis]
 
-# Native dispatch ladder for `--max-tier` clamping + escalation (low → high):
+# Escalation ladder for `--max-tier` clamping (low → high):
 #   exec-trivial(haiku) < exec(sonnet) < analysis(opus)
-# The `audit` role exists for grumpy:audit's own synthesis model selection
-# (Fable, wrapper_required → opus fallback); natively it collapses to `analysis`,
-# so escalation tops out at analysis — there is no higher native rung.
+# `audit` sits outside the ladder: it's grumpy:audit's own synthesis model
+# (Fable, now natively dispatchable as `fable`), not a rung a failed fix
+# escalates to.
