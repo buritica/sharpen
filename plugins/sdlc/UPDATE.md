@@ -9,7 +9,7 @@ releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
 A two-line fix once took 13 gate rounds. Five changes cut the rounds that review nothing new:
 
-- **The chain is done when gate 8 records.** `gate.md` used to list "fixes from
+- **The chain is done when every gate shows recorded.** `gate.md` used to list "fixes from
   review/imagine" as changes that reset the chain, though those fixes are gates 4 and 6
   of it. It now says plainly: don't re-run review to check gate 4's or gate 6's own fixes.
 - **`record-gate.py --carry`.** When a commit after the last review gate makes the chain
@@ -19,12 +19,13 @@ A two-line fix once took 13 gate rounds. Five changes cut the rounds that review
   release bookkeeping (version fields and release notes renumbered while restacking), a
   change to trailing whitespace or blank lines only, safe docs (READMEs, changelogs, prose under `docs/`, images,
   never a command, skill, template, hook or other file an agent executes), or a small
-  comment or rename fix with `--reason` (at most 30 changed lines, no new files). A carry
+  comment, docstring or wording fix with `--reason` (at most 30 changed lines, no new files). A carry
   is recorded as a carry and shown in `--status`, and it re-opens tests, lint and
   typecheck. Anything else still needs a reset. `/sdlc:ship`'s rebase note now points
   at it.
 - **A review base for stacked branches.** The chain resolves the base your branch's
-  review covers: `record-gate.py --set-base <ref>`, else the open PR's base (via `gh`),
+  review covers: `record-gate.py --set-base <branch>` (a branch name, never `HEAD` or the
+  branch itself), else the open PR's base (via `gh`),
   else the branch's upstream parent, else main. `--carry`, the round counter and
   `--status` use it, and grumpy 2.11+ passes read it from `.claude/sdlc/<branch>/base.json`,
   so a stacked branch no longer reviews (or edits) the layers below it. With an older

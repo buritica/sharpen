@@ -189,11 +189,47 @@ class StackTest(ReceiptTestBase):
         self.cli("--set-base", "layer-b")
         self.start()
         self.run_chain()
-        self.assertEqual(self.cli("--set-base", BRANCH).returncode, 0)
+        head = git(self.repo, "rev-parse", "HEAD").strip()
+        self.edit_store(lambda data: data[BRANCH]["base"].update(commit=head))
         self.commit_file("c.py", "import os\nos.system('true')\n", msg="code")
         r = self.carry()
         self.assertEqual(r.returncode, 1)
         self.assertIn("is not below", r.stderr)
+
+    def test_set_base_refuses_refs_that_move_with_head(self):
+        for ref in ("HEAD", "HEAD~1", BRANCH):
+            r = self.cli("--set-base", ref)
+            self.assertEqual(r.returncode, 1, ref)
+        self.assertEqual(self.cli("--set-base", "layer-b").returncode, 0)
+
+    def test_bare_set_base_is_an_error_not_an_unset(self):
+        self.cli("--set-base", "layer-b")
+        self.assertEqual(self.cli("--set-base").returncode, 1)
+        self.assertEqual(self.cli("--set-base", "--branch", BRANCH).returncode, 1)
+        cfg = git(self.repo, "config", f"branch.{BRANCH}.sdlcBase").strip()
+        self.assertEqual(cfg, "layer-b")
+
+    def test_set_base_does_not_combine_with_init(self):
+        r = self.cli("--init", "tiny", "--set-base", "layer-b")
+        self.assertEqual(r.returncode, 1)
+
+    def test_a_rebase_between_arming_and_the_chain_still_carries(self):
+        # The cycle is armed on the old parent, the branch is brought up to
+        # date before the chain, and a later clean merge of the parent must
+        # still carry: the stored base is older than what was reviewed.
+        self.cli("--set-base", "layer-b")
+        self.start()
+        old_b = git(self.repo, "rev-parse", "layer-b").strip()
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.commit_file("b2.py", "B2 = 1\n", msg="parent moves")
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "rebase", "-q", "--onto", "layer-b", old_b)
+        self.run_chain()
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.commit_file("b3.py", "B3 = 1\n", msg="parent moves again")
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "merge", "-q", "--no-edit", "layer-b")
+        self.assert_carried(self.carry(), "rebase")
 
     def test_set_base_rejects_an_unknown_ref(self):
         self.assertEqual(self.cli("--set-base", "nope").returncode, 1)

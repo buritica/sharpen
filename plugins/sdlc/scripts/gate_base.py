@@ -65,8 +65,16 @@ def set_configured(branch, ref, cwd=None):
             ["config", "--unset", f"branch.{branch}.{CONFIG_KEY}"], cwd=cwd
         )
         return None if rc in (0, 5) else "git could not unset the base"
-    if not _exists(ref, cwd):
-        return f'"{ref}" is not a commit or branch here'
+    # Pin a branch by name, never an expression that moves with HEAD
+    # (`HEAD`, `HEAD~2`, `@{u}` is stored as the branch it names), and never
+    # the branch itself: a base at HEAD measures an empty patch.
+    full = _git(["rev-parse", "--symbolic-full-name", ref], cwd)
+    if not full.startswith(("refs/heads/", "refs/remotes/")) or not _exists(full, cwd):
+        return f'"{ref}" is not a local or remote branch here'
+    own_remote = full.startswith("refs/remotes/") and (full.split("/", 3)[-1] == branch)
+    if full == f"refs/heads/{branch}" or own_remote:
+        return f'"{ref}" is the branch itself; name its parent branch'
+    ref = _git(["rev-parse", "--abbrev-ref", full], cwd) or ref
     rc, _, _ = gc._git(["config", f"branch.{branch}.{CONFIG_KEY}", ref], cwd=cwd)
     return None if rc == 0 else "git could not set the base"
 
@@ -96,7 +104,12 @@ def _pr_base(branch, cwd=None):
 
 def _upstream(branch, cwd=None):
     up = _git(["rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}"], cwd)
-    if not up or up.split("/", 1)[-1] == branch or up == branch:
+    if not up or up == branch:
+        return None
+    local = _git(["config", "--get", f"branch.{branch}.remote"], cwd) == "."
+    if not local and up.split("/", 1)[-1] == branch:
+        # A remote-tracking upstream with the branch's own name is its pushed
+        # copy, not a parent. A local upstream is always another branch.
         return None
     return up if _exists(up, cwd) else None
 
@@ -129,7 +142,9 @@ def resolve(branch, cwd=None, use_host=False):
 
 def base_commit(ref, head, cwd=None):
     """The merge-base of `ref` and `head`, or None."""
-    return _git(["merge-base", ref, head], cwd) or None if ref and head else None
+    if not (ref and head):
+        return None
+    return _git(["merge-base", ref, head], cwd) or None
 
 
 def describe(base):

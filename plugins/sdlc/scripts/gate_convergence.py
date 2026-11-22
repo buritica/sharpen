@@ -25,7 +25,7 @@ Two pieces, both host-neutral (stdlib + git):
             stack nearly every rebase conflicts on exactly these files
     manual  anything else the operator vouches for with a reason: at most
             MANUAL_CARRY_MAX_LINES changed lines and no new files. The reason
-            is the only check that it is a comment or rename fix; this is the
+            is the only check that it is a comment or wording fix; this is the
             honest path for a small wording fix in an agent-executed file,
             recorded as a carry, never as a review
 
@@ -351,22 +351,29 @@ def is_ancestor(old, new, cwd=None):
 
 def reviewed_base(old, stored=None, ref=None, cwd=None):
     """The base commit `old` was reviewed on, or None. The cycle's stored
-    base wins when it is in `old`'s history. A cycle that has none (armed
+    base wins when it is in `old`'s history, unless the fork point below is
+    newer (the branch was rebased between arming and the chain). A cycle
+    that has none (armed
     before 4.17), or one a later `--set-base` moved, falls back to where
     `old` forked from `ref` (the base it is restacked onto) by that ref's
     reflog, as `git rebase` does, then to their plain merge-base. Without
     this, the reviewed patch is taken against the default branch and a
     lower layer that moved between review and restack reads as the branch's
     own change."""
+    fork = None
+    if ref:
+        for args in (["--fork-point", ref, old], [ref, old]):
+            out = _run(["merge-base", *args], cwd=cwd)
+            if out:
+                fork = out.decode(errors="replace").strip()
+                break
     if stored and is_ancestor(stored, old, cwd) is True:
+        # A stored base taken before a pre-chain rebase sits below what the
+        # gates were earned on; the newer fork point is the reviewed base.
+        if fork and fork != stored and is_ancestor(stored, fork, cwd) is True:
+            return fork
         return stored
-    if not ref:
-        return None
-    for args in (["--fork-point", ref, old], [ref, old]):
-        out = _run(["merge-base", *args], cwd=cwd)
-        if out:
-            return out.decode(errors="replace").strip()
-    return None
+    return fork
 
 
 def _numstat(old, new, cwd=None):
@@ -399,7 +406,7 @@ def _clean_replay(old, new, cwd=None, old_base=None, new_base=None):
     """True when HEAD is exactly what git produces by merging the reviewed
     commit onto HEAD's base with no conflicts and no hand edits; False when it
     is not; None when this git can't tell (merge-tree --write-tree needs git
-    2.38). This is what a clean rebase is, including a restack after a parent
+    2.40 for `--merge-base`). This is what a clean rebase is, including a restack after a parent
     branch squash-merged: the parent's changes are on both sides and merge
     away. It is the same textual merge the PR's own merge would make."""
     base = new_base or merge_base(new, cwd)
@@ -527,7 +534,7 @@ def _classify_descendant(old, new, reason, cwd=None, spent=0, bases=(None, None)
         return None, (
             "the change touches code or agent-executed files "
             f"({', '.join(unsafe[:3])}{', ...' if len(unsafe) > 3 else ''}); "
-            'a comment or rename fix can carry with --carry --reason "<why>"'
+            'a comment, docstring or wording fix can carry with --carry --reason "<why>"'
         )
     why = _manual_refusal(old, new, reason, cwd, spent)
     return (None, why) if why else ("manual", None)
@@ -572,11 +579,6 @@ def carried_heads(branch_data, head):
     while chain[-1] in hops and hops[chain[-1]] not in chain:
         chain.append(hops[chain[-1]])
     return chain
-
-
-def effective_head(branch_data, head):
-    """The newest commit recorded carries reach from `head`."""
-    return carried_heads(branch_data, head)[-1]
 
 
 def carries(branch_data):

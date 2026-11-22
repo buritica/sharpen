@@ -249,7 +249,7 @@ When the review gates go stale, try a carry before a reset:
 
 ```bash
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH"
-# a comment, docstring or rename fix that touches code or agent-executed files:
+# a comment, docstring or wording fix that touches code or agent-executed files:
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH" --reason "<what changed and why it needs no review>"
 ```
 
@@ -261,7 +261,7 @@ review base (below), and carries the gates only for one of these:
 | `rebase` | HEAD is exactly what git produces replaying the reviewed commits onto the new base with no conflicts and no hand edits (`git merge-tree`), or the branch's own changed lines are byte-for-byte unchanged, each side taken against its own base (context lines don't count). A clean restack after the layer below was rewritten or squash-merged qualifies | nothing |
 | `format` | Only trailing whitespace and blank lines changed; re-indenting, whitespace inside a line, and renames are not format | nothing |
 | `docs` | Every changed file is on the docs safe list: README, CHANGELOG, CHANGES, HISTORY, LICENSE, NOTICE, COPYING, CONTRIBUTING or AUTHORS by name, a prose file under `docs/`, or a raster image. `UPDATE.md` is not on it: the sdlc commands read it | nothing |
-| `bookkeeping` | The patch differs only in release bookkeeping: the `"version"` field of `.claude-plugin/marketplace.json`, `package.json`, `plugins/*/.claude-plugin/plugin.json` and `plugins/*/package.json`; the render stamp in `AGENTS.md`/`CLAUDE.md`; and `plugins/*/UPDATE.md`/`CHANGELOG.md`, which may renumber and pick up text already on the default branch but must keep every reviewed line. Everything else is compared exactly | nothing |
+| `bookkeeping` | The patch differs only in release bookkeeping: the `"version"` field of `.claude-plugin/marketplace.json`, `package.json`, `plugins/*/.claude-plugin/plugin.json` and `plugins/*/package.json`; the render stamp in `AGENTS.md`/`CLAUDE.md`; and `plugins/*/UPDATE.md`/`CHANGELOG.md`, which may renumber and pick up text already on the review base but must keep every reviewed line. Everything else is compared exactly | nothing |
 | `manual` | A comment, docstring or wording fix: at most 30 changed lines (added plus deleted) across all manual carries in the cycle, no new files (moving a file counts as one), no binary files. It may touch code or agent-executed files; the reason is what makes it honest | `--reason` |
 
 The docs safe list never covers a file an agent executes: anything under
@@ -297,7 +297,8 @@ stale and tells you to reset. Restart the session, update pi, and run
 On a stack (main <- A <- B <- your branch), a diff against main reviews every
 layer below yours: the passes re-review A and B, and a fix pass may edit
 their code. The chain resolves one base for your branch and every part of it
-uses that base: the grumpy passes (they read `.claude/sdlc/<branch>/base.json`),
+uses that base: the grumpy passes (grumpy 2.11+ reads `.claude/sdlc/<branch>/base.json`;
+an older grumpy still diffs against the default branch),
 `--carry`, the round counter and `--status` (`Base: <ref> at <commit> (why)`).
 First hit wins:
 
@@ -313,7 +314,8 @@ First hit wins:
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --set-base <parent-branch> --branch "$BRANCH"
 ```
 
-Set it before `--init`. When the layer below is rewritten or squash-merged,
+Set it before the branch's first commit: auto-init arms the cycle on that commit
+and records the base it resolves then. When the layer below is rewritten or squash-merged,
 restack with `git rebase --onto <new-base> <old-base>` and run `--carry`: it
 replays only your layer's commits onto the new base, so a clean restack
 carries as `rebase`. `--carry` takes the reviewed patch against the base it
@@ -399,7 +401,7 @@ The fix is always to make the gate genuinely pass, not to skip checking it:
 
 For **Tiny** (≤3 lines, no executable code): gates 1, 7, 8 only.
 
-For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only origin/main...HEAD`: only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
+For **Docs-only** (no executable files in the diff, any size): use the `tiny` cycle (`--init tiny`). Gates 1, 7, 8 are **vacuously satisfied** — there is no executable change to test, lint, or type-check — so record them directly and skip gates 2–6. Confirm first with `git diff --name-only "$BASE"...HEAD`, where `$BASE` is the `Base:` ref `--status` prints (origin/main when the branch isn't stacked): only `.md`/text/asset paths qualify. One executable file and it is no longer docs-only.
 
 `auto-init-gate-cycle.py` already runs this same check automatically on the first commit to a new branch — a confidently docs-only diff arms `tiny` on its own, no `--init` needed. This manual path still matters for a branch that *starts* with code (so the hook already armed `small-medium`) but later turns out to be docs-only, or for confirming what the hook decided.
 
@@ -480,11 +482,12 @@ Lint and typecheck run last because the review/fix gates modify code.
 
 ### When the chain is done
 
-**The chain is complete when gate 8 records** and gate 1 is recorded again
-after gate 6. The fixes in gates 4 and 6 are part of the chain, not changes
-after it: imagine (gate 5) already runs on the code gate 4 fixed, and lint and
-typecheck run on what gate 6 fixed. Each fix gate clears `tests`, so re-run
-gate 1 after gate 6; that is the only gate you repeat. Do not
+**The chain is complete when every gate shows recorded**: gates 7 and 8 after
+gate 6, and gate 1 again. The fixes in gates 4 and 6 are part of the chain, not
+changes after it: imagine (gate 5) already runs on the code gate 4 fixed, and
+lint and typecheck run on what gate 6 fixed. Each fix gate clears `tests`,
+`lint` and `typecheck`, so re-run gate 1 after gate 6; that is the only gate
+you repeat. Do not
 re-run review or imagine to "verify" the fixes; that re-run is a new round,
 and it is how a two-line fix took 13 rounds in sharpen#37.
 
@@ -500,7 +503,7 @@ survives `--init`; when a branch name is reused for unrelated work,
 
 When grumpy is not installed, perform the review yourself:
 
-**Simplify (gate 2):** Run `git diff origin/main...HEAD` and check for:
+**Simplify (gate 2):** Run `git diff "$BASE"...HEAD` (the `Base:` ref from `--status`) and check for:
 - Dead code or unused imports
 - Over-abstraction (helper functions called once, unnecessary indirection)
 - Duplicated logic that could be consolidated

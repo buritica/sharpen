@@ -344,9 +344,8 @@ def _base(workdir):
 def _merge_base(workdir):
     """The base commit the branch's diff is measured from (gate_base: an
     explicit --set-base, then the branch's upstream parent, then the default
-    branch), or None. origin/* before local for the default branch:
-    /sdlc:gate's own docs-only check diffs against origin, and a stale local
-    `main` would otherwise let this hook and that check disagree."""
+    branch, origin/* before local), or None. /sdlc:gate's docs-only check
+    diffs against the same `Base:` ref, so the two agree on a stack too."""
     return (_base(workdir) or {}).get("commit")
 
 

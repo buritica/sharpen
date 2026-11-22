@@ -298,13 +298,14 @@ def _convergence_suffix(branch_data):
 def _set_base(path, branch, ref):
     """`--set-base <ref|auto>`: pin (or unpin) the review round's base and
     refresh the cycle's stored base and the passes' base.json."""
+    # Read the store first: a corrupt store must fail before git config moves.
+    bd = gs.load_store(path).get(branch)
     err = gb.set_configured(branch, None if ref == "auto" else ref)
     if err:
         _log(f"[gate] error: {err}")
         return 1
     head = rc.branch_head(branch)
     base = gb.snapshot(branch, head, use_host=True) if head else None
-    bd = gs.load_store(path).get(branch)
     # Once a review gate is earned, the cycle keeps the base it was earned
     # on: --carry needs it to take the reviewed patch, and moves it itself.
     earned = isinstance(bd, dict) and rc.carry_source(bd) is not None
@@ -424,7 +425,12 @@ def main(argv):
     rest = []
     i = 0
     while i < len(argv):
-        if argv[i] == "--set-base" and i + 1 < len(argv):
+        if argv[i] == "--set-base":
+            # A bare --set-base (or one followed by another flag) must not
+            # read as "unset"; only an explicit `auto` does that.
+            if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+                _log("[gate] error: --set-base needs a ref, or auto to unset it")
+                return 1
             set_base = argv[i + 1]
             rest.append("--set-base")
             i += 2
@@ -476,6 +482,12 @@ def main(argv):
         return 1
     if command not in ("--attest", "--carry") and reason is not None:
         _log("[gate] error: --reason is only valid with --attest or --carry")
+        return 1
+    if set_base is not None and command != "--set-base":
+        _log(
+            "[gate] error: --set-base does not combine with other commands; "
+            "run it on its own before --init"
+        )
         return 1
     if new_rounds and command != "--init":
         _log("[gate] error: --new-rounds is only valid with --init")
@@ -536,7 +548,11 @@ def main(argv):
         if not target or target == "HEAD":
             _log("[gate] error: --set-base needs a named branch")
             return 1
-        return _set_base(path, target, set_base)
+        try:
+            return _set_base(path, target, set_base)
+        except (gs.StoreCorruptError, OSError) as e:
+            _log(f"[gate] error: {e}")
+            return 1
 
     branch = branch_override or gs.detect_branch()
     if not branch or branch == "HEAD":
@@ -790,9 +806,10 @@ def main(argv):
             sys.stdout.write(line + "\n")
         else:
             _log(
-                "Usage: record-gate.py [--init <tier> | --record <gate> | "
+                "Usage: record-gate.py [--init <tier> [--new-rounds] | "
+                "--record <gate> | "
                 "--attest <gate> --reason <text> | --verify <skill|all> | "
-                "--carry [--reason <text>] | "
+                "--carry [--reason <text>] | --set-base <ref|auto> | "
                 "--status | --oneline | "
                 "--unroute] [--branch <name>] [--route-from <path>] "
                 "[--profile <name> --capabilities-file <path>] "
