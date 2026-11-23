@@ -6,7 +6,8 @@ no-agent `oneshot.py` against a chat API) against small fixture repos, scores th
 a model, host or prompt change shows up as a number. Local only: nothing here
 runs in CI, and results land in the gitignored .sharpen/bench/.
 
-    bench-grumpy.py run --host claude [--model ID] [--pass review|imagine|all]
+    bench-grumpy.py run --host claude [--model ID[,ID...]] [--pass review|imagine|all]
+                        [--mode auto|inline|fanout[,...]]
                         [--provider openai|compatible]
                         [--cases a,b] [--repeat N] [--invoke native|inline]
                         [--cmd TEMPLATE] [--timeout S] [--out DIR] [--keep]
@@ -48,10 +49,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # this script's surface (the tests reach them as bench.<name>).
 from bench_hosts import (  # noqa: E402,F401
     HOSTS,
+    MODES,
     build_command,
     cli_version,
+    observed_mode,
     oneshot_setup,
     oneshot_version,
+    output_text,
+    parse_usage,
     prompt_hash,
 )
 
@@ -550,7 +555,7 @@ def summarize(runs):
     older baseline still compares."""
     groups = {}
     for r in runs:
-        groups.setdefault(f"{r['case']}/{r['pass']}", []).append(r)
+        groups.setdefault(group_name(r), []).append(r)
     out = {}
     for name, rs in sorted(groups.items()):
         scored = [r["score"] for r in rs if r.get("score")]
@@ -575,10 +580,41 @@ def summarize(runs):
                 sorted(collections.Counter(r.get("status", "?") for r in rs).items())
             ),
             "duration_s": _mean(r["duration_s"] for r in rs if r.get("duration_s")),
+            "cost_usd": _mean(
+                r["usage"]["cost_usd"]
+                for r in rs
+                if (r.get("usage") or {}).get("cost_usd") is not None
+            ),
+            "tokens": _mean(
+                r["usage"]["tokens"]
+                for r in rs
+                if (r.get("usage") or {}).get("tokens") is not None
+            ),
+            "subagents": _mean(
+                r["usage"]["subagents"]
+                for r in rs
+                if (r.get("usage") or {}).get("subagents") is not None
+            ),
+            "modes": dict(
+                sorted(
+                    collections.Counter(
+                        r["observed_mode"] for r in rs if r.get("observed_mode")
+                    ).items()
+                )
+            ),
             "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
             "held_back_failures": sum(1 for s in scored if s.get("present")),
         }
     return out
+
+
+def group_name(run):
+    """`case/pass`, plus `@model/mode` for a run from a matrix (several
+    models or modes in one `run`), so its variants summarize apart."""
+    name = f"{run['case']}/{run['pass']}"
+    if run.get("variant"):
+        name += f" @{run['variant']}"
+    return name
 
 
 def _rate(s, key):
@@ -592,13 +628,17 @@ def compare(
     noise_rise=0.0,
     precision_drop=0.1,
     dup_rise=1.0,
+    cost_rise=0.5,
 ):
     """Regressions of candidate vs baseline summaries.
 
     Returns (problems, notes); an empty problems list means no regression.
     A case/pass the baseline has and the candidate lacks is a problem: a
     narrowed run must not read as a clean one. Counts of failed runs are
-    compared as rates, so runs with different --repeat compare fairly.
+    compared as rates, so runs with different --repeat compare fairly. Mean
+    cost (or, where a host reports no cost, tokens) rising by more than
+    `cost_rise` (a fraction: 0.5 is +50%) is a problem; wall time and a
+    change in how the passes ran (inline or fanned out) are notes.
     """
     problems, notes = [], []
     b, c = baseline.get("summary", {}), candidate.get("summary", {})
@@ -663,7 +703,35 @@ def compare(
             problems.append(
                 f"{name}: precision {bs['precision']:.0%} -> {cs['precision']:.0%}"
             )
+        spend = _spend_change(bs, cs, cost_rise)
+        if spend:
+            problems.append(f"{name}: {spend}")
+        bt, ct = bs.get("duration_s"), cs.get("duration_s")
+        if bt and ct and ct > bt * 1.5:
+            notes.append(f"{name}: wall time {bt:.0f}s -> {ct:.0f}s")
+        if bs.get("modes") and cs.get("modes") and bs["modes"] != cs["modes"]:
+            notes.append(
+                f"{name}: passes ran {_modes(bs)} in baseline, {_modes(cs)} in candidate"
+            )
     return problems, notes
+
+
+def _modes(s):
+    return ", ".join(f"{m} x{n}" for m, n in s["modes"].items())
+
+
+def _spend_change(bs, cs, limit):
+    """'cost $0.40 -> $1.10' when the candidate spends more than `limit`
+    above the baseline: cost where both have it, else tokens. None when it
+    doesn't, or when either run recorded neither."""
+    for field, fmt in (("cost_usd", "${:.2f}"), ("tokens", "{:,.0f}")):
+        bv, cv = bs.get(field), cs.get(field)
+        if bv and cv is not None:
+            if cv > bv * (1 + limit):
+                label = "cost" if field == "cost_usd" else "tokens"
+                return f"{label} {fmt.format(bv)} -> {fmt.format(cv)}"
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +776,7 @@ def run_one(
     cases_dir=CASES_DIR,
     grumpy=GRUMPY,
     analysis=None,
+    host=None,
 ):
     key = load_key(case, cases_dir)
     repo = tempfile.mkdtemp(prefix=f"grumpy-bench-{case}-")
@@ -770,6 +839,15 @@ def run_one(
         )
         with open(os.path.join(out_dir, f"{label}.log"), "w", encoding="utf-8") as f:
             f.write(stdout + "\n----- stderr -----\n" + stderr)
+        # What the run spent and how its passes ran, recorded even for a
+        # failed run: a timeout that burned tokens is still a cost.
+        usage = parse_usage(host, stdout, stderr)
+        if usage is not None:
+            result["usage"] = usage
+        mode = observed_mode(host, usage)
+        if mode:
+            result["observed_mode"] = mode
+        printed = output_text(host, stdout)
         if result.get("status") == "timeout":
             return result
         if result["exit_code"]:
@@ -785,14 +863,14 @@ def run_one(
                 text = f.read()
             findings = parse_report(text)
             result["status"] = "scored"
-        elif report_in_output(stdout, pass_name):
+        elif report_in_output(printed, pass_name):
             # The host printed the report but couldn't save it (headless Claude
             # Code refused writes under .claude/ before grumpy 2.15). Score what
             # it printed, and say so: the pass's own write step failed.
             with open(saved, "w", encoding="utf-8") as f:
-                f.write(stdout)
-            text = stdout
-            findings = parse_report(stdout)
+                f.write(printed)
+            text = printed
+            findings = parse_report(printed)
             result["status"] = "scored-from-output"
         else:
             result["status"] = "no-report"
@@ -822,15 +900,30 @@ def _fmt(v, pct=True):
     return f"{v:.0%}" if pct else f"{v:.1f}"
 
 
+def _money(v):
+    return "-" if v is None else f"${v:.2f}"
+
+
+def _ktok(v):
+    return "-" if v is None else f"{v / 1000:,.0f}k"
+
+
+def _secs(v):
+    return "-" if v is None else f"{v:.0f}s"
+
+
 def print_summary(summary, stream=sys.stdout):
+    width = max([34, *(len(n) + 1 for n in summary)])
     print(
-        f"{'case/pass':34} {'runs':>4} {'fail':>4} {'recall':>7} {'spread':>7} {'prec':>6} {'noise':>6} {'over':>5} {'unloc':>6} {'clean':>6}",
+        f"{'case/pass':{width}} {'runs':>4} {'fail':>4} {'recall':>7} {'spread':>7} {'prec':>6} {'noise':>6} {'over':>5} {'unloc':>6} {'clean':>6}"
+        f" {'cost':>7} {'tokens':>8} {'time':>6} {'agents':>6}",
         file=stream,
     )
     for name, s in summary.items():
         print(
-            f"{name:34} {s['runs']:>4} {s['failed_runs']:>4} {_fmt(s['recall']):>7} {_fmt(s['recall_spread']):>7} "
-            f"{_fmt(s['precision']):>6} {_fmt(s['noise_blocking'], False):>6} {_fmt(s['overrated'], False):>5} {_fmt(s['unlocated'], False):>6} {_fmt(s['clean_rate']):>6}",
+            f"{name:{width}} {s['runs']:>4} {s['failed_runs']:>4} {_fmt(s['recall']):>7} {_fmt(s['recall_spread']):>7} "
+            f"{_fmt(s['precision']):>6} {_fmt(s['noise_blocking'], False):>6} {_fmt(s['overrated'], False):>5} {_fmt(s['unlocated'], False):>6} {_fmt(s['clean_rate']):>6}"
+            f" {_money(s.get('cost_usd')):>7} {_ktok(s.get('tokens')):>8} {_secs(s.get('duration_s')):>6} {_fmt(s.get('subagents'), False):>6}",
             file=stream,
         )
 
@@ -855,8 +948,11 @@ def _selected_cases(arg):
     return wanted
 
 
-def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
-    """One run_one call, bracketed by progress lines on stderr."""
+def _run_labelled(
+    case, pass_name, argv, stdin_text, out_dir, label, args, variant=None
+):
+    """One run_one call, bracketed by progress lines on stderr. `variant`
+    is (model, mode) for a matrix run, None otherwise."""
     print(f"[bench] {label} ...", file=sys.stderr, flush=True)
     try:
         r = run_one(
@@ -869,13 +965,25 @@ def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
             args.timeout,
             args.keep,
             analysis=getattr(args, "analysis", None),
+            host=getattr(args, "host", None),
         )
     except Exception as e:  # one broken run must not discard the paid-for rest
         r = {"case": case, "pass": pass_name, "label": label, "status": "error"}
         r["error"] = f"{type(e).__name__}: {e}"
+    if variant:
+        r["model"], r["mode"] = variant
+        r["variant"] = variant_name(*variant)
     s = r.get("score")
+    u = r.get("usage") or {}
+    spent = "".join(
+        [
+            f" cost={_money(u['cost_usd'])}" if u.get("cost_usd") is not None else "",
+            f" tokens={_ktok(u['tokens'])}" if u.get("tokens") is not None else "",
+            f" ran={r['observed_mode']}" if r.get("observed_mode") else "",
+        ]
+    )
     if s:
-        detail = f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}"
+        detail = f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}{spent}"
     else:
         detail = f" exit={r.get('exit_code')}" + (
             f" {r['error']}" if r.get("error") else f" (see {label}.log)"
@@ -884,23 +992,58 @@ def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
     return r
 
 
+def _list(arg):
+    """'a,b' -> ['a', 'b']; None or '' -> [None] (the host default)."""
+    items = [x.strip() for x in (arg or "").split(",") if x.strip()]
+    return items or [None]
+
+
+def variant_name(model, mode):
+    return f"{model or 'default'}/{mode or 'auto'}"
+
+
+def _variants(args):
+    """[(model, mode)]: every --model with every --mode."""
+    modes = _list(getattr(args, "mode", None))
+    bad = sorted({m for m in modes if m and m not in MODES})
+    if bad:
+        raise ValueError(
+            f"unknown mode(s) {', '.join(bad)} (one of: {', '.join(MODES)})"
+        )
+    return [(m, mode or "auto") for m in _list(args.model) for mode in modes]
+
+
 def _plan(args, invoke, provider):
-    """[(case, pass, argv, stdin)] for every run, or ValueError for an
-    invocation the host doesn't have."""
+    """[(case, pass, argv, stdin, variant)] for every run, or ValueError for
+    an invocation the host doesn't have. `variant` is (model, mode) when the
+    run compares several, None for a plain run."""
     plan = []
+    variants = _variants(args)
+    matrix = len(variants) > 1
     for case in _selected_cases(args.cases):
         key = load_key(case)
         for pass_name in _passes(args.pass_):
-            if pass_name in key["passes"]:
+            if pass_name not in key["passes"]:
+                continue
+            for model, mode in variants:
                 argv, stdin_text = build_command(
                     args.host,
                     pass_name,
-                    args.model,
+                    model,
                     invoke,
                     args.cmd,
                     provider=provider,
+                    mode=mode,
                 )
-                plan.append((case, pass_name, argv, stdin_text))
+                plan.append(
+                    (
+                        case,
+                        pass_name,
+                        argv,
+                        stdin_text,
+                        (model, mode) if matrix else None,
+                    )
+                )
     return plan
 
 
@@ -923,7 +1066,9 @@ def cmd_run(args):
         return 2
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     host_id = f"{args.host}-{provider}" if provider else args.host
-    run_id = f"{stamp}-{host_id}-{(args.model or 'default').replace('/', '_')}"
+    models = (args.model or "default").replace("/", "_").replace(",", "+")
+    modes = "" if args.mode in (None, "auto") else "-" + args.mode.replace(",", "+")
+    run_id = f"{stamp}-{host_id}-{models}{modes}"
     out_dir = _new_dir(os.path.join(args.out or RESULTS_DIR, run_id))
     print(f"[bench] results: {os.path.relpath(out_dir)}", file=sys.stderr)
     meta = {
@@ -931,6 +1076,8 @@ def cmd_run(args):
         "host": args.host,
         "provider": provider,
         "model": args.model,
+        "mode": args.mode or "auto",
+        "variants": [variant_name(*v) for v in _variants(args)],
         "analysis": args.analysis,
         "invoke": invoke,
         "cli_version": (
@@ -945,15 +1092,18 @@ def cmd_run(args):
     }
     path = os.path.join(out_dir, "results.json")
     try:
-        for case, pass_name, argv, stdin_text in plan:
-            meta["commands"][pass_name] = shlex.join(argv) + (
-                " < prompt" if stdin_text else ""
-            )
+        for case, pass_name, argv, stdin_text, variant in plan:
+            slug = ""
+            if variant:
+                slug = "-" + re.sub(r"[^A-Za-z0-9.]+", "_", variant_name(*variant))
+            meta["commands"][
+                pass_name + (f" @{variant_name(*variant)}" if variant else "")
+            ] = shlex.join(argv) + (" < prompt" if stdin_text else "")
             for i in range(1, args.repeat + 1):
-                label = f"{case}-{pass_name}-{i}"
+                label = f"{case}-{pass_name}{slug}-{i}"
                 meta["runs"].append(
                     _run_labelled(
-                        case, pass_name, argv, stdin_text, out_dir, label, args
+                        case, pass_name, argv, stdin_text, out_dir, label, args, variant
                     )
                 )
                 # After every run, so a crash or kill loses one run, not all.
@@ -1076,6 +1226,7 @@ def cmd_compare(args):
         args.noise_rise,
         args.precision_drop,
         args.dup_rise,
+        args.cost_rise,
     )
     for n in notes:
         print(f"  note: {n}")
@@ -1092,19 +1243,31 @@ def cmd_commands(args):
         # The same refusal `run` gives (oneshot_setup), not a dropped flag.
         print("error: --provider is for --host oneshot", file=sys.stderr)
         return 2
-    for pass_name in _passes(args.pass_):
-        argv, stdin_text = build_command(
-            args.host,
-            pass_name,
-            args.model,
-            args.invoke,
-            args.cmd,
-            provider=args.provider if args.host == "oneshot" else None,
-        )
-        suffix = (
-            f"  < (grumpy {pass_name} SKILL.md as the prompt)" if stdin_text else ""
-        )
-        print(f"{pass_name}: {shlex.join(argv)}{suffix}")
+    try:
+        variants = _variants(args)
+        lines = []
+        for pass_name in _passes(args.pass_):
+            for model, mode in variants:
+                argv, stdin_text = build_command(
+                    args.host,
+                    pass_name,
+                    model,
+                    args.invoke,
+                    args.cmd,
+                    provider=args.provider if args.host == "oneshot" else None,
+                    mode=mode,
+                )
+                suffix = (
+                    f"  < (grumpy {pass_name} SKILL.md as the prompt)"
+                    if stdin_text
+                    else ""
+                )
+                tag = f" @{variant_name(model, mode)}" if len(variants) > 1 else ""
+                lines.append(f"{pass_name}{tag}: {shlex.join(argv)}{suffix}")
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print("\n".join(lines))
     if not profile["verified"]:
         print(f"(the {args.host} flags are unverified until a live run)")
     return 0
@@ -1126,7 +1289,14 @@ def main(argv=None):
     def host_args(p):
         p.add_argument("--host", required=True, choices=sorted(HOSTS))
         p.add_argument(
-            "--model", default=None, help="model id or alias; omit for the host default"
+            "--model",
+            default=None,
+            help="model id or alias, or several comma-separated (run tries each); omit for the host default",
+        )
+        p.add_argument(
+            "--mode",
+            default=None,
+            help="how the pass runs its passes: auto (the host decides), inline, fanout, or several comma-separated; inline and fanout are claude only",
         )
         p.add_argument("--pass", dest="pass_", default="all", choices=[*PASSES, "all"])
         p.add_argument("--invoke", choices=["native", "inline"], default=None)
@@ -1186,6 +1356,12 @@ def main(argv=None):
     p.add_argument("--noise-rise", type=float, default=0.0)
     p.add_argument("--precision-drop", type=float, default=0.1)
     p.add_argument("--dup-rise", type=float, default=1.0)
+    p.add_argument(
+        "--cost-rise",
+        type=float,
+        default=0.5,
+        help="flag mean cost (or tokens) rising by more than this fraction (default 0.5)",
+    )
     p.set_defaults(func=cmd_compare)
 
     p = sub.add_parser("commands", help="print the exact command a run would use")

@@ -1,0 +1,83 @@
+# Grumpy model map: which model each kind of work runs on.
+#
+# Commands name ROLES, never raw model strings. The fallback aliases written in
+# the commands (used only when this file can't be read) and the README's tier
+# names repeat the `native` column: when you change it, grep the commands for
+# the old alias.
+#
+# How a command reads it (the one place this is written down):
+#   1. Read this file from grumpy's plugin root,
+#      ${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml. Never use a
+#      repo-relative plugins/grumpy/ path: in an installed plugin it resolves
+#      against the reviewed repo and silently doesn't exist.
+#   2. Then the override, <root of the worktree under review>/.sharpen/models.yaml,
+#      if it exists. It has the same shape. It overrides per role and per
+#      column: each value it sets replaces that one value, and everything it
+#      doesn't set keeps this file's value. `analysis: {native: sonnet}` changes
+#      only the alias Claude Code dispatches.
+#   3. Say in the report which model ran. If the override changed anything, name
+#      it and the entries it changed. If the override can't be parsed or names
+#      an unknown role or alias, ignore it and say so. If this file can't be
+#      read, say so and use the command's written fallback.
+#
+# Columns:
+#   claude  Anthropic API id, for reference and API users. Checked against
+#           platform.claude.com/docs/en/models/overview on 2026-11-22. Nothing
+#           dispatches by it: Claude Code dispatches by `native`.
+#   native  Claude Code's per-subagent `model` argument: an alias, one of
+#           sonnet / opus / haiku (each resolves to the 5.5 model).
+#   codex   The model to start a Codex session on for this role. Codex can't
+#           choose a model per subagent, so every pass runs on the session's
+#           model and this column is advice for next time. Ids are from
+#           OpenAI's Codex models page on 2026-11-22. Which id suits which role
+#           is UNVERIFIED until scripts/bench-grumpy.py has measured it on Codex.
+#   openai  The OpenAI API id oneshot.py (the no-agent path, scripts/oneshot.py)
+#           calls when --provider openai is given no --model. Checked against
+#           developers.openai.com/api/docs/models on 2026-11-22. Which id suits
+#           which role is UNVERIFIED until scripts/bench-grumpy.py has measured
+#           it. oneshot.py reads only `analysis`, and --model, SHARPEN_LLM_MODEL
+#           and an sdlc adapter manifest's provider.model all beat it. A
+#           `compatible` server (Ollama and the like) has no column, because its
+#           models are the user's own.
+# pi has no column: it can't choose a model per subagent either, and the
+# provider is the user's choice, so pi runs everything on the session's model.
+
+roles:
+  audit:        # the model to start a /grumpy:audit session on (synthesis runs in the session)
+    claude: claude-opus-5-5
+    native: opus
+    codex: gpt-6.2-astra
+    openai: gpt-6.2-astra
+  analysis:     # review's finding passes, audit's dimension reviews, the top rung of fix's ladder
+    claude: claude-opus-5-5
+    native: opus
+    codex: gpt-6.2-astra
+    openai: gpt-6.2-astra
+  exec:         # default fix execution (M steps)
+    claude: claude-sonnet-5-5
+    native: sonnet
+    codex: gpt-6.2-sol
+    openai: gpt-6.2-sol
+  exec-trivial: # S mechanical steps (exec: trivial)
+    claude: claude-haiku-5-5
+    native: haiku
+    codex: gpt-6-luna
+    openai: gpt-6-luna
+
+# Fix's escalation ladder (low → high). --max-tier clamps to a rung; a failed
+# check escalates one rung. If an override makes two rungs the same alias,
+# there is no higher model to escalate to: stop and report instead of retrying.
+escalation: [exec-trivial, exec, analysis]
+
+# Why review routes and imagine doesn't: the benchmark (scripts/bench-grumpy.py,
+# Claude Code, Sonnet session, 3 repeats per case, 2026-11-22; the table is in
+# PR #60's description). Review's passes on `analysis` matched or beat the
+# session model. On one imagine case opus lost recall, and 3 repeats is too small
+# a sample to say which model is better at imagine, so imagine stays on the
+# session's model until a larger rerun. That's a pending measurement, not a
+# verdict on opus.
+#
+# Fable is not routed. Claude Code accepts `fable` as an alias, but it resolves
+# to Fable 5.1 unless ANTHROPIC_DEFAULT_FABLE_MODEL is set, and the benchmark
+# doesn't cover /grumpy:audit yet, so moving audit to it would be an unmeasured
+# change.

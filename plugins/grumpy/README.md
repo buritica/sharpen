@@ -86,8 +86,10 @@ there lowers review's passes, audit's dimensions and fix's ceiling together.
 `scripts/bench-grumpy.py` (repo-level, not shipped in the plugin) benchmarks the
 review and imagine passes. It runs the real pass headlessly on Claude Code, Codex
 or pi, or with no agent through `scripts/oneshot.py` (`--host oneshot`, see "No agent
-installed"), against small fixture repos in `tests/bench/`, scores the report the pass
-writes against each case's answer key, and compares runs:
+installed"), against fixture repos in `tests/bench/` (small planted ones plus two
+real sharpen layers replayed at full size), scores the report the pass writes against
+each case's answer key, records what each run cost and whether its passes ran in one
+session or as subagents, and compares runs:
 
 - **recall**: planted issues found, matched by file, a line window and a keyword,
   one finding per issue

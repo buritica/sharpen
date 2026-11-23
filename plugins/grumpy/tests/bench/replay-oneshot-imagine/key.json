@@ -1,0 +1,114 @@
+{
+  "passes": ["review", "imagine"],
+  "description": "A real sharpen layer (PR 71 as its review pass saw it, 347faf1): the no-agent path runs imagine, and the bench gains a oneshot host. Planted issues are the ones that layer's own review and imagine passes found and its next two commits fixed (371b08c, 13d0f62). Both passes are scored against the union, so absolute recall runs lower than on a toy case; compare runs against each other.",
+  "planted": [
+    {
+      "id": "prompt-hash-misses-extractors",
+      "severity": "WARN",
+      "file": "scripts/bench_hosts.py",
+      "lines": [143, 158],
+      "keywords": ["oneshot_prompts", "prompt_hash", "hash"]
+    },
+    {
+      "id": "backticks-whole-reply-only",
+      "severity": "WARN",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [509, 510],
+      "keywords": ["backtick", "`strip"]
+    },
+    {
+      "id": "handled-accepted-on-review",
+      "severity": "NOTE",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [511, 516],
+      "keywords": ["HANDLED"]
+    },
+    {
+      "id": "dropped-lines-earn-gate",
+      "severity": "WARN",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [530, 533],
+      "keywords": ["malformed", "dropped", "drops"]
+    },
+    {
+      "id": "aggregator-preamble-says-aspect",
+      "severity": "NOTE",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [552, 564],
+      "keywords": ["aggregat", "preamble", "per aspect", "simulation"]
+    },
+    {
+      "id": "unused-reexports",
+      "severity": "NOTE",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [94, 106],
+      "keywords": ["unused", "re-export", "reexport", "noqa", "F401"]
+    },
+    {
+      "id": "commands-drops-provider",
+      "severity": "NOTE",
+      "file": "scripts/bench-grumpy.py",
+      "lines": [1089, 1099],
+      "keywords": ["--provider", "provider"]
+    },
+    {
+      "id": "setup-exit-unlogged",
+      "severity": "NOTE",
+      "file": "plugins/sdlc/scripts/generic_adapter.py",
+      "lines": [234, 235],
+      "keywords": ["exit 2", "setup error", "no log", "silent", "unlogged", "no message"]
+    },
+    {
+      "id": "old-grumpy-pays-then-fails",
+      "severity": "WARN",
+      "file": "plugins/sdlc/scripts/generic_adapter.py",
+      "lines": [266, 273],
+      "keywords": ["2.17", "older grumpy", "old grumpy", "oneshot_prompts", "preflight", "version"]
+    },
+    {
+      "id": "mapped-pass-command-ignored",
+      "severity": "WARN",
+      "file": "plugins/sdlc/scripts/generic_adapter.py",
+      "lines": [273, 273],
+      "keywords": ["x-host-command-map", "command map", "command-map", "mapped", "mapping"]
+    }
+  ],
+  "acceptable": [
+    {
+      "id": "partial-aspects-full-receipt",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [900, 912],
+      "keywords": ["aspects", "partial", "subset"]
+    },
+    {
+      "id": "status-400-is-setup",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [170, 170],
+      "keywords": ["400", "context length", "context window"]
+    },
+    {
+      "id": "provider-table-copied",
+      "file": "scripts/bench_hosts.py",
+      "lines": [125, 125],
+      "keywords": ["ONESHOT_ENV", "duplicat", "copies", "drift"]
+    },
+    {
+      "id": "context-labels-as-flag",
+      "file": "plugins/grumpy/scripts/oneshot.py",
+      "lines": [540, 545],
+      "keywords": ["context_labels"]
+    },
+    {
+      "id": "thirty-minute-bound",
+      "file": "plugins/sdlc/scripts/generic_adapter.py",
+      "lines": [223, 227],
+      "keywords": ["thirty", "deadline", "timeout", "hang"]
+    },
+    {
+      "id": "imagine-before-fix",
+      "file": "plugins/sdlc/scripts/generic_adapter.py",
+      "lines": [219, 222],
+      "keywords": ["before any fix", "before fix", "pre-fix", "same commit", "fix between"]
+    }
+  ]
+}
