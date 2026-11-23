@@ -459,60 +459,13 @@ class CommandsTest(unittest.TestCase):
             self.assertNotRegex(text, r'cp "\$LEGACY', "/".join(rel))
             self.assertRegex(text, r'cp -p "\$LEGACY', "/".join(rel))
 
-    def _stage_picker(self):
+    def test_fix_receipt_lets_receipt_py_pick_the_stage(self):
+        # The stage picker lives in grumpy's receipt.py (tested in
+        # plugins/grumpy/tests/test_receipt.py AutoStageTest), not inline.
         with open(os.path.join(PLUGINS, "grumpy", "commands", "fix.md")) as f:
             text = f.read()
-        start = text.index("  STAGE=$(python3 -c")
-        end = text.index('/receipts")', start) + len('/receipts")')
-        return text[start:end]
-
-    def _run_picker(self, receipts):
-        repo = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
-        for root, name, body in receipts:
-            d = os.path.join(repo, root, "grumpy", BRANCH, "receipts")
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, name + ".json"), "w") as f:
-                f.write(body)
-        script = self._stage_picker() + '\necho "$STAGE"'
-        env = {**os.environ, "T": repo, "B": BRANCH}
-        r = subprocess.run(
-            ["bash", "-c", script], env=env, capture_output=True, text=True
-        )
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.strip(), r.stderr
-
-    def test_stage_picker_takes_the_newer_receipt_across_folders(self):
-        stage, _ = self._run_picker(
-            [
-                (
-                    ".sharpen",
-                    "review",
-                    json.dumps({"written_at": "2026-01-01T00:00:00+00:00"}),
-                ),
-                (
-                    ".claude",
-                    "imagine",
-                    json.dumps({"written_at": "2026-01-02T00:00:00+00:00"}),
-                ),
-            ]
-        )
-        self.assertEqual(stage, "imagine")
-
-    def test_stage_picker_names_an_unreadable_receipt(self):
-        stage, err = self._run_picker(
-            [
-                (".sharpen", "imagine", "{not json"),
-                (".sharpen", "review", json.dumps({})),
-            ]
-        )
-        self.assertIn(stage, ("review", "imagine"))
-        self.assertIn("no readable written_at", err)
-
-    def test_stage_picker_says_when_no_receipt_exists(self):
-        stage, err = self._run_picker([])
-        self.assertEqual(stage, "review")
-        self.assertIn("no review or imagine receipt found", err)
+        self.assertIn('python3 "$RECEIPT" fix --stage auto --worktree "$WT"', text)
+        self.assertNotIn("python3 -c", text)
 
 
 if __name__ == "__main__":

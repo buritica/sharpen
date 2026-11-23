@@ -745,34 +745,14 @@ WT="${WT:-.}"
 # <grumpy plugin root>/scripts/receipt.py yourself.
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
-  # --stage names which review this run resolved, so one run earns one fix
-  # gate: `imagine` (gate 6) when imagine.md is newer than review.md, i.e.
-  # imagine ran after the last review and this run fixed its findings;
-  # otherwise `review` (gate 4).
-  # Decided from the review and imagine receipts' written_at (the order sdlc
-  # checks), not the reports' mtimes, which a re-save or copy changes. A
-  # receipt an older grumpy left under .claude/ still counts, newest copy wins.
-  T="$(git -C "$WT" rev-parse --show-toplevel)"
-  B="$(git -C "$WT" rev-parse --abbrev-ref HEAD)"
-  # Same order as sdlc's: written_at, else the file's mtime; a receipt that
-  # can't be read is named on stderr instead of silently ignored.
-  STAGE=$(python3 -c 'import json,os,sys
-from datetime import datetime, timezone
-def age(p):
-    try:
-        t = datetime.fromisoformat(json.load(open(p))["written_at"])
-        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
-    except Exception as e:
-        print(f"[grumpy] {p}: no readable written_at ({e}); using its mtime", file=sys.stderr)
-        return datetime.fromtimestamp(os.path.getmtime(p), timezone.utc)
-def at(n):
-    ps = [os.path.join(d, n + ".json") for d in sys.argv[1:]]
-    return max([age(p) for p in ps if os.path.exists(p)], default=None)
-r, i = at("review"), at("imagine")
-if r is None and i is None:
-    print("[grumpy] no review or imagine receipt found; writing the review stage", file=sys.stderr)
-print("imagine" if i and (r is None or i > r) else "review")' "$T/.sharpen/grumpy/$B/receipts" "$T/.claude/grumpy/$B/receipts")
-  python3 "$RECEIPT" fix --stage "$STAGE" --worktree "$WT"
+  # --stage auto names which review this run resolved, so one run earns one
+  # fix gate: the stage of the pass still owed a fix, imagine first when both
+  # are (the order sdlc fills the fix gates in). In the agent chain that is
+  # `review` (gate 4), then `imagine` (gate 6); when review and imagine both
+  # ran before any fix (the no-agent adapters), gate 6 first, then gate 4.
+  # receipt.py reads the receipts' written_at (the order sdlc checks),
+  # including any an older grumpy left under .claude/, and prints the stage.
+  python3 "$RECEIPT" fix --stage auto --worktree "$WT"
   # If sdlc refuses the fix gate, its message names the receipt it read and
   # what that receipt predates or belongs to. Re-run the pass it names
   # (review or imagine) and fix its findings. If this run did fix the other

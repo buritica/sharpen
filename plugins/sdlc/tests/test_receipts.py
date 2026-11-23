@@ -288,6 +288,35 @@ class VerifyTest(ReceiptTestBase):
         self.assertEqual(self.verify("fix").returncode, 0)
         self.assertIn("grumpy-fix-post-imagine", self.gates())
 
+    def auto_fix(self):
+        self.report("fix")
+        time.sleep(0.01)
+        r = self.run_py(
+            GRUMPY_RECEIPT, "fix", "--stage", "auto", "--worktree", self.repo
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        time.sleep(0.01)
+
+    def test_auto_stage_fixes_record_in_the_agent_chain(self):
+        # grumpy's `fix --stage auto` and determine_gate must agree.
+        for step in ("review", "fix", "imagine", "fix"):
+            self.auto_fix() if step == "fix" else self.receipt(step)
+            r = self.verify(step)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("grumpy-fix-post-review", self.gates())
+        self.assertIn("grumpy-fix-post-imagine", self.gates())
+
+    def test_auto_stage_fixes_record_after_both_passes(self):
+        # The no-agent adapters: review and imagine both recorded first.
+        for step in ("review", "imagine"):
+            self.receipt(step)
+            self.assertEqual(self.verify(step).returncode, 0)
+        for gate in ("grumpy-fix-post-imagine", "grumpy-fix-post-review"):
+            self.auto_fix()
+            r = self.verify("fix")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(gate, self.gates())
+
     def test_fix_receipt_written_before_review_is_refused(self):
         self.receipt("fix")
         self.receipt("review")
