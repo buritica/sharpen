@@ -20,11 +20,12 @@ from an earlier run are removed, so sdlc 4.17+ (which prefers a stage file)
 reads the fresh `fix.json` instead of a stale stage receipt.
 
 `fix --stage auto` picks the stage from the receipts already on disk
-(`choose_stage`): the first fix after a review is the review stage, and the
-next one, once imagine has run, the imagine stage. So when review and imagine
-both ran before any fix (the no-agent adapters run them back to back), the
-first fix run earns gate 4 and the next one gate 6, with no flag to know
-about.
+(`choose_stage`): the stage of the pass still owed a fix, imagine first when
+both are, which is the order sdlc fills the fix gates in. In the agent chain
+the first fix is the review stage and the second the imagine stage; when
+review and imagine both ran before any fix (the no-agent adapters run them
+back to back), the first fix run earns gate 6 and the next one gate 4, with
+no flag to know about.
 
 Run it as the pass's LAST step, after committing whatever the pass changed, so
 the receipt names the commit the work landed in. A dirty tree is refused.
@@ -165,18 +166,21 @@ def _receipt_time(path):
 def choose_stage(worktree="."):
     """Which review this fix run resolved, from the receipts on disk.
 
-    The chain runs review -> fix -> imagine -> fix, and the fix receipts
-    record how far it got:
+    A pass is owed a fix while its receipt is newer than its stage's last fix
+    receipt (or it has none):
 
-    * no stage fix yet: `review` (the first fix after a review is gate 4),
-      even when imagine already ran too. The no-agent adapters run review
-      and imagine back to back; picking imagine there, as grumpy before 2.18
-      did, left gate 4 with no way to record but `--stage review` by hand.
-    * the last fix was the review stage: `imagine` once an imagine receipt is
-      newer than the review receipt, else `review` again.
-    * the last fix was the imagine stage: `review` when a review receipt is
-      newer than it (a new round), else `imagine` again (a re-run of that
-      fix).
+    * imagine owed: `imagine` (gate 6), even when review is owed too. sdlc's
+      `determine_gate` fills post-imagine first whenever the imagine gate is
+      recorded, and after the no-agent adapters run review and imagine back
+      to back the end-of-turn sweep (or the `--verify review|imagine` their
+      docs give) records both before any fix. The next run, with only review
+      owed, writes `review` (gate 4). Picking review first there was refused
+      by sdlc ("is for the fix after review, not grumpy-fix-post-imagine").
+    * only review owed: `review` (gate 4). In the agent chain (review -> fix
+      -> imagine -> fix) that is the first fix, and imagine is owed only by
+      the second.
+    * neither owed: the stage of the last fix again (a re-run of that fix),
+      else `review`.
 
     Times are the receipts' `written_at` (the order sdlc checks); a receipt
     an older grumpy left under `.claude/grumpy/` still counts, newest wins."""
@@ -191,18 +195,25 @@ def choose_stage(worktree="."):
         times = [_receipt_time(os.path.join(d, f"{name}.json")) for d in folders]
         return max([t for t in times if t is not None], default=None)
 
-    review, imagine = newest("review"), newest("imagine")
+    def owed(name):
+        # ponytail: a stageless fix.json (grumpy < 2.11, bare `receipt.py fix`)
+        # is not read; read it if a branch mixing one with --stage auto gets
+        # its fix gate refused by sdlc
+        ran, fixed = newest(name), newest(f"fix-{name}")
+        return ran is not None and (fixed is None or fixed < ran)
+
+    if owed("imagine"):
+        return "imagine"
+    if owed("review"):
+        return "review"
     fix_review, fix_imagine = newest("fix-review"), newest("fix-imagine")
-    if fix_review and (fix_imagine is None or fix_review > fix_imagine):
-        newer_imagine = imagine and (review is None or imagine > review)
-        return "imagine" if newer_imagine else "review"
-    if fix_imagine:
-        return "review" if review and review > fix_imagine else "imagine"
-    if review is None and imagine is None:
+    if fix_imagine and (fix_review is None or fix_imagine > fix_review):
+        return "imagine"
+    if fix_review is None and newest("review") is None:
         sys.stderr.write(
             "[grumpy] no review or imagine receipt found; writing the review stage\n"
         )
-    return "review" if review or imagine is None else "imagine"
+    return "review"
 
 
 def write_receipt(pass_name, worktree=".", stage=None, executor=None, head=None):
@@ -213,10 +224,10 @@ def write_receipt(pass_name, worktree=".", stage=None, executor=None, head=None)
         raise ValueError(f"unknown pass {pass_name!r} (one of: {', '.join(PASSES)})")
     if stage is not None and (pass_name != "fix" or stage not in (*FIX_STAGES, "auto")):
         raise ValueError("--stage is review, imagine or auto, and only for fix")
-    if stage == "auto":
-        stage = choose_stage(worktree)
     branch = named_branch(worktree)
     require_clean(worktree)
+    if stage == "auto":
+        stage = choose_stage(worktree)
     executor = _checked_executor(executor)
     root = _git(worktree, "rev-parse", "--show-toplevel")
     now = _git(worktree, "rev-parse", "HEAD")

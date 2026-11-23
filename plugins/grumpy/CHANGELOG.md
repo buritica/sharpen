@@ -6,16 +6,17 @@ past release's behavior change stays discoverable without bloating the current R
 ## 2.18.0 — the fix pass picks its own stage
 
 `/grumpy:fix` now writes its receipt with `receipt.py fix --stage auto`, which reads the stage
-from the receipts already on disk: the first fix after a review is the review stage (gate 4),
-and the next one, once imagine has run, the imagine stage (gate 6). After an imagine-stage
-fix, a newer review receipt starts a new round at review; otherwise a repeated fix stays on
-imagine.
+from the receipts already on disk: the stage of the pass still owed a fix (its receipt is
+newer than that stage's last fix receipt), imagine first when both are. That is the order
+sdlc's `determine_gate` fills the fix gates in once both pass gates are recorded. When
+neither is owed, a repeated fix keeps the last fix's stage.
 
-Before, the stage was whichever of review and imagine ran last. The no-agent adapters
-(sdlc 4.23's `openai_adapter.py` and `local_llm_adapter.py`) run both before any fix, so the
-first fix stamped imagine and gate 4 could only record from a hand-run
-`receipt.py fix --stage review`. Now the first fix run earns gate 4 and the next one gate 6.
-The agent chain's order (review, fix, imagine, fix) gets the same stages as before.
+Before, the stage was whichever of review and imagine ran last, so after the first fix the
+next one stamped imagine again. The no-agent adapters (sdlc 4.23's `openai_adapter.py` and
+`local_llm_adapter.py`) run both passes before any fix: the first fix earned gate 6 and gate
+4 could only record from a hand-run `receipt.py fix --stage review`. Now the first fix run
+earns gate 6 and the next one gate 4, with no flag. The agent chain's order (review, fix,
+imagine, fix) gets the same stages as before.
 
 - An explicit `receipt.py fix --stage review|imagine` still works as before.
 - The receipt line on stdout names the stage it wrote.

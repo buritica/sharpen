@@ -746,12 +746,12 @@ WT="${WT:-.}"
 RECEIPT="${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/receipt.py"
 if [ -f "$RECEIPT" ]; then
   # --stage auto names which review this run resolved, so one run earns one
-  # fix gate: the first fix after a review is `review` (gate 4), and the next
-  # one, once imagine has run, `imagine` (gate 6). That holds when review and
-  # imagine both ran before any fix (the no-agent adapters run them back to
-  # back): the first fix run earns gate 4, the next one gate 6. receipt.py
-  # reads the receipts' written_at (the order sdlc checks), including any an
-  # older grumpy left under .claude/, and prints the stage it chose.
+  # fix gate: the stage of the pass still owed a fix, imagine first when both
+  # are (the order sdlc fills the fix gates in). In the agent chain that is
+  # `review` (gate 4), then `imagine` (gate 6); when review and imagine both
+  # ran before any fix (the no-agent adapters), gate 6 first, then gate 4.
+  # receipt.py reads the receipts' written_at (the order sdlc checks),
+  # including any an older grumpy left under .claude/, and prints the stage.
   python3 "$RECEIPT" fix --stage auto --worktree "$WT"
   # If sdlc refuses the fix gate, its message names the receipt it read and
   # what that receipt predates or belongs to. Re-run the pass it names

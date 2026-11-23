@@ -112,8 +112,8 @@ class ReceiptTest(ReceiptBase):
 
 
 class AutoStageTest(ReceiptBase):
-    """`fix --stage auto`: the first fix after a review is the review stage,
-    even when imagine already ran (the no-agent adapters run both first)."""
+    """`fix --stage auto`: the stage of the pass still owed a fix, imagine
+    first when both are (the order sdlc's determine_gate fills them in)."""
 
     def pass_receipt(self, name):
         time.sleep(0.01)
@@ -135,31 +135,30 @@ class AutoStageTest(ReceiptBase):
         self.assertEqual(self.auto_fix(), "imagine")
 
     def test_review_and_imagine_before_any_fix(self):
-        # The adapter's order: before 2.18 the first fix stamped imagine (its
-        # receipt was newer), and gate 4 needed --stage review by hand.
+        # The adapter's order, both gates recorded before the fix: sdlc opens
+        # post-imagine first, so imagine first, then review, no flag by hand.
         self.pass_receipt("review")
         self.pass_receipt("imagine")
-        self.assertEqual(self.auto_fix(), "review")
         self.assertEqual(self.auto_fix(), "imagine")
+        self.assertEqual(self.auto_fix(), "review")
 
-    def test_a_new_review_round_starts_over_at_review(self):
+    def test_a_new_round_of_both_passes_starts_at_imagine(self):
         self.pass_receipt("review")
         self.auto_fix()
         self.pass_receipt("imagine")
         self.auto_fix()
         self.pass_receipt("review")
         self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
         self.assertEqual(self.auto_fix(), "review")
 
-    def test_the_adapter_re_run_after_the_first_fix_is_the_imagine_stage(self):
-        # Fixes committed after both passes leave imagine's gate on an older
-        # commit, so the adapter runs both again; gate 4 is already earned.
+    def test_a_new_review_alone_is_the_review_stage(self):
         self.pass_receipt("review")
+        self.auto_fix()
         self.pass_receipt("imagine")
+        self.auto_fix()
+        self.pass_receipt("review")
         self.assertEqual(self.auto_fix(), "review")
-        self.pass_receipt("review")
-        self.pass_receipt("imagine")
-        self.assertEqual(self.auto_fix(), "imagine")
 
     def test_a_second_fix_after_imagine_stays_on_imagine(self):
         self.pass_receipt("review")
@@ -189,20 +188,34 @@ class AutoStageTest(ReceiptBase):
         self.assertEqual(self.receipt("fix")["stage"], "review")
 
     def test_a_legacy_fix_receipt_counts(self):
-        # A fix an older grumpy stamped under .claude/ is the last fix.
-        self.pass_receipt("review")
+        # A fix an older grumpy stamped under .claude/ settles imagine.
+        self.pass_receipt("imagine")
         time.sleep(0.01)
         legacy = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
         os.makedirs(legacy)
-        with open(os.path.join(legacy, "fix-review.json"), "w") as f:
+        with open(os.path.join(legacy, "fix-imagine.json"), "w") as f:
             json.dump({"written_at": datetime.now(timezone.utc).isoformat()}, f)
+        self.pass_receipt("review")
+        self.assertEqual(self.auto_fix(), "review")
+
+    def test_a_newer_legacy_receipt_wins_over_the_sharpen_copy(self):
         self.pass_receipt("imagine")
         self.assertEqual(self.auto_fix(), "imagine")
+        self.pass_receipt("review")
+        # The .sharpen imagine receipt predates that fix; a legacy copy of it
+        # under .claude/ is newer, so imagine is owed again.
+        with open(os.path.join(self.dir, "receipts", "imagine.json"), "w") as f:
+            json.dump({"written_at": "2000-01-01T00:00:00+00:00"}, f)
+        legacy = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "imagine.json"), "w") as f:
+            json.dump({"written_at": datetime.now(timezone.utc).isoformat()}, f)
+        self.assertEqual(self.auto_fix(), "imagine")
 
-    def test_an_unreadable_written_at_falls_back_to_the_mtime(self):
+    def test_an_unreadable_receipt_falls_back_to_the_mtime(self):
         self.pass_receipt("review")
         with open(os.path.join(self.dir, "receipts", "review.json"), "w") as f:
-            json.dump({"written_at": "not a time"}, f)
+            f.write("{not json")
         self.report()
         r = self.run_receipt("fix", "--stage", "auto")
         self.assertEqual(r.returncode, 0, r.stderr)
