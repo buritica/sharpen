@@ -30,8 +30,16 @@ edits, then retries it one rung up, once per finding.
   `exec: trivial` steps stay on `exec-trivial` unless you pin that role too.
 - A repo `.sharpen/models.yaml` that pinned `exec` lower than Sonnet now also covers
   judgment Serious and chosen Questionable fixes, which used to ignore it.
-- A failed finding is undone on its own, by content; if its edits can't be separated, the
-  whole file goes back to its pre-task content under `## Uncertain`. Nothing is stashed.
+- A failed finding is undone on its own, by content, and any file it created is deleted.
+  The undo is checked against a pre-task copy of the file, kept under
+  `.sharpen/grumpy/<branch>/pre-task/`; a change no finding claims is undone too. If the
+  edits can't be separated, the whole file goes back to its pre-task content and its good
+  fixes are reapplied in the next wave; it lands under `## Uncertain` only when that wave
+  can't settle it. Nothing is stashed.
+- A finding that passed is re-checked whenever its file changes later (an undo, a retry, a
+  cross-file task), and so is a finding lifted by another finding's fix.
+- The run stops before its first edit when the worktree has uncommitted changes, so they
+  never land in the fix commit.
 - No receipt is written while a Critical sits under `## Not fixed` or `## Uncertain`
   (before, only when it was blocked elsewhere), so gate 4/6 waits for it.
 

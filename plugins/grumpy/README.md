@@ -65,7 +65,8 @@ Each step is **honestly sized** — a step tagged small must carry a runnable
 `/grumpy:fix` then routes each step by that tier (the **thrifty split**: cheap
 where it can, strong where it must), passing the resolved model to each fix
 agent and escalating one tier, once, when a fix fails its `accept:` check, its
-fixer reports it not fixed, or a read of an `exec` fix's hunk finds it missed:
+fixer reports it not fixed, or a read of the hunk of an `exec` or
+`exec-trivial` fix with no `accept:` finds it missed:
 
 - `exec: trivial` → Haiku · `exec: standard` → Sonnet · large/unverifiable → Opus
 - Findings from review, imagine and the other passes carry no tier, so they route by
