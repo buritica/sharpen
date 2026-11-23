@@ -405,11 +405,19 @@ came out of it, track it as a task:
   per finding, with the same subject/description/file:line detail, that you
   mark off as each is fixed.
 
-Group findings that touch the same file into a single task (or checklist
-entry) to avoid conflicts.
+**One task per file, not per finding.** Put every Auto-fix finding that
+touches the same file into a single task (or checklist entry), and give that
+task's fixer all of them at once. A fixer re-reads the file, its callers and
+its tests before it edits, and that reading is most of what a fix costs:
+fifteen findings in three files are three fixers, not fifteen. A finding that
+spans files belongs to the task for the file its anchor names; list the other
+files in its description. Split a file's task only when it carries more than
+eight findings, into tasks of at most eight in anchor order, run one after
+another so their edits never overlap.
 
-Announce grumpily how many tasks were created: "Alright. I found [N] things that
-needed fixing. Let's see if we can get through this without making it worse."
+Announce grumpily how many findings and tasks there are: "Alright. [N] things
+need fixing, in [M] files. Let's see if we can get through this without making
+it worse."
 
 ## Step 3: Dispatch Sub-Agents (tier-routed)
 
@@ -418,14 +426,15 @@ have one, otherwise in your working checklist), then act on it:
 
 **If your harness supports spawning independent subagents** (a task/agent
 dispatch primitive that runs separately from this conversation), dispatch one
-sub-agent per task, using the prompt template below.
+sub-agent per task, which is one per file (Step 2), using the prompt template
+below with every finding of that file listed.
 
 **If it doesn't**, there is no separate agent to launch — fix each finding
 yourself, one at a time, in this same session, following the same prompt
 template as your own working instructions for that fix.
 
-Dispatch sub-agents **sequentially per file** (to avoid conflicting edits on the
-same file), but **in parallel across different files**. Working through
+Dispatch sub-agents **in parallel across different files**; a file split into
+several tasks (Step 2) runs them one after another. Working through
 findings yourself with no subagent primitive is inherently sequential — just
 finish one file's findings before starting the next.
 
@@ -440,13 +449,12 @@ tier-based escalation likewise has nothing to escalate *to* without
 per-dispatch model choice, so on a failed verification there just retry the
 fix yourself, more carefully.
 
-The split only has something to route on when the source artifact carries
-`exec:`/`accept:` hints — today that's `/grumpy:audit` alone (see Step 1).
-Findings from `review`/`imagine`/`security`/etc. have no hint, which the rule
-below resolves to `analysis` (opus) for every one of them — correct per the
-rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
-strong tier, not a mix. The thrifty split is real, just conditional on going
-through `/grumpy:audit` first.
+A finding from `/grumpy:audit` carries an `exec:` hint and routes by it.
+Findings from `review`, `imagine`, `security` and the rest carry no hint, so
+they route by what the report says about them instead: how severe, and
+whether it is a fact or a judgment call (the `(judgment)` tag on a Serious
+bullet, Step 1b). A fact needs the strongest model to fix right; a judgment
+call (rename this, tighten that doc, split this helper) rarely does.
 
 Read the role→model map from
 `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override,
@@ -456,7 +464,17 @@ override included) as the dispatch's model argument:
 
 - `exec: trivial` → `exec-trivial` role
 - `exec: standard` → `exec` role
-- `exec: strong`, no hint, or `L`/`XL`/no `accept:` → `analysis` role
+- `exec: strong`, or an audit step that is `L`/`XL` or has no `accept:` →
+  `analysis` role
+- No hint (every non-audit finding):
+  - 🚨 Critical → `analysis`
+  - ⚠️ Serious, untagged (`fact`) → `analysis`
+  - ⚠️ Serious tagged `(judgment)` → `exec`
+  - 🤔 Questionable the person chose to fix in Step 5 → `exec`
+
+A task holds one file's findings (Step 2), so it runs on the highest role any
+of its findings routes to: one Critical in a file puts the whole file's task
+on `analysis`. Say in the summary how many tasks ran on each model.
 
 The map decides the model. Only if it can't be read, **say so in the
 summary** ("models.yaml unreadable — used fallbacks") and use these fallback
@@ -473,14 +491,17 @@ and report the task as blocked instead of spending the escalation.
 Sonnet-or-cheaper; only gate-failure escalation (below) may exceed it, by one
 rung, once per task. Default: no clamp — route by hint.
 
-(Findings from non-audit reviews have no hint and route to `analysis`/opus per
-the bullet above — see the "thrifty split" note earlier in this section for
-why that's the correct, if pricier, default rather than an oversight.)
+Before grumpy 2.19 every non-audit finding routed to `analysis`. Judgment
+calls moved to `exec` because a review's Serious list is often half judgment
+(13 Serious findings on one real 41 KB layer, 2026-11-23), and fixing a
+rename or a doc on opus pays the strong tier for nothing. A judgment fix that
+fails its check still escalates to `analysis` (below).
 
 Each sub-agent prompt must include:
 
 - The grumpy persona (level-appropriate)
-- The full finding description with its anchor (`file:symbol`/`file:line`)
+- Every finding of the task, each with its full description and its anchor
+  (`file:symbol`/`file:line`), in anchor order
 - The exact file(s) to modify
 - Instructions to make the minimal fix — no refactoring beyond what's needed
 - If the finding carries an `accept:` command, the instruction to make that
@@ -493,13 +514,19 @@ Example sub-agent prompt:
 ```
 You are a grumpy principal engineer fixing a specific issue.
 
-Finding: [full finding text]
-Where: [file:symbol or file:line — re-resolve the anchor before editing; if it
-has moved or vanished, stop and report rather than editing the wrong place]
+File: [the file this task owns]
 Worktree: [value of $WT — all file paths are relative to this directory]
-Acceptance: [accept: command, if present]
 
-Make the minimal fix. Do not refactor beyond what's needed.
+Findings, one per block:
+1. [full finding text]
+   Where: [file:symbol or file:line]
+   Acceptance: [accept: command, if present]
+2. ...
+
+Re-resolve each anchor before editing it; an earlier fix in this list may
+have moved it. If one has vanished, skip that finding and report it rather
+than editing the wrong place. Fix them in order, minimally, and report per
+finding: fixed, or why not. Do not refactor beyond what's needed.
 All files you edit must be under the worktree path above.
 If an acceptance command is given, run it and confirm it passes.
 After fixing, verify by reading the changed section back.
@@ -508,8 +535,10 @@ Do NOT commit.
 
 ### Verify + escalate
 
-After each sub-agent completes, **run the finding's `accept:` command** (if it
-has one), and distinguish two failure modes:
+After each sub-agent completes, **run each of its findings' `accept:`
+commands** (those that have one). If any fails, the task failed: escalating
+reruns the task's failed findings only, with the ones that passed left as they
+are. Distinguish two failure modes:
 
 - **Ran and failed** (non-zero exit, real output): the fix is wrong or
   incomplete. **Escalate one tier** (`exec-trivial`→`exec`→`analysis`) and retry
@@ -524,9 +553,12 @@ has one), and distinguish two failure modes:
 
 Escalation is one rung, once, per task; there is no unbounded climb.
 
-A task with no `accept:` command cannot be machine-verified — it routes at the
-`analysis` (strong) tier by default; have the sub-agent self-verify, and flag it
-for human review in the summary.
+A finding with no `accept:` command cannot be machine-verified: have the
+sub-agent self-verify it, and flag it for human review in the summary. It
+routes by the rules above; an audit step with no `accept:` goes to
+`analysis`, and a non-audit judgment finding still goes to `exec`. When a
+fixer on `exec` reports it couldn't fix a finding cleanly, that counts as a
+failed check: escalate that finding once, to `analysis`.
 
 ## Step 4: Commit All Fixes
 

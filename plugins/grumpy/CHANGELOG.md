@@ -3,6 +3,26 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.19.0 — the fix pass costs less: one fixer per file, judgment calls on Sonnet
+
+`/grumpy:fix` dispatches one fixer per file, carrying every finding in that file, instead
+of one per finding. A fixer's cost is mostly reading the file, its callers and its tests
+before it edits, so fifteen findings in three files are now three fixers, not fifteen. A
+file with more than eight findings is split into tasks of at most eight, run one after
+another.
+
+Findings without an `exec:` hint (everything except `/grumpy:audit`'s steps) used to route
+to `analysis` (Opus) every time. They now route by what the report says: Critical and
+untagged (`fact`) Serious findings stay on `analysis`; Serious findings tagged `(judgment)`
+and Questionable findings you choose to fix in Step 5 go to `exec` (Sonnet). A file's task
+runs on the highest role any of its findings needs. A judgment fix that fails its check,
+or that its fixer couldn't apply cleanly, escalates once to `analysis` as before.
+
+- The summary says how many tasks ran on each model.
+- To keep every fix on Opus, pin `exec` to `opus` in `.sharpen/models.yaml`. That also
+  moves audit's `exec: standard` steps.
+- Nothing to migrate.
+
 ## 2.18.0 — the fix pass picks its own stage
 
 `/grumpy:fix` now writes its receipt with `receipt.py fix --stage auto`, which reads the stage

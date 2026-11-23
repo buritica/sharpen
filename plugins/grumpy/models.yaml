@@ -54,7 +54,7 @@ roles:
     native: opus
     codex: gpt-6.2-astra
     openai: gpt-6.2-astra
-  exec:         # default fix execution (M steps)
+  exec:         # default fix execution (M steps), and fixes of judgment-tagged findings
     claude: claude-sonnet-5-5
     native: sonnet
     codex: gpt-6.2-sol
