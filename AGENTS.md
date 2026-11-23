@@ -43,6 +43,11 @@ python3 scripts/bench-grumpy.py run --host claude --pass review   # or imagine, 
 python3 scripts/bench-grumpy.py compare <baseline results.json> <new results.json>
 ```
 
+A change meant to make grumpy cheaper or faster runs it too: each run records cost, tokens,
+time and whether the passes ran in one session or as subagents, `--model a,b --mode
+inline,fanout` runs every combination in one go, and `compare` flags a cost rise as it
+does a recall drop.
+
 It runs the real pass headlessly on Claude Code, Codex, pi or the no-agent `oneshot` path
 (`--host oneshot`, which also needs a run after a change to `scripts/oneshot.py` or
 `scripts/oneshot_prompts.py`, the two files its prompts are built in) against the fixture repos in `plugins/grumpy/tests/bench/` (planted issues,
@@ -52,7 +57,7 @@ precision and blocking noise, and writes results to the gitignored `.sharpen/ben
 is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only constraint below), so
 skipping it means a prompt change can regress silently. `compare` exits non-zero on a
 recall drop, a rise in blocking noise or overrated findings, or a precision drop of more
-than 10 points (those thresholds are flags), and on more failed runs or a missing case; don't merge on a regression you can't
+than 10 points, or a cost rise of more than 50% (those thresholds are flags), and on more failed runs or a missing case; don't merge on a regression you can't
 explain.
 
 ## Gates on this repo

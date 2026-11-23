@@ -1,0 +1,75 @@
+{
+  "passes": ["review", "imagine"],
+  "description": "A real sharpen layer (PR 57's first commit, 7290845): sdlc's gate starts running the commands AGENTS.md declares. Planted issues are the ones that layer's own review and imagine passes found and its next two commits fixed (a5510eb, 7e8687a). Both passes are scored against the union, so absolute recall runs lower than on a toy case; compare runs against each other.",
+  "planted": [
+    {
+      "id": "root-not-toplevel",
+      "severity": "WARN",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [423, 423],
+      "keywords": ["toplevel", "subdirector", "repo root", "repository root", "cwd", "working directory"]
+    },
+    {
+      "id": "monorepo-areas",
+      "severity": "WARN",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [426, 426],
+      "keywords": ["monorepo", "area", "colon", "web:"]
+    },
+    {
+      "id": "declared-command-missing",
+      "severity": "NOTE",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [423, 426],
+      "keywords": ["127", "not found", "not installed", "missing binary", "doesn't exist", "does not exist", "wrong declaration", "script fails", "exit 2"]
+    },
+    {
+      "id": "annotation-falls-back-silently",
+      "severity": "WARN",
+      "file": "plugins/sdlc/scripts/declared_commands.py",
+      "lines": [39, 43],
+      "keywords": ["silent", "annotat", "hand edit", "hand-edit", "edited", "unreadable", "falls back", "fall back", "fallback"]
+    },
+    {
+      "id": "loose-entries-dropped",
+      "severity": "WARN",
+      "file": "plugins/sdlc/scripts/declared_commands.py",
+      "lines": [64, 75],
+      "keywords": ["duplicate", "capital", "case-sensitiv", "case sensitiv", "`- Test", "`* test", "asterisk", "loose", "dropped", "ignored"]
+    },
+    {
+      "id": "sibling-import",
+      "severity": "NOTE",
+      "file": "plugins/sdlc/scripts/declared_commands.py",
+      "lines": [32, 32],
+      "keywords": ["sys.path", "isolated", "sibling", "ModuleNotFound", "ImportError", "`-I`", "python3 -I"]
+    }
+  ],
+  "acceptable": [
+    {
+      "id": "shellcheck-additive",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [455, 462],
+      "keywords": ["shellcheck"]
+    },
+    {
+      "id": "format-never-run",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [426, 426],
+      "keywords": ["format"]
+    },
+    {
+      "id": "stale-block",
+      "file": "plugins/sdlc/commands/gate.md",
+      "lines": [426, 426],
+      "keywords": ["stale"],
+      "max_severity": "NOTE"
+    },
+    {
+      "id": "nested-without-entry",
+      "file": "plugins/sdlc/scripts/declared_commands.py",
+      "lines": [70, 74],
+      "keywords": ["nested", "orphan"]
+    }
+  ]
+}

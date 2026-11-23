@@ -3,13 +3,16 @@
 
 Claude Code, Codex and pi run grumpy's pass as an agent; `oneshot` runs
 grumpy's own scripts/oneshot.py against a chat API with no agent. Building
-the command line, hashing the prompt files and naming what ran live here;
-running and scoring stay in bench-grumpy.py. Pure stdlib.
+the command line (including the system-prompt hint a pinned --mode adds),
+hashing the prompt files, naming what ran, and reading what a run spent and
+how its passes ran from the host's output live here; running and scoring
+stay in bench-grumpy.py. Pure stdlib.
 """
 
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -69,6 +72,8 @@ HOSTS = {
             "--permission-mode",
             "acceptEdits",
             "--allowedTools={claude_tools}",
+            "--output-format",
+            "json",
             "--model",
             "{model}",
             "{prompt}",
@@ -79,6 +84,8 @@ HOSTS = {
             "--permission-mode",
             "acceptEdits",
             "--allowedTools={claude_tools}",
+            "--output-format",
+            "json",
             "--model",
             "{model}",
         ],
@@ -120,6 +127,27 @@ HOSTS = {
         "verified": True,
     },
 }
+# How a pass runs its finding passes. `auto` leaves it to the host: headless
+# Claude Code (`claude -p`) usually runs every pass itself in one session,
+# while an interactive session usually fans out to one subagent per pass, so
+# a bench that never pins the mode measures the cheaper path only. `inline`
+# and `fanout` pin it with a line appended to Claude Code's system prompt.
+# Codex, pi and oneshot have one way to run, so only `auto` applies there.
+MODES = ("auto", "inline", "fanout")
+MODE_HINTS = {
+    "inline": (
+        "Run every review or simulation pass yourself, one after another, in "
+        "this session. Do not use the Agent tool for them."
+    ),
+    "fanout": (
+        "This harness supports subagents: the Agent tool is available. Take "
+        "the command's subagent path: dispatch each pass as its own Agent "
+        "call, in parallel, with the model the command specifies."
+    ),
+}
+MODE_HOSTS = {"claude"}
+
+
 # What each oneshot provider needs in the environment before a run can call it
 # (oneshot.py's own PROVIDERS; checked before the first run, not per run).
 ONESHOT_ENV = {"openai": "OPENAI_API_KEY", "compatible": "SHARPEN_LLM_URL"}
@@ -171,9 +199,12 @@ def build_command(
     template=None,
     grumpy=GRUMPY,
     provider=None,
+    mode=None,
 ):
     """Return (argv, stdin_text) for one run. `{model}` and `{provider}`
-    each drop with the flag before them when no value is given."""
+    each drop with the flag before them when no value is given. A pinned
+    `mode` (inline or fanout) appends its hint to Claude Code's system prompt
+    and is refused on a host with one way to run, or with a `template`."""
     profile = HOSTS[host]
     invoke = invoke or profile["default_invoke"]
     if template:
@@ -207,8 +238,158 @@ def build_command(
         .replace("{prompt}", native_prompt)
         for t in out
     ]
+    if mode and mode != "auto":
+        if host not in MODE_HOSTS:
+            raise ValueError(
+                f"host {host} has one way to run a pass; --mode {mode} is for claude"
+            )
+        if template:
+            # Splicing at argv[1] would land inside `env X=1 claude ...` or a
+            # wrapper script's arguments; the template owns its own flags.
+            raise ValueError(
+                f"--mode {mode} can't be added to a --cmd template; put"
+                " --append-system-prompt in the template instead"
+            )
+        argv[1:1] = ["--append-system-prompt", MODE_HINTS[mode]]
     stdin_text = None if invoke == "native" else skill_prompt(pass_name, grumpy)
     return argv, stdin_text
+
+
+def output_text(host, stdout):
+    """What the host printed for a person to read. Claude Code runs with
+    `--output-format json`, so its answer is the `result` field."""
+    if host == "claude":
+        data = _claude_json(stdout)
+        if data is not None:
+            return data.get("result") or ""
+    return stdout
+
+
+def _claude_json(stdout):
+    """The result object `claude -p --output-format json` prints last, or
+    None (a --cmd without the flag, a crash before it printed)."""
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue
+            # Any of the keys a result object carries, so losing one of them
+            # (say `usage`) doesn't also lose the report text.
+            if isinstance(data, dict) and _RESULT_KEYS & set(data):
+                return data
+    return None
+
+
+_RESULT_KEYS = {"result", "usage", "modelUsage", "total_cost_usd", "num_turns"}
+# Only a pass's own completion line counts: Stop, `failed:` and retry lines can
+# quote a provider's error body ("maximum context length is 128000 tokens").
+# oneshot.py logs no usage for its aggregation call, so that call isn't counted.
+_ONESHOT_TOKENS = re.compile(
+    r"^\[grumpy oneshot\] pass \S+: done in [^\n]*?\b(\d+) tokens\b", re.M
+)
+_ONESHOT_DONE = re.compile(r"^\[grumpy oneshot\] pass \S+: done in ", re.M)
+_ONESHOT_FAILED = re.compile(r"^\[grumpy oneshot\] pass \S+ failed:", re.M)
+_CLAUDE_TOKEN_KEYS = (
+    ("input_tokens", "inputTokens"),
+    ("cache_read_tokens", "cacheReadInputTokens"),
+    ("cache_write_tokens", "cacheCreationInputTokens"),
+    ("output_tokens", "outputTokens"),
+)
+# Hosts whose runs are expected to record usage; a row from one of them with
+# none is a broken measurement, not a host that can't say.
+USAGE_HOSTS = {"claude", "oneshot"}
+# Claude Code's per-subagent aliases: a model the analysis role can be pinned to.
+CLAUDE_ALIASES = ("haiku", "sonnet", "opus")
+
+
+def _count(v):
+    """A token count, or None for a missing, null or non-numeric value."""
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def parse_usage(host, stdout, stderr=""):
+    """What one run spent, as far as the host reports it, or None.
+
+    {"cost_usd", "tokens", "input_tokens", "cache_read_tokens",
+     "cache_write_tokens", "output_tokens", "turns", "subagents", "models"}
+    with None for what a host doesn't say. Claude Code reports all of it in
+    its JSON result (`models` maps each model to its tokens and cost, so the
+    session and its subagents show apart). oneshot logs each call's total
+    tokens on stderr and no cost. Codex and pi print no usage in the mode the
+    bench runs them, so they record None.
+
+    A count the host should have reported and didn't is None, never 0: a
+    missing `modelUsage` or a renamed key must not read as a free run.
+    `partial` is True when only some of the calls reported tokens."""
+    if host == "claude":
+        data = _claude_json(stdout)
+        if data is None:
+            return None
+        models = {}
+        totals = dict.fromkeys((k for k, _ in _CLAUDE_TOKEN_KEYS), 0)
+        model_usage = data.get("modelUsage")
+        complete = isinstance(model_usage, dict) and bool(model_usage)
+        for name, u in (model_usage if complete else {}).items():
+            u = u if isinstance(u, dict) else {}
+            row = {k: _count(u.get(src)) for k, src in _CLAUDE_TOKEN_KEYS}
+            if None in row.values():
+                complete = False
+                row["tokens"] = None
+            else:
+                for k, v in row.items():
+                    totals[k] += v
+                row["tokens"] = sum(row.values())
+            row["cost_usd"] = u.get("costUSD")
+            models[name] = row
+        if not complete:
+            totals = dict.fromkeys(totals)
+        stats = data.get("subagent_stats")
+        spawned = stats.get("spawned") if isinstance(stats, dict) else None
+        return {
+            "cost_usd": data.get("total_cost_usd"),
+            "tokens": sum(totals.values()) if complete else None,
+            **totals,
+            "turns": data.get("num_turns"),
+            "subagents": _count(spawned),
+            "models": models,
+            "partial": not complete,
+        }
+    if host == "oneshot":
+        counts = [int(n) for n in _ONESHOT_TOKENS.findall(stderr)]
+        if not counts:
+            return None
+        calls = len(_ONESHOT_DONE.findall(stderr)) + len(
+            _ONESHOT_FAILED.findall(stderr)
+        )
+        return {
+            "cost_usd": None,
+            "tokens": sum(counts),
+            "input_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "output_tokens": None,
+            "turns": len(counts),
+            "subagents": None,
+            "models": {},
+            # A failed pass, or a provider that omitted usage on some calls.
+            "partial": calls > len(counts),
+        }
+    return None
+
+
+def observed_mode(host, usage):
+    """How the pass actually ran: `fanout` when Claude Code spawned
+    subagents, `inline` when it spawned none, None where the host can't say.
+    On Claude Code this reads `subagent_stats.spawned` from the JSON result
+    and nothing else; when that key is absent the mode is None, and the
+    summary says so under the table."""
+    if host == "oneshot":
+        return "oneshot"
+    if not usage or usage.get("subagents") is None:
+        return None
+    return "fanout" if usage["subagents"] else "inline"
 
 
 def oneshot_version(grumpy=GRUMPY):

@@ -506,6 +506,132 @@ class SummaryCompareTest(unittest.TestCase):
         self.assertAlmostEqual(s["recall"], 1 / 6)
         self.assertAlmostEqual(s["recall_spread"], 1 / 3)
 
+    def test_summarize_means_spend_and_splits_variants(self):
+        runs = [
+            {
+                "case": "c",
+                "pass": "review",
+                "variant": "opus/fanout",
+                "usage": {"cost_usd": 2.0, "tokens": 100, "subagents": 6},
+                "observed_mode": "fanout",
+                "score": bench.score(KEY, []),
+            },
+            {
+                "case": "c",
+                "pass": "review",
+                "variant": "opus/fanout",
+                "usage": {"cost_usd": 4.0, "tokens": 300, "subagents": 6},
+                "observed_mode": "fanout",
+                "score": bench.score(KEY, []),
+            },
+            {"case": "c", "pass": "review", "score": bench.score(KEY, [])},
+        ]
+        summary = bench.summarize(runs)
+        fan = summary["c/review @opus/fanout"]
+        self.assertEqual(fan["cost_usd"], 3.0)
+        self.assertEqual(fan["tokens"], 200)
+        self.assertEqual(fan["subagents"], 6)
+        self.assertEqual(fan["modes"], {"fanout": 2})
+        plain = summary["c/review"]
+        self.assertIsNone(plain["cost_usd"])
+        self.assertEqual(plain["modes"], {})
+
+    def test_spend_rise_is_a_regression_and_mode_change_a_note(self):
+        base = _results({"a/review": {"cost_usd": 0.4, "modes": {"inline": 3}}})
+        cand = _results({"a/review": {"cost_usd": 2.0, "modes": {"fanout": 3}}})
+        problems, notes = bench.compare(base, cand)
+        self.assertEqual(problems, ["a/review: cost $0.40 -> $2.00"])
+        self.assertTrue(any("ran inline x3 in baseline" in n for n in notes))
+        problems, _ = bench.compare(base, cand, cost_rise=5.0)
+        self.assertEqual(problems, [])
+        cheaper = _results({"a/review": {"cost_usd": 0.1}})
+        self.assertEqual(bench.compare(base, cheaper)[0], [])
+
+    def test_tokens_stand_in_where_no_cost_was_recorded(self):
+        base = _results({"a/review": {"cost_usd": None, "tokens": 1000}})
+        cand = _results({"a/review": {"cost_usd": None, "tokens": 3000}})
+        self.assertEqual(
+            bench.compare(base, cand)[0], ["a/review: tokens 1,000 -> 3,000"]
+        )
+        # An older results.json has neither: no problem, but a note says the
+        # spend check didn't run, so "no regressions" can't hide it.
+        problems, notes = bench.compare(_results({"a/review": {}}), cand)
+        self.assertEqual(problems, [])
+        self.assertIn(
+            "a/review: tokens not compared: the baseline recorded none", notes
+        )
+
+    def test_a_skipped_spend_check_says_so(self):
+        base = _results({"a/review": {"cost_usd": 0.4, "tokens": 1000}})
+        lost = _results({"a/review": {"cost_usd": None, "tokens": None}})
+        problems, notes = bench.compare(base, lost)
+        self.assertEqual(problems, [])
+        self.assertIn("a/review: cost not compared: the candidate recorded none", notes)
+        zero = _results({"a/review": {"cost_usd": 0.0}})
+        _, notes = bench.compare(zero, base)
+        self.assertIn("a/review: cost not compared: the baseline recorded 0", notes)
+        # Neither side reports spend (Codex, pi): nothing to say.
+        _, notes = bench.compare(_results({"a/review": {}}), _results({"a/review": {}}))
+        self.assertFalse(any("not compared" in n for n in notes))
+
+    def test_tokens_do_not_compare_across_hosts(self):
+        base = dict(_results({"a/review": {"tokens": 1000}}), host="oneshot")
+        cand = dict(_results({"a/review": {"tokens": 3000000}}), host="claude")
+        problems, notes = bench.compare(base, cand)
+        self.assertEqual(problems, [])
+        self.assertTrue(any("hosts differ (oneshot vs claude)" in n for n in notes))
+        # Cost still compares across hosts.
+        base["summary"]["a/review"]["cost_usd"] = 0.4
+        cand["summary"]["a/review"]["cost_usd"] = 2.0
+        self.assertEqual(
+            bench.compare(base, cand)[0], ["a/review: cost $0.40 -> $2.00"]
+        )
+
+    def test_runs_without_usage_are_counted_and_noted(self):
+        runs = [
+            {"case": "c", "pass": "review", "usage": {"cost_usd": 0.5, "tokens": 10}},
+            {"case": "c", "pass": "review", "status": "timeout"},
+        ]
+        summary = bench.summarize(runs)
+        self.assertEqual(summary["c/review"]["unpriced"], 1)
+        self.assertEqual(summary["c/review"]["cost_usd"], 0.5)
+        out = io.StringIO()
+        bench.print_summary(summary, stream=out)
+        self.assertIn("c/review: 1/2 run(s) recorded no usage", out.getvalue())
+
+    def test_mode_note_ignores_a_different_repeat(self):
+        base = _results({"a/review": {"modes": {"inline": 3}}})
+        cand = _results({"a/review": {"runs": 1, "modes": {"inline": 1}}})
+        self.assertFalse(any("passes ran" in n for n in bench.compare(base, cand)[1]))
+
+    def test_a_plain_row_matches_a_single_variant_row(self):
+        plain = _results({"a/review": {"recall": 1.0}})
+        one = _results({"a/review @opus/fanout": {"recall": 0.5}})
+        problems, notes = bench.compare(plain, one)
+        self.assertEqual(problems, ["a/review: recall 100% -> 50%"])
+        self.assertIn(
+            "a/review: compared with candidate's a/review @opus/fanout", notes
+        )
+        # The other way round too.
+        self.assertEqual(bench.compare(one, plain)[0], [])
+        # Several variants, or two different ones, are not the same run.
+        two = _results({"a/review @opus/fanout": {}, "a/review @opus/inline": {}})
+        self.assertIn(
+            "a/review: in baseline, not in candidate", bench.compare(plain, two)[0]
+        )
+        other = _results({"a/review @sonnet/inline": {}})
+        self.assertIn(
+            "a/review @opus/fanout: in baseline, not in candidate",
+            bench.compare(one, other)[0],
+        )
+
+    def test_slower_runs_are_a_note(self):
+        _, notes = bench.compare(
+            _results({"a/review": {"duration_s": 40.0}}),
+            _results({"a/review": {"duration_s": 90.0}}),
+        )
+        self.assertIn("a/review: wall time 40s -> 90s", notes)
+
     def test_identical_runs_pass(self):
         r = _results({"a/review": {}})
         self.assertEqual(bench.compare(r, r)[0], [])
@@ -884,6 +1010,28 @@ if mode == "report":
     )
 elif mode == "print":
     print("# Code Review: x\\n\\n## Critical Issues\\n\\n- ChargeResultFormatter is undefined [src/billing/charge.py:36]")
+elif mode in ("json", "json-print"):
+    import json
+    report = ""
+    if mode == "json":
+        branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+        d = os.path.join(".sharpen", "grumpy", *branch.split("/"))
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "review.md"), "w").write(
+            "## Critical Issues\\n\\n- [code]: ChargeResultFormatter is undefined [src/billing/charge.py:36]\\n"
+        )
+    else:
+        report = "# Code Review: x\\n\\n## Critical Issues\\n\\n- ChargeResultFormatter is undefined [src/billing/charge.py:36]"
+    fan = "--append-system-prompt" in sys.argv and "subagent path" in " ".join(sys.argv)
+    print(json.dumps({
+        "result": report or "done",
+        "total_cost_usd": 2.5 if fan else 0.25,
+        "num_turns": 7,
+        "usage": {},
+        "modelUsage": {"claude-sonnet-5-5": {"inputTokens": 10, "outputTokens": 90, "cacheReadInputTokens": 800, "cacheCreationInputTokens": 100, "costUSD": 0.25}},
+        "subagent_stats": {"spawned": 6 if fan else 0},
+    }))
+    sys.exit(0)
 print("done")
 """
 
@@ -1045,6 +1193,32 @@ class RunnerTest(unittest.TestCase):
         )
         self.assertEqual(r["status"], "cli-missing")
         self.assertIn("not found on PATH", r["error"])
+
+    def test_ctrl_c_kills_the_host_group(self):
+        hang = [sys.executable, "-c", "import time; time.sleep(30)"]
+        killed = []
+        real_kill = bench._kill_group
+
+        def kill(proc):
+            killed.append(proc.pid)
+            real_kill(proc)
+
+        real_communicate = subprocess.Popen.communicate
+
+        def interrupt(proc, *a, **k):
+            if proc.args == hang:  # the host, not build_repo's git calls
+                raise KeyboardInterrupt
+            return real_communicate(proc, *a, **k)
+
+        with (
+            mock.patch.object(bench, "_kill_group", kill),
+            mock.patch.object(subprocess.Popen, "communicate", interrupt),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                bench.run_one(
+                    "clean-refactor", "review", hang, None, self.tmp, "c", 60, False
+                )
+        self.assertEqual(len(killed), 1)
 
     def test_dropped_bullets_make_a_run_unparsed(self):
         report = "# Code Review\\n\\n## Serious Concerns\\n\\n    - indented [a.py:1]"
@@ -1239,6 +1413,322 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("billing-planted", stdout)
         self.assertIn("planted=", stdout)
+
+    def test_claude_run_records_usage_and_how_the_passes_ran(self):
+        os.environ["FAKE_MODE"] = "json"
+        out = os.path.join(self.tmp, "results")
+        code, stdout = self.run_cli(
+            "run",
+            "--host",
+            "claude",
+            "--cases",
+            "billing-planted",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 0, stdout)
+        _, results = self.results(out)
+        (run,) = results["runs"]
+        self.assertEqual(run["status"], "scored")
+        self.assertEqual(run["usage"]["cost_usd"], 0.25)
+        self.assertEqual(run["usage"]["tokens"], 1000)
+        self.assertEqual(run["usage"]["subagents"], 0)
+        self.assertEqual(run["observed_mode"], "inline")
+        s = results["summary"]["billing-planted/review"]
+        self.assertEqual(s["cost_usd"], 0.25)
+        self.assertEqual(s["modes"], {"inline": 1})
+        with open(self.log) as f:
+            self.assertIn("--output-format json", f.read())
+
+    def test_a_printed_report_is_read_from_claudes_json(self):
+        os.environ["FAKE_MODE"] = "json-print"
+        out = os.path.join(self.tmp, "results")
+        code, stdout = self.run_cli(
+            "run",
+            "--host",
+            "claude",
+            "--cases",
+            "billing-planted",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 0, stdout)
+        run_dir, results = self.results(out)
+        (run,) = results["runs"]
+        self.assertEqual(run["status"], "scored-from-output")
+        self.assertEqual(run["score"]["hits"], ["undefined-formatter"])
+        with open(os.path.join(run_dir, "billing-planted-review-1.md")) as f:
+            self.assertTrue(f.read().startswith("# Code Review"))
+
+    def test_a_matrix_runs_every_model_with_every_mode(self):
+        os.environ["FAKE_MODE"] = "json"
+        out = os.path.join(self.tmp, "results")
+        code, stdout = self.run_cli(
+            "run",
+            "--host",
+            "claude",
+            "--model",
+            "sonnet,opus",
+            "--mode",
+            "inline,fanout",
+            "--cases",
+            "billing-planted",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 0, stdout)
+        run_dir, results = self.results(out)
+        self.assertTrue(
+            os.path.basename(run_dir).endswith("-sonnet+opus-inline+fanout")
+        )
+        self.assertEqual(
+            results["variants"],
+            ["sonnet/inline", "sonnet/fanout", "opus/inline", "opus/fanout"],
+        )
+        names = sorted(results["summary"])
+        self.assertEqual(
+            names,
+            [
+                "billing-planted/review @opus/fanout",
+                "billing-planted/review @opus/inline",
+                "billing-planted/review @sonnet/fanout",
+                "billing-planted/review @sonnet/inline",
+            ],
+        )
+        fan = results["summary"]["billing-planted/review @opus/fanout"]
+        self.assertEqual(fan["cost_usd"], 2.5)
+        self.assertEqual(fan["modes"], {"fanout": 1})
+        labels = [r["label"] for r in results["runs"]]
+        self.assertIn("billing-planted-review-opus_fanout-1", labels)
+        # The model dimension is the model review's passes run on, fanned out too.
+        self.assertEqual(
+            {r["variant"]: r["analysis"] for r in results["runs"]},
+            {
+                "sonnet/inline": "sonnet",
+                "sonnet/fanout": "sonnet",
+                "opus/inline": "opus",
+                "opus/fanout": "opus",
+            },
+        )
+        self.assertEqual(
+            {r["pinned_mode"] for r in results["runs"]}, {"inline", "fanout"}
+        )
+        self.assertEqual(fan["mode_missed"], 0)
+        with open(self.log) as f:
+            argv = f.read()
+        self.assertIn("--model opus", argv)
+        self.assertIn("one after another", argv)
+
+    def test_a_pinned_mode_is_refused_on_a_host_with_one_way_to_run(self):
+        out = os.path.join(self.tmp, "results")
+        code, _ = self.run_cli(
+            "run",
+            "--host",
+            "codex",
+            "--mode",
+            "fanout",
+            "--cases",
+            "billing-planted",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(self.log))
+        code, _ = self.run_cli(
+            "run",
+            "--host",
+            "claude",
+            "--mode",
+            "sideways",
+            "--cases",
+            "billing-planted",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 2)
+
+
+class UsageTest(unittest.TestCase):
+    CLAUDE = json.dumps(
+        {
+            "result": "the report",
+            "total_cost_usd": 5.3,
+            "num_turns": 9,
+            "usage": {},
+            "modelUsage": {
+                "claude-sonnet-5-5": {
+                    "inputTokens": 46,
+                    "outputTokens": 13688,
+                    "cacheReadInputTokens": 1368605,
+                    "cacheCreationInputTokens": 60334,
+                    "costUSD": 0.515,
+                },
+                "claude-opus-5-5": {
+                    "inputTokens": 116,
+                    "outputTokens": 47043,
+                    "cacheReadInputTokens": 4301907,
+                    "cacheCreationInputTokens": 596962,
+                    "costUSD": 4.787,
+                },
+            },
+            "subagent_stats": {"spawned": 6},
+        }
+    )
+
+    def test_claude_usage_splits_session_and_subagent_models(self):
+        u = bench.parse_usage("claude", "some log\n" + self.CLAUDE + "\n")
+        self.assertEqual(u["cost_usd"], 5.3)
+        self.assertEqual(u["subagents"], 6)
+        self.assertEqual(u["turns"], 9)
+        self.assertEqual(u["cache_read_tokens"], 1368605 + 4301907)
+        self.assertEqual(
+            u["tokens"],
+            46 + 13688 + 1368605 + 60334 + 116 + 47043 + 4301907 + 596962,
+        )
+        self.assertEqual(u["models"]["claude-opus-5-5"]["cost_usd"], 4.787)
+        self.assertEqual(bench.observed_mode("claude", u), "fanout")
+        self.assertEqual(bench.output_text("claude", self.CLAUDE), "the report")
+
+    def test_claude_without_json_records_nothing(self):
+        self.assertIsNone(bench.parse_usage("claude", "plain text\n{not json"))
+        self.assertEqual(bench.output_text("claude", "plain"), "plain")
+        self.assertIsNone(bench.observed_mode("claude", None))
+
+    def test_oneshot_sums_the_tokens_its_passes_log(self):
+        err = (
+            "[grumpy oneshot] pass code: done in 3s, 2 finding line(s), 1200 tokens\n"
+            "[grumpy oneshot] pass design: done in 3s, 1 finding line(s), 300 tokens\n"
+            "someone else: 99 tokens\n"
+        )
+        u = bench.parse_usage("oneshot", "", err)
+        self.assertEqual(u["tokens"], 1500)
+        self.assertEqual(u["turns"], 2)
+        self.assertFalse(u["partial"])
+        self.assertIsNone(u["cost_usd"])
+        self.assertEqual(bench.observed_mode("oneshot", u), "oneshot")
+        self.assertIsNone(bench.parse_usage("oneshot", "", "no counts"))
+
+    def test_oneshot_error_bodies_are_not_tokens(self):
+        # A provider error quoting a limit is not spend, and a pass that
+        # failed or reported no usage makes the run's total partial.
+        err = (
+            "[grumpy oneshot] pass code: done in 3s, 2 finding line(s), 1200 tokens\n"
+            "[grumpy oneshot] pass tests: done in 4s, 0 finding line(s)\n"
+            "[grumpy oneshot] pass design failed: HTTP 400: maximum context length is 128000 tokens\n"
+            "[grumpy oneshot] Stop: 429: limit 30000 tokens per minute\n"
+        )
+        u = bench.parse_usage("oneshot", "", err)
+        self.assertEqual(u["tokens"], 1200)
+        self.assertEqual(u["turns"], 1)
+        self.assertTrue(u["partial"])
+
+    def test_missing_claude_usage_is_none_not_zero(self):
+        data = json.loads(self.CLAUDE)
+        del data["modelUsage"]
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(u["tokens"])
+        self.assertIsNone(u["input_tokens"])
+        self.assertTrue(u["partial"])
+        self.assertEqual(u["cost_usd"], 5.3)
+        # A null or renamed inner key neither raises nor reads as 0.
+        data = json.loads(self.CLAUDE)
+        data["modelUsage"]["claude-opus-5-5"]["inputTokens"] = None
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(u["tokens"])
+        self.assertIsNone(u["models"]["claude-opus-5-5"]["tokens"])
+        self.assertEqual(
+            u["models"]["claude-sonnet-5-5"]["tokens"], 46 + 13688 + 1368605 + 60334
+        )
+
+    def test_the_report_survives_a_dropped_usage_key(self):
+        data = json.loads(self.CLAUDE)
+        del data["usage"]
+        del data["subagent_stats"]
+        self.assertEqual(bench.output_text("claude", json.dumps(data)), "the report")
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(bench.observed_mode("claude", u))
+
+    def test_unknown_mode_and_partial_usage_are_noted(self):
+        notes = bench._row_notes(
+            {
+                "runs": 2,
+                "unpriced": 2,
+                "partial_usage": 1,
+                "mode_unknown": 1,
+                "mode_missed": 1,
+            },
+            "claude",
+        )
+        self.assertEqual(len(notes), 4)
+        self.assertIn("though claude reports it", notes[0])
+        # Codex and pi record no usage by design: no note.
+        self.assertEqual(bench._row_notes({"runs": 2, "unpriced": 2}, "codex"), [])
+
+    def test_codex_and_pi_report_nothing(self):
+        self.assertIsNone(bench.parse_usage("codex", self.CLAUDE))
+        self.assertIsNone(bench.parse_usage("pi", self.CLAUDE))
+
+    def test_mode_hint_goes_in_the_system_prompt(self):
+        argv, _ = bench.build_command("claude", "review", "sonnet", mode="inline")
+        self.assertEqual(argv[1], "--append-system-prompt")
+        self.assertIn("yourself", argv[2])
+        argv, _ = bench.build_command("claude", "review", "sonnet", mode="auto")
+        self.assertNotIn("--append-system-prompt", argv)
+        with self.assertRaises(ValueError):
+            bench.build_command("pi", "review", "m", mode="inline")
+        # A --cmd template owns its flags: splicing at argv[1] would land in
+        # `env`'s arguments here.
+        with self.assertRaises(ValueError):
+            bench.build_command(
+                "claude", "review", mode="fanout", template="env X=1 claude -p {prompt}"
+            )
+        argv, _ = bench.build_command(
+            "claude", "review", mode="auto", template="env X=1 claude -p {prompt}"
+        )
+        self.assertEqual(argv[:3], ["env", "X=1", "claude"])
+
+    def test_a_repeated_model_or_mode_runs_once(self):
+        args = argparse.Namespace(
+            model="opus, opus,sonnet", mode="inline,inline", host="claude"
+        )
+        self.assertEqual(
+            bench._variants(args), [("opus", "inline"), ("sonnet", "inline")]
+        )
+        stamp = "S"
+        self.assertEqual(
+            bench._run_id(args, None, stamp), "S-claude-opus+sonnet-inline"
+        )
+
+    def test_variants_that_share_a_log_name_are_refused(self):
+        for model in ("claude-opus,claude_opus", "Opus,opus", "x/y,x_y"):
+            with self.subTest(model), self.assertRaises(ValueError):
+                bench._variants(argparse.Namespace(model=model, mode="auto,fanout"))
+
+    def test_a_cmd_without_model_refuses_a_model_list(self):
+        args = argparse.Namespace(model="a,b", mode=None, cmd="claude -p {prompt}")
+        with self.assertRaises(ValueError):
+            bench._variants(args)
+        args.cmd = "claude -p --model {model} {prompt}"
+        self.assertEqual(len(bench._variants(args)), 2)
+
+    def test_analysis_follows_a_claude_alias(self):
+        ns = argparse.Namespace
+        self.assertEqual(
+            bench._analysis_pin(ns(host="claude", analysis=None), "sonnet"), "sonnet"
+        )
+        self.assertEqual(
+            bench._analysis_pin(ns(host="claude", analysis="opus"), "sonnet"), "opus"
+        )
+        self.assertIsNone(
+            bench._analysis_pin(ns(host="claude", analysis=None), "claude-sonnet-5-5")
+        )
+        self.assertIsNone(bench._analysis_pin(ns(host="codex", analysis=None), "opus"))
 
 
 class FindReportTest(unittest.TestCase):
