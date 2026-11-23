@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.normpath(os.path.join(HERE, "..", "scripts", "receipt.py"))
@@ -29,7 +30,7 @@ class ReceiptBase(unittest.TestCase):
         git(self.repo, "config", "user.email", "t@t")
         git(self.repo, "config", "user.name", "t")
         with open(os.path.join(self.repo, ".gitignore"), "w") as f:
-            f.write(".sharpen/grumpy/\n")
+            f.write(".sharpen/grumpy/\n.claude/grumpy/\n")
         git(self.repo, "add", ".gitignore")
         git(self.repo, "commit", "-q", "-m", "init")
         git(self.repo, "checkout", "-q", "-b", BRANCH)
@@ -185,6 +186,27 @@ class AutoStageTest(ReceiptBase):
         r = self.run_receipt("fix", "--stage", "auto")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no review or imagine receipt", r.stderr)
+        self.assertEqual(self.receipt("fix")["stage"], "review")
+
+    def test_a_legacy_fix_receipt_counts(self):
+        # A fix an older grumpy stamped under .claude/ is the last fix.
+        self.pass_receipt("review")
+        time.sleep(0.01)
+        legacy = os.path.join(self.repo, ".claude", "grumpy", BRANCH, "receipts")
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "fix-review.json"), "w") as f:
+            json.dump({"written_at": datetime.now(timezone.utc).isoformat()}, f)
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_an_unreadable_written_at_falls_back_to_the_mtime(self):
+        self.pass_receipt("review")
+        with open(os.path.join(self.dir, "receipts", "review.json"), "w") as f:
+            json.dump({"written_at": "not a time"}, f)
+        self.report()
+        r = self.run_receipt("fix", "--stage", "auto")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no readable written_at", r.stderr)
         self.assertEqual(self.receipt("fix")["stage"], "review")
 
     def test_auto_is_only_for_fix(self):
