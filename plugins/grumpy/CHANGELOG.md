@@ -19,11 +19,10 @@ A file's task runs on the highest role any of its findings needs. Fixing a renam
 on Opus paid the strong tier for nothing, and a review's Serious list often carries
 several judgment calls.
 
-Non-audit findings carry no `accept:` command, so a Sonnet fix has no machine check. The
-new escalation trigger is the fixer's own report: a fixer that says it couldn't apply a
-finding cleanly sends that finding one rung up, once. A fix Sonnet believes is clean is
-checked by the orchestrator reading its hunk against the finding, and by the next review pass. Escalation is now counted
-per finding, and a retry undoes the first attempt's edit before fixing.
+Non-audit findings carry no `accept:` command, so a Sonnet fix has no machine check. A
+finding now escalates when its fixer reports it `not fixed` or the orchestrator's read of
+its hunk (`self-checked`) finds it doesn't address the finding: the orchestrator undoes its
+edits, then retries it one rung up, once per finding.
 
 - The summary says how many tasks ran on each model.
 - To keep every review and imagine fix on Opus, pin `exec` to `opus` in
@@ -31,9 +30,10 @@ per finding, and a retry undoes the first attempt's edit before fixing.
   `exec: trivial` steps stay on `exec-trivial` unless you pin that role too.
 - A repo `.sharpen/models.yaml` that pinned `exec` lower than Sonnet now also covers
   judgment Serious and chosen Questionable fixes, which used to ignore it.
-- Exec fixes without an `accept:` check get a read of their hunk from the orchestrator
-  before the commit, marked `self-checked` in fix.md. A finding that fails is undone on its
-  own; the rest of its file is still committed.
+- A failed finding is undone on its own, by content; if its edits can't be separated, the
+  whole file goes back to its pre-task content under `## Uncertain`. Nothing is stashed.
+- No receipt is written while a Critical sits under `## Not fixed` or `## Uncertain`
+  (before, only when it was blocked elsewhere), so gate 4/6 waits for it.
 
 ## 2.18.0 — the fix pass picks its own stage
 

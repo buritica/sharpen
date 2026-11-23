@@ -65,9 +65,11 @@ roles:
     codex: gpt-6-luna
     openai: gpt-6-luna
 
-# Fix's escalation ladder (low → high). --max-tier clamps to a rung; a failed
-# check escalates one rung. If an override makes two rungs the same alias,
-# there is no higher model to escalate to: stop and report instead of retrying.
+# Fix's escalation ladder (low → high). --max-tier clamps to a rung. A finding
+# escalates one rung, once, when it fails: its `accept:` run fails, its fixer
+# reports `not fixed`, or the hunk of an exec fix doesn't address it. If an
+# override makes two rungs the same alias, there is no higher model: report it
+# blocked instead of retrying.
 escalation: [exec-trivial, exec, analysis]
 
 # Why review routes and imagine doesn't: the benchmark (scripts/bench-grumpy.py,
