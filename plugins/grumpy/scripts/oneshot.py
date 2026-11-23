@@ -123,7 +123,8 @@ BASE_LINES = {
 }
 
 # One finding pass's outcome. `failure` is the call's error text (None when it
-# answered); `errored` means it answered without finding lines; `dropped`
+# answered); `errored` means it answered without pass lines (on imagine, or
+# dropped malformed lines and kept no finding line); `dropped`
 # counts malformed lines the parser threw away.
 PassResult = collections.namedtuple("PassResult", "lines errored failure dropped")
 Reply = collections.namedtuple("Reply", "text usage model request_id")
@@ -497,7 +498,9 @@ def parse_pass_lines(text, context_labels=()):
     Strengths (on review, with no labels, a HANDLED line is malformed).
     Backticks around a line are stripped first. A line with pipes that still doesn't parse (four fields, a
     lowercase severity, a `file` with no `:N`) is dropped and counted, so the
-    aggregator and stderr can say the aspect may be incomplete. A response
+    aggregator and stderr can say the aspect may be incomplete. On imagine, a
+    pass that dropped a line and kept no finding line is errored (its findings
+    may be the lines that were dropped). A response
     with no usable line is errored, never salvaged, unless it is a short
     "nothing found": an empty answer is not that, it is a provider that
     answered nothing (a full queue, say) and must not pass for a clean
@@ -531,6 +534,12 @@ def parse_pass_lines(text, context_labels=()):
         found.append("|".join([sev, loc, middle, fact, aspect]))
     body = text.strip()
     errored = not found and (not body or len(body) > 120)
+    # Imagine only: CONTEXT and HANDLED lines make a pass usable, so a pass
+    # whose finding lines were all malformed would otherwise pass for "no
+    # findings" and earn gate 5 with them gone. Review keeps its own rule
+    # (a short reply with a dropped line is not errored; tests pin it).
+    if context_labels and dropped and not any(is_finding(ln) for ln in found):
+        errored = True
     return found, errored, dropped
 
 
@@ -749,11 +758,12 @@ def run_passes(client, model, passes, jobs, timeout, labels=()):
             if len(lines) > findings:
                 detail.append(f"{len(lines) - findings} context line(s)")
             if errored:
-                detail.append(
-                    "no finding lines: errored"
-                    if reply.text.strip()
-                    else "empty answer: errored"
-                )
+                if not reply.text.strip():
+                    detail.append("empty answer: errored")
+                elif lines:
+                    detail.append("malformed line(s) and no finding line: errored")
+                else:
+                    detail.append("no pass lines: errored")
             if dropped:
                 detail.append(f"{dropped} malformed line(s) dropped")
             if reply.usage is not None:
@@ -883,7 +893,8 @@ def run(args, env):
     stamps = [base_line]
     if incomplete:
         stamps.append(
-            f"_Incomplete: {', '.join(incomplete)} (failed or no finding lines); "
+            f"_Incomplete: {', '.join(incomplete)} (failed, no pass lines, or "
+            "malformed lines and no finding line); "
             "this report earned no receipt_"
         )
     messages = aggregate_messages(parts, results, settled, model_line)
@@ -904,9 +915,9 @@ def run(args, env):
         # A pass with an aspect missing isn't the pass gate 3 or 5 asks for.
         raise Stop(
             1,
-            f"aspect(s) {', '.join(incomplete)} failed or answered without finding "
-            "lines: the report is saved for reading, but no receipt. Re-run to earn "
-            "the gate",
+            f"aspect(s) {', '.join(incomplete)} failed, answered without pass "
+            "lines, or dropped malformed lines and kept no finding line: the report "
+            "is saved for reading, but no receipt. Re-run to earn the gate",
         )
     executor = {
         "host": EXECUTOR_HOST,

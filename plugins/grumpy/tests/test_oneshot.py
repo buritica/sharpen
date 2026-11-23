@@ -313,6 +313,30 @@ class ParseTest(unittest.TestCase):
         # Review keeps no context lines: a label there is just a malformed line.
         self.assertEqual(oneshot.parse_pass_lines("cleanup|a|b")[2], 1)
 
+    def test_imagine_pass_with_only_malformed_findings_is_errored(self):
+        # Context lines make the pass usable, so without this rule a pass
+        # whose findings were all malformed would earn gate 5 with them gone.
+        labels = oneshot.load_command("imagine")["context_labels"]
+        lines, errored, dropped = oneshot.parse_pass_lines(
+            "cleanup|Cleanup guarantees: yes|User-facing error: clear\n"
+            "- WARN|a.py:3|counter race|fact|concurrency\n"
+            "FINDING|WARN|a.py:4|lost update|fact|concurrency",
+            labels,
+        )
+        self.assertEqual(
+            lines, ["cleanup|Cleanup guarantees: yes|User-facing error: clear"]
+        )
+        self.assertEqual(dropped, 2)
+        self.assertTrue(errored)
+        # One finding kept is a pass that reported: dropped lines are flagged
+        # to the aggregator, not fatal.
+        self.assertFalse(
+            oneshot.parse_pass_lines(
+                "- WARN|a.py:3|x|fact|concurrency\nWARN|a.py:4|y|fact|concurrency",
+                labels,
+            )[1]
+        )
+
     def test_backticks_are_stripped_per_line(self):
         # imagine.md shows CONTEXT lines in backticks; a model that copies
         # that wraps every line, not just the reply.
@@ -870,7 +894,9 @@ class RunTest(_Repo):
             "--provider", "compatible", "--model", "m", "--aspects", "code,errors"
         )
         self.assertEqual(r.returncode, 1)
-        self.assertIn("errors", r.stderr.split("failed or answered without")[0])
+        self.assertIn(
+            "errors", r.stderr.split("failed, answered without pass lines")[0]
+        )
         self.assertTrue(os.path.exists(self.artifact("review.md")))
         self.assertIn("_Incomplete: errors (failed", read(self.artifact("review.md")))
         self.assertFalse(os.path.exists(self.artifact("receipts", "review.json")))

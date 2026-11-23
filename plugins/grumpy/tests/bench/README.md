@@ -92,7 +92,11 @@ The recorded `cli_version` is the grumpy version whose `oneshot.py` ran, and the
 covers `oneshot.py` and `oneshot_prompts.py` too, since the first adds its own preamble and
 aggregation wording and the second cuts the per-pass prompts out of the command. A pass that
 earns no receipt (an aspect that failed or answered in prose) exits 1 and is a failed
-`exit-nonzero` run, not a scored one. With `--provider openai` the fixture code goes to
+`exit-nonzero` run, not a scored one. Raise `--timeout` for a slow local server with
+`--provider compatible`: it runs the calls one at a time, and each can take up to 300 seconds
+twice (one retry), so in the worst case an imagine run's six calls need an hour and a
+review run's eight need 80 minutes, against the default 1200 seconds; and a run cut off there is recorded as `timeout`, not as a failure of
+the path. With `--provider openai` the fixture code goes to
 OpenAI; it is planted toy code, but say so if that matters where you run it.
 
 ## Cost

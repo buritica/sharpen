@@ -41,6 +41,9 @@ class AdapterTest(unittest.TestCase):
         os.makedirs(os.path.join(self.grumpy, "scripts"))
         with open(os.path.join(self.grumpy, "scripts", "oneshot.py"), "w") as f:
             f.write(STUB)
+        # grumpy 2.17 ships the prompt extraction next to oneshot.py; the
+        # adapters check for it before running an imagine pass.
+        open(os.path.join(self.grumpy, "scripts", "oneshot_prompts.py"), "w").close()
         self.out = os.path.join(self.repo, "stub.json")
 
     def manifest(
@@ -139,6 +142,85 @@ class AdapterTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 2)
         self.assertEqual([c["argv"][0] for c in self.calls()], ["review"])
+        # The adapter names the pass that stopped the run.
+        self.assertIn("review stopped with a setup error (exit 2)", r.stderr)
+
+    def test_imagine_with_a_grumpy_before_2_17_stops_before_any_gate(self):
+        # grumpy 2.16 has oneshot.py but no imagine: its oneshot.py would exit
+        # 2 only after the review was paid for.
+        os.remove(os.path.join(self.grumpy, "scripts", "oneshot_prompts.py"))
+        marker = os.path.join(self.repo, "gate-ran")
+        caps = ("test", "lint", "typecheck", "review", "imagine")
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(
+                commands={
+                    "test": f"touch {marker}",
+                    "lint": "true",
+                    "typecheck": "true",
+                },
+                caps=caps,
+            ),
+            "--grumpy",
+            self.grumpy,
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("grumpy 2.17 or newer", r.stderr)
+        self.assertIn("oneshot_prompts.py", r.stderr)
+        self.assertIsNone(self.called())
+        self.assertFalse(os.path.exists(marker))
+        # Review alone still runs on that grumpy.
+        r = self.run_adapter(
+            "openai_adapter.py", self.manifest(), "--grumpy", self.grumpy
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([c["argv"][0] for c in self.calls()], ["review"])
+
+    def test_a_mapped_imagine_command_is_ignored_out_loud(self):
+        # sdlc 4.22 needed a shell command mapped for imagine; 4.23 runs
+        # grumpy's pass instead and says the mapped one is ignored.
+        marker = os.path.join(self.repo, "mapped-imagine-ran")
+        caps = ("test", "lint", "typecheck", "review", "imagine")
+        r = self.run_adapter(
+            "local_llm_adapter.py",
+            self.manifest(
+                commands={
+                    "test": "true",
+                    "lint": "true",
+                    "typecheck": "true",
+                    "imagine": f"touch {marker}",
+                },
+                caps=caps,
+            ),
+            "--grumpy",
+            self.grumpy,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIn("x-host-command-map maps `imagine`", r.stderr)
+        self.assertIn("that command is ignored", r.stderr)
+        self.assertNotIn("maps `review`", r.stderr)
+
+    def test_generic_adapter_says_a_mapped_imagine_command_is_ignored(self):
+        # generic_adapter.py runs no grumpy pass, and no longer runs the mapped
+        # command either: it says so instead of dropping it silently.
+        marker = os.path.join(self.repo, "mapped-imagine-ran")
+        r = self.run_adapter(
+            "generic_adapter.py",
+            self.manifest(
+                commands={
+                    "test": "true",
+                    "lint": "true",
+                    "typecheck": "true",
+                    "imagine": f"touch {marker}",
+                },
+                caps=("test", "lint", "typecheck", "imagine"),
+            ),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIn("x-host-command-map maps `imagine`", r.stderr)
+        self.assertIn("that command is ignored: it isn't run here either", r.stderr)
 
     def test_openai_hands_review_to_oneshot(self):
         r = self.run_adapter(

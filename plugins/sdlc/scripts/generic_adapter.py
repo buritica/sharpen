@@ -194,6 +194,31 @@ def declared_passes(manifest):
     return [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
 
 
+def log_ignored_pass_commands(manifest, name, instead):
+    """Say so when `x-host-command-map` maps a command for `review` or
+    `imagine`: run_gates skips those capabilities, so the mapped command no
+    longer runs (sdlc 4.22 needed one for `imagine` in an `adversarial`
+    manifest). `instead` finishes the sentence: what happens in its place."""
+    host_map = manifest.get("x-host-command-map") or {}
+    for cap in ONESHOT_PASSES:
+        if cap in host_map:
+            _log(
+                f"[{name}] x-host-command-map maps `{cap}` "
+                f"({host_map[cap]!r}); that command is ignored: {instead}"
+            )
+
+
+def missing_prompts_message(name, oneshot):
+    """A grumpy older than 2.17 ships oneshot.py without imagine: its
+    oneshot.py exits 2 on `imagine`, after the review was paid for."""
+    prompts = os.path.join(os.path.dirname(oneshot), "oneshot_prompts.py")
+    return (
+        f"[{name}] error: the manifest declares `imagine`, but {prompts} is "
+        "missing: that grumpy's oneshot.py can't run imagine. Upgrade to "
+        "grumpy 2.17 or newer, or drop `imagine` from the manifest"
+    )
+
+
 def _map_legacy_env(env, legacy_env, name):
     """Copy each deprecated variable to its new name, with a warning, unless
     the new name is already set."""
@@ -234,6 +259,10 @@ def _run_passes(oneshot, passes, flags, env, name):
             _log(f"[{name}] oneshot.py was killed by signal {-code}; no {pass_name}")
             return 1
         if code == 2:  # the key, the model or the URL: the next pass fails too
+            _log(
+                f"[{name}] {pass_name} stopped with a setup error (exit 2); "
+                "no later pass run (see oneshot.py's message above)"
+            )
             return 2
         if code:
             _log(f"[{name}] {pass_name} earned nothing (exit {code})")
@@ -276,6 +305,14 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     if passes and oneshot is None:
         _log(missing_grumpy_message(name, grumpy_root))
         return 2
+    if "imagine" in passes and not os.path.isfile(
+        os.path.join(os.path.dirname(oneshot), "oneshot_prompts.py")
+    ):
+        _log(missing_prompts_message(name, oneshot))
+        return 2
+    log_ignored_pass_commands(
+        manifest, name, "this adapter runs grumpy's pass (oneshot.py) instead"
+    )
     _map_legacy_env(env, legacy_env, name)
     results = run_gates(manifest, profile, skip_capabilities=ONESHOT_PASSES)
     if summarize(results, name):
@@ -301,6 +338,11 @@ def main(argv):
     if isinstance(resolved, int):
         return resolved
     manifest, profile = resolved
+    log_ignored_pass_commands(
+        manifest,
+        "generic-adapter",
+        "it isn't run here either; a grumpy pass runs review and imagine",
+    )
     failures = summarize(run_gates(manifest, profile, skip_capabilities=ONESHOT_PASSES))
     if failures:
         _log(f"[generic-adapter] {len(failures)} gate command(s) failed")

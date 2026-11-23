@@ -16,7 +16,7 @@ saves `.sharpen/grumpy/<branch>/imagine.md` and leaves a receipt, so
 
 - **Only a manifest that declares `imagine` changes.** Without it, the adapters behave as in
   4.22. With it, they need grumpy 2.17 or newer (an older grumpy's `oneshot.py` refuses
-  `imagine` with exit 2).
+  `imagine` with exit 2), and check for it up front (below).
 - **A review that earns nothing no longer ends the run.** Review and imagine are separate
   gates, so the imagine pass still runs, and the adapter exits 1. A setup error (exit 2: a
   bad key, model or URL) still stops both.
@@ -28,6 +28,14 @@ saves `.sharpen/grumpy/<branch>/imagine.md` and leaves a receipt, so
   on the new `HEAD` so both passes see the fixed code.
 - **`generic_adapter.py` skips `imagine` too.** An `adversarial` manifest no longer needs a
   shell command mapped for `imagine`; the adapter says the pass comes from grumpy.
+- **An existing `x-host-command-map` entry for `imagine` (or `review`) is now ignored.** All
+  three adapters skip it and log a line saying `x-host-command-map` maps it and that command
+  is ignored. `openai_adapter.py` and `local_llm_adapter.py` run grumpy's paid `oneshot.py
+  imagine` in its place, and `generic_adapter.py` runs neither. Remove the entry, or drop
+  `imagine` from the manifest to keep the adapters from calling the API for it.
+- **Declaring `imagine` needs grumpy 2.17.** The adapters check for grumpy's
+  `scripts/oneshot_prompts.py` before any gate command runs, and stop with exit 2 naming
+  grumpy 2.17 when it is missing, rather than paying for the review first.
 - **The benchmark measures this path.** `scripts/bench-grumpy.py run --host oneshot` (in the
   sharpen repo) runs `oneshot.py` on the same fixtures as Claude Code, Codex and pi. No
   real-model numbers are recorded yet.
