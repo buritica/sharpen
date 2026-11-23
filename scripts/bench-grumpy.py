@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Local benchmark for grumpy's review and imagine passes.
 
-Runs the real pass headlessly on a host (Claude Code, Codex or pi) against
-small fixture repos, scores the report the pass writes, and compares runs so
+Runs the real pass headlessly on a host (Claude Code, Codex, pi, or grumpy's
+no-agent `oneshot.py` against a chat API) against small fixture repos, scores the report the pass writes, and compares runs so
 a model, host or prompt change shows up as a number. Local only: nothing here
 runs in CI, and results land in the gitignored .sharpen/bench/.
 
     bench-grumpy.py run --host claude [--model ID] [--pass review|imagine|all]
+                        [--provider openai|compatible]
                         [--cases a,b] [--repeat N] [--invoke native|inline]
                         [--cmd TEMPLATE] [--timeout S] [--out DIR] [--keep]
     bench-grumpy.py score REPORT --case NAME
@@ -63,7 +64,10 @@ BLOCKING = {"CRIT", "WARN"}
 # live run yet, so their `verified` is False below and results record
 # `flags_verified: false`; flip it here after a live run confirms them.
 # --cmd overrides any of them without a code change, and `commands` prints
-# exactly what would run.
+# exactly what would run. `oneshot` is no agent: it runs grumpy's own
+# scripts/oneshot.py from this checkout against a chat API (`--provider`,
+# OPENAI_API_KEY or SHARPEN_LLM_URL from the environment), so its command line
+# is this repo's and is verified by its tests.
 # ---------------------------------------------------------------------------
 # What a review or imagine pass needs on Claude Code: git and python3 for the
 # diff and the receipt, Write scoped to the report folder, read-only file
@@ -137,7 +141,24 @@ HOSTS = {
         "inline": ["pi", "--print", "--no-session", "--model", "{model}"],
         "verified": False,
     },
+    "oneshot": {
+        "binary": sys.executable,
+        "default_invoke": "native",
+        "native": [
+            "{python}",
+            "{grumpy}/scripts/oneshot.py",
+            "{pass}",
+            "--provider",
+            "{provider}",
+            "--model",
+            "{model}",
+        ],
+        "verified": True,
+    },
 }
+# What each oneshot provider needs in the environment before a run can call it
+# (oneshot.py's own PROVIDERS; checked before the first run, not per run).
+ONESHOT_ENV = {"openai": "OPENAI_API_KEY", "compatible": "SHARPEN_LLM_URL"}
 
 
 # ---------------------------------------------------------------------------
@@ -759,12 +780,17 @@ def skill_prompt(pass_name, grumpy=GRUMPY):
     )
 
 
-def prompt_hash(pass_name, grumpy=GRUMPY):
+def prompt_hash(pass_name, grumpy=GRUMPY, host=None):
+    """Hash of the files the pass's prompt comes from. On `oneshot` that
+    includes oneshot.py, which adds its own preamble and aggregation text."""
     h = hashlib.sha256()
-    for rel in (
+    rels = [
         os.path.join("commands", f"{pass_name}.md"),
         os.path.join("skills", pass_name, "SKILL.md"),
-    ):
+    ]
+    if host == "oneshot":
+        rels.append(os.path.join("scripts", "oneshot.py"))
+    for rel in rels:
         path = os.path.join(grumpy, rel)
         if os.path.exists(path):
             with open(path, "rb") as f:
@@ -773,9 +799,16 @@ def prompt_hash(pass_name, grumpy=GRUMPY):
 
 
 def build_command(
-    host, pass_name, model=None, invoke=None, template=None, grumpy=GRUMPY
+    host,
+    pass_name,
+    model=None,
+    invoke=None,
+    template=None,
+    grumpy=GRUMPY,
+    provider=None,
 ):
-    """Return (argv, stdin_text) for one run."""
+    """Return (argv, stdin_text) for one run. `{model}` and `{provider}`
+    each drop with the flag before them when no value is given."""
     profile = HOSTS[host]
     invoke = invoke or profile["default_invoke"]
     if template:
@@ -784,28 +817,45 @@ def build_command(
         if invoke not in profile:
             raise ValueError(f"host {host} has no {invoke} invocation")
         argv = list(profile[invoke])
+    values = {"{model}": model, "{provider}": provider}
     out = []
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "{model}" or (
-            i + 1 < len(argv) and argv[i + 1] == "{model}" and tok.startswith("-")
-        ):
-            if model is None:
-                i += 1 if tok == "{model}" else 2
-                continue
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if tok in values and values[tok] is None:
+            i += 1
+            continue
+        if tok.startswith("-") and nxt in values and values[nxt] is None:
+            i += 2
+            continue
         out.append(tok)
         i += 1
     native_prompt = f"/grumpy:{pass_name}"
     argv = [
         t.replace("{model}", model or "")
+        .replace("{provider}", provider or "")
         .replace("{grumpy}", grumpy)
+        .replace("{python}", sys.executable)
+        .replace("{pass}", pass_name)
         .replace("{claude_tools}", CLAUDE_TOOLS)
         .replace("{prompt}", native_prompt)
         for t in out
     ]
     stdin_text = None if invoke == "native" else skill_prompt(pass_name, grumpy)
     return argv, stdin_text
+
+
+def oneshot_version(grumpy=GRUMPY):
+    """`grumpy <version> oneshot.py`: what ran on the oneshot host, where a
+    `--version` of the Python interpreter would say nothing useful."""
+    try:
+        with open(
+            os.path.join(grumpy, ".claude-plugin", "plugin.json"), encoding="utf-8"
+        ) as f:
+            return f"grumpy {json.load(f)['version']} oneshot.py"
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def cli_version(binary):
@@ -1037,12 +1087,43 @@ def _run_labelled(case, pass_name, argv, stdin_text, out_dir, label, args):
     return r
 
 
+def oneshot_problem(args, env=None):
+    """Why a oneshot run can't start, or None: checked before the first run,
+    so a missing key fails once, not once per case. The provider is
+    `--provider`, else SHARPEN_LLM_PROVIDER, else openai (oneshot.py's own
+    order)."""
+    env = os.environ if env is None else env
+    if args.host != "oneshot":
+        if args.provider:
+            return "--provider is for --host oneshot"
+        return None
+    if getattr(args, "analysis", None):
+        return "--analysis pins Claude Code's alias; on oneshot use --model"
+    provider = args.provider or env.get("SHARPEN_LLM_PROVIDER") or "openai"
+    if provider not in ONESHOT_ENV:
+        return f"unknown provider {provider!r} (one of: {', '.join(ONESHOT_ENV)})"
+    if not env.get(ONESHOT_ENV[provider]):
+        return f"{ONESHOT_ENV[provider]} is not set (needed by --provider {provider})"
+    if provider == "compatible" and not (args.model or env.get("SHARPEN_LLM_MODEL")):
+        return "--provider compatible needs --model (or SHARPEN_LLM_MODEL)"
+    return None
+
+
 def cmd_run(args):
     profile = HOSTS[args.host]
+    problem = oneshot_problem(args)
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
     binary = shlex.split(args.cmd)[0] if args.cmd else profile["binary"]
     if not shutil.which(binary):
         print(f"error: {binary} is not on PATH", file=sys.stderr)
         return 2
+    provider = (
+        args.provider or os.environ.get("SHARPEN_LLM_PROVIDER") or "openai"
+        if args.host == "oneshot"
+        else None
+    )
     invoke = args.invoke or profile["default_invoke"]
     # Everything that can fail before a paid session does, before the first.
     plan = []
@@ -1052,26 +1133,35 @@ def cmd_run(args):
             if pass_name in key["passes"]:
                 try:
                     argv, stdin_text = build_command(
-                        args.host, pass_name, args.model, invoke, args.cmd
+                        args.host,
+                        pass_name,
+                        args.model,
+                        invoke,
+                        args.cmd,
+                        provider=provider,
                     )
                 except ValueError as e:
                     print(f"error: {e}", file=sys.stderr)
                     return 2
                 plan.append((case, pass_name, argv, stdin_text))
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_id = f"{stamp}-{args.host}-{(args.model or 'default').replace('/', '_')}"
+    host_id = f"{args.host}-{provider}" if provider else args.host
+    run_id = f"{stamp}-{host_id}-{(args.model or 'default').replace('/', '_')}"
     out_dir = _new_dir(os.path.join(args.out or RESULTS_DIR, run_id))
     print(f"[bench] results: {os.path.relpath(out_dir)}", file=sys.stderr)
     meta = {
         "protocol_version": "1",
         "host": args.host,
+        "provider": provider,
         "model": args.model,
         "analysis": args.analysis,
         "invoke": invoke,
-        "cli_version": cli_version(binary),
+        "cli_version": (
+            oneshot_version() if args.host == "oneshot" else cli_version(binary)
+        ),
         "flags_verified": profile["verified"] and not args.cmd,
         "started_at": stamp,
-        "prompt_hashes": {p: prompt_hash(p) for p in PASSES},
+        "prompt_hashes": {p: prompt_hash(p, host=args.host) for p in PASSES},
         "key_hashes": {c: key_hash(c) for c in sorted({p[0] for p in plan})},
         "commands": {},
         "runs": [],
@@ -1223,7 +1313,12 @@ def cmd_commands(args):
     profile = HOSTS[args.host]
     for pass_name in _passes(args.pass_):
         argv, stdin_text = build_command(
-            args.host, pass_name, args.model, args.invoke, args.cmd
+            args.host,
+            pass_name,
+            args.model,
+            args.invoke,
+            args.cmd,
+            provider=args.provider if args.host == "oneshot" else None,
         )
         suffix = (
             f"  < (grumpy {pass_name} SKILL.md as the prompt)" if stdin_text else ""
@@ -1255,9 +1350,15 @@ def main(argv=None):
         p.add_argument("--pass", dest="pass_", default="all", choices=[*PASSES, "all"])
         p.add_argument("--invoke", choices=["native", "inline"], default=None)
         p.add_argument(
+            "--provider",
+            choices=["openai", "compatible"],
+            default=None,
+            help="oneshot only: the chat API (default SHARPEN_LLM_PROVIDER, else openai)",
+        )
+        p.add_argument(
             "--cmd",
             default=None,
-            help="override the host command line ({model}, {grumpy}, {claude_tools}, {prompt}; {model} must be its own token)",
+            help="override the host command line ({model}, {provider}, {grumpy}, {python}, {pass}, {claude_tools}, {prompt}; {model} and {provider} must be their own tokens)",
         )
 
     p = sub.add_parser("run", help="run passes on a host and score them")
@@ -1270,7 +1371,7 @@ def main(argv=None):
         "--analysis",
         choices=["haiku", "sonnet", "opus"],
         default=None,
-        help="pin models.yaml's analysis role (review's passes on Claude Code)",
+        help="pin models.yaml's analysis role (review's passes on Claude Code; not oneshot)",
     )
     p.add_argument(
         "--timeout", type=int, default=1200, help="seconds per run (default 1200)"

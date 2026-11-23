@@ -4,9 +4,9 @@
 Runs gate commands for any host that can execute shell commands and produce
 JSON. Reads a capability manifest, resolves the highest complete profile,
 executes the mapped commands and reports PASS/FAIL. It does not review: a
-gate summary is not a review, so `review` is left to grumpy (an agent host,
-or `run_with_oneshot` below, which openai_adapter.py and local_llm_adapter.py
-use). This is the reference non-Claude adapter: it exercises the portable
+gate summary is not a review, so `review` and `imagine` are left to grumpy (an
+agent host, or `run_with_oneshot` below, which openai_adapter.py and
+local_llm_adapter.py use). This is the reference non-Claude adapter: it exercises the portable
 core without any host-specific hooks, skills, or lifecycle events.
 
 Pure stdlib. Exits 0 on success, 1 on gate failure, 2 on unrecoverable error.
@@ -18,6 +18,9 @@ import sys
 import time
 
 import capabilities
+
+# The grumpy passes the one-shot path runs, in gate order (gates 3 and 5).
+ONESHOT_PASSES = ("review", "imagine")
 
 # Default commands for capabilities that have no host-specific mapping. These
 # are the portable baseline: any POSIX environment with Python can run them.
@@ -175,29 +178,31 @@ def missing_grumpy_message(name, root):
     if root:
         return (
             f"[{name}] error: {os.path.join(root, 'scripts', 'oneshot.py')} not found. "
-            "The review runs grumpy's oneshot.py, which needs grumpy 2.16 or newer: "
-            "upgrade grumpy, or point GRUMPY_PLUGIN_ROOT / --grumpy <path> at one"
+            "The review runs grumpy's oneshot.py, which needs grumpy 2.16 or newer "
+            "(2.17 for imagine): upgrade grumpy, or point GRUMPY_PLUGIN_ROOT / "
+            "--grumpy <path> at one"
         )
     return (
         f"[{name}] error: grumpy not found. Set GRUMPY_PLUGIN_ROOT to the grumpy "
         "plugin folder or pass --grumpy <path>; the review runs grumpy's "
-        "oneshot.py (grumpy 2.16 or newer)"
+        "oneshot.py (grumpy 2.16 or newer, 2.17 for imagine)"
     )
 
 
 def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
-    """Gate commands from the manifest, then grumpy's one-shot review.
+    """Gate commands from the manifest, then grumpy's one-shot passes.
 
-    The shared body of openai_adapter.py and local_llm_adapter.py. The review
-    is grumpy's own (`oneshot.py review`): the same prompts as an agent host,
-    a report under .sharpen/grumpy/<branch>/ and a receipt that
-    `record-gate.py --verify review` records gate 3 from. `legacy_env` maps an
-    old variable name to the one oneshot.py reads, honored with a warning.
-    Exit codes: 2 setup error, 1 a gate command failed or the review earned
-    nothing, 0 every gate command passed and, when the manifest declares
-    `review`, the report and receipt were written. A manifest without
-    `review` runs no review, needs no grumpy: it says so on stderr and exits
-    0."""
+    The shared body of openai_adapter.py and local_llm_adapter.py. Each pass
+    the manifest declares (`review`, `imagine`, in that order) is grumpy's
+    own (`oneshot.py review|imagine`): the same prompts as an agent host, a
+    report under .sharpen/grumpy/<branch>/ and a receipt that `record-gate.py
+    --verify review|imagine` records gate 3 or 5 from. One pass earning
+    nothing doesn't skip the other (they are separate gates); a setup error
+    (exit 2) stops both. `legacy_env` maps an old variable name to the one
+    oneshot.py reads, honored with a warning. Exit codes: 2 setup error, 1 a
+    gate command failed or a pass earned nothing, 0 every gate command passed
+    and every declared pass wrote its report and receipt. A manifest with
+    neither runs no pass, needs no grumpy: it says so on stderr and exits 0."""
     env = dict(os.environ if env is None else env)
     try:
         oneshot, grumpy_root, argv = grumpy_oneshot(argv, env)
@@ -208,65 +213,77 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     if isinstance(resolved, int):
         return resolved
     manifest, profile = resolved
-    reviewing = "review" in manifest["capabilities"]
-    # Only a declared review needs grumpy, and then it should fail here,
-    # before the gate commands run, not after.
-    if reviewing and oneshot is None:
+    passes = [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
+    # Only a declared pass needs grumpy, and then it should fail here, before
+    # the gate commands run, not after.
+    if passes and oneshot is None:
         _log(missing_grumpy_message(name, grumpy_root))
         return 2
     for old, new in (legacy_env or {}).items():
         if env.get(old) and not env.get(new):
             _log(f"[{name}] {old} is deprecated; set {new} instead")
             env[new] = env[old]
-    results = run_gates(manifest, profile, skip_capabilities=("review",))
+    results = run_gates(manifest, profile, skip_capabilities=ONESHOT_PASSES)
     if summarize(results, name):
-        _log(f"[{name}] gate command(s) failed; review skipped")
+        _log(
+            f"[{name}] gate command(s) failed; {' and '.join(passes) or 'review'} skipped"
+        )
         return 1
-    if not reviewing:
+    if not passes:
         _log(
             f"[{name}] gate commands passed; the manifest declares no `review` "
-            "capability, so nothing was reviewed and no receipt was written"
+            "or `imagine` capability, so nothing was reviewed and no receipt "
+            "was written"
         )
         return 0
-    cmd = [sys.executable, oneshot, "review", "--provider", provider]
+    flags = ["--provider", provider]
     model = (manifest.get("provider") or {}).get("model")
     if model and not env.get("SHARPEN_LLM_MODEL"):
-        cmd += ["--model", model]
+        flags += ["--model", model]
     elif model:
         _log(
             f"[{name}] SHARPEN_LLM_MODEL={env['SHARPEN_LLM_MODEL']} overrides the "
             f"manifest's provider.model ({model})"
         )
-    # ponytail: no deadline on the review subprocess and no --timeout/--jobs/
-    # --aspects pass-through; oneshot's own defaults bound it at two attempts
+    # ponytail: no deadline on the pass subprocesses and no --timeout/--jobs/
+    # --aspects pass-through; oneshot's own defaults bound each at two attempts
     # times --timeout per aspect (about thirty minutes when a provider hangs).
     # Add a manifest `provider.timeout` the first time an adapter run is
     # reported hanging past that, or a caller has to kill it.
-    code = subprocess.call(cmd, env=env)
-    if code < 0:  # killed by a signal: outside the 0/1/2 contract
-        _log(f"[{name}] oneshot.py was killed by signal {-code}; no review")
-        return 1
-    return code
+    worst = 0
+    for pass_name in passes:
+        code = subprocess.call([sys.executable, oneshot, pass_name, *flags], env=env)
+        if code < 0:  # killed by a signal: outside the 0/1/2 contract
+            _log(f"[{name}] oneshot.py was killed by signal {-code}; no {pass_name}")
+            return 1
+        if code == 2:  # the key, the model or the URL: the next pass fails too
+            return 2
+        if code:
+            _log(f"[{name}] {pass_name} earned nothing (exit {code})")
+        worst = max(worst, code)
+    return worst
 
 
 def main(argv):
     """Run the manifest's gate commands and report PASS/FAIL. Nothing is
     reviewed and nothing is recorded: test, lint and typecheck gates record
-    through `record-gate.py`, and a review only through a grumpy pass (an
-    agent host, or `openai_adapter.py` / `local_llm_adapter.py`)."""
+    through `record-gate.py`, and review and imagine only through a grumpy
+    pass (an agent host, or `openai_adapter.py` / `local_llm_adapter.py`)."""
     resolved = resolve_manifest(argv, "generic-adapter")
     if isinstance(resolved, int):
         return resolved
     manifest, profile = resolved
-    failures = summarize(run_gates(manifest, profile, skip_capabilities=("review",)))
+    failures = summarize(run_gates(manifest, profile, skip_capabilities=ONESHOT_PASSES))
     if failures:
         _log(f"[generic-adapter] {len(failures)} gate command(s) failed")
         return 1
     _log("[generic-adapter] all gate commands passed")
-    if "review" in manifest["capabilities"]:
+    declared = [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
+    if declared:
         _log(
-            "[generic-adapter] `review` is declared but not run here: a review "
-            "comes from a grumpy pass (an agent host, openai_adapter.py or "
+            f"[generic-adapter] {' and '.join(f'`{p}`' for p in declared)} "
+            f"{'is' if len(declared) == 1 else 'are'} declared but not run here: "
+            "a grumpy pass runs them (an agent host, openai_adapter.py or "
             "local_llm_adapter.py)"
         )
     return 0

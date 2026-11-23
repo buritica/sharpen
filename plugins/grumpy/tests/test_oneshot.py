@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.normpath(os.path.join(HERE, "..", "scripts"))
 SCRIPT = os.path.join(SCRIPTS, "oneshot.py")
 REVIEW_MD = os.path.normpath(os.path.join(HERE, "..", "commands", "review.md"))
+IMAGINE_MD = os.path.normpath(os.path.join(HERE, "..", "commands", "imagine.md"))
 MODELS = os.path.normpath(os.path.join(HERE, "..", "models.yaml"))
 sys.path.insert(0, SCRIPTS)
 
@@ -57,6 +58,35 @@ _Fine._
 
 Fix and reship.
 """
+IMAGINE_REPORT = """# Production Imagination: a thing
+
+_Analyzed: whatever the model claims_
+
+_Model: whatever the model claims_
+
+_It will page someone._
+
+## 🚨 Bugs Found (Fix These)
+
+- [HTTP]: swallows the error [app.py:2]
+
+## ⚠️ Serious Concerns (Should Fix)
+
+## 🤔 Questionable Decisions (Worth Discussing)
+
+## Strengths
+
+- cleanup: fine
+
+## Verdict
+
+Fix and reship.
+"""
+IMAGINE_PASS = (
+    "transport:HTTP|API calls: 1|UX: fine|Logs: thin|Metrics: none\n"
+    "CRIT|app.py:2|swallows the error|fact|transport:HTTP\n"
+    "HANDLED|cleanup|the handle is closed"
+)
 
 
 def read(path):
@@ -121,6 +151,81 @@ class ExtractionTest(unittest.TestCase):
         self.assertIn("## Not a heading", oneshot.section(text, "A"))
         self.assertNotIn("z", oneshot.section(text, "A"))
 
+    def test_real_imagine_md_extracts(self):
+        parts = oneshot.load_command("imagine")
+        self.assertIn("paged at 3am", parts["persona"])
+        self.assertEqual(
+            [n for n, _, _ in parts["units"]],
+            ["happy-path", "state", "concurrency", "observability", "docs"],
+        )
+        for name, title, prompt in parts["units"]:
+            with self.subTest(name):
+                self.assertTrue(title.startswith("Agent "))
+                for slot in ("[DIFF_BASE]", "[DIFF_CONTENT]", "SEVERITY|file:line"):
+                    self.assertIn(slot, prompt)
+        self.assertIn("HAPPY PATH", parts["units"][0][2])
+        self.assertIn("DOCUMENTATION COVERAGE", parts["units"][4][2])
+        self.assertEqual(parts["severities"], list(oneshot.SEVERITY_SECTIONS))
+        self.assertEqual(
+            parts["context_labels"],
+            [
+                "cleanup",
+                "concurrency",
+                "docs",
+                "rate-limit",
+                "state-transition",
+                "transport",
+            ],
+        )
+        headings = [h for h, _ in parts["aggregate"]]
+        self.assertEqual(
+            headings,
+            [
+                "## Audit Discipline",
+                "## Step 3: Aggregate and Deliver the Simulation Report",
+                "## Personality Guidelines",
+            ],
+        )
+        step3 = parts["aggregate"][1][1]
+        for anchor in ("# Production Imagination:", "_Analyzed:", "## Verdict"):
+            self.assertIn(anchor, step3)
+        # Nothing from the steps this script does itself leaks into a prompt.
+        sent = "".join(t for _, t in parts["aggregate"])
+        for step in ("Step 4", "Step 5", "Step 6", "receipt.py"):
+            self.assertNotIn(step, sent)
+
+    def test_imagine_drift_fails_loudly(self):
+        text = read(IMAGINE_MD)
+        sixth = text.replace(
+            "## Audit Discipline",
+            "### Agent 6: Cost\n\n```\n[DIFF_BASE] [DIFF_CONTENT] SEVERITY|file:line\n```\n\n## Audit Discipline",
+        )
+        breaks = {
+            "persona rewritten": text.replace("grumpy principal engineer", "reviewer"),
+            "agent renamed": text.replace(
+                "### Agent 3: Concurrency", "### Agent 3: Races"
+            ),
+            "sixth agent": sixth,
+            "placeholder renamed": text.replace("[DIFF_CONTENT]", "[THE_DIFF]", 1),
+            "severity renamed": text.replace(
+                "WARN (will cause", "MAJOR (will cause", 1
+            ),
+            "audit heading renamed": text.replace(
+                "## Audit Discipline", "## Audit rules"
+            ),
+            "analyzed line gone": text.replace("_Analyzed:", "_Scope:"),
+            "settled line renamed": text.replace("Settled findings held back", "Held"),
+        }
+        for name, broken in breaks.items():
+            with self.subTest(name):
+                root = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, root, True)
+                os.makedirs(os.path.join(root, "commands"))
+                with open(os.path.join(root, "commands", "imagine.md"), "w") as f:
+                    f.write(broken)
+                with self.assertRaises(oneshot.ExtractionError):
+                    oneshot.load_command("imagine", plugin_root=root)
+
 
 class ParseTest(unittest.TestCase):
     def test_outside_in_keeps_an_embedded_pipe(self):
@@ -147,6 +252,38 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(oneshot.parse_pass_lines("")[1])
         self.assertTrue(oneshot.parse_pass_lines("  \n")[1])
 
+    def test_imagine_context_and_handled_lines_are_kept(self):
+        labels = oneshot.load_command("imagine")["context_labels"]
+        lines, errored, dropped = oneshot.parse_pass_lines(
+            "transport:Slack|API calls: 2|UX: janky|Logs: none|Metrics: none\n"
+            "cleanup | Cleanup guarantees: never | User-facing error: cryptic\n"
+            "HANDLED|retries|bounded with backoff\n"
+            "WARN|a.py:3|counter race|fact|concurrency\n"
+            "concurrency|too short\n"
+            "transcript:Slack|a|b|c|d",
+            labels,
+        )
+        self.assertEqual(
+            lines,
+            [
+                "transport:Slack|API calls: 2|UX: janky|Logs: none|Metrics: none",
+                "cleanup|Cleanup guarantees: never|User-facing error: cryptic",
+                "HANDLED|retries|bounded with backoff",
+                "WARN|a.py:3|counter race|fact|concurrency",
+            ],
+        )
+        self.assertFalse(errored)
+        self.assertEqual(dropped, 2)
+        # Context lines alone are a pass that ran: nothing to find, not errored.
+        self.assertFalse(
+            oneshot.parse_pass_lines(
+                "docs|User-facing surface changed: none|Documented: yes|Stale docs found: no",
+                labels,
+            )[1]
+        )
+        # Review keeps no context lines: a label there is just a malformed line.
+        self.assertEqual(oneshot.parse_pass_lines("cleanup|a|b")[2], 1)
+
     def test_model_line_is_ours(self):
         out = oneshot.finish_report(
             "```markdown\n" + REPORT + "```", "_Model: m via p_"
@@ -171,6 +308,29 @@ class ParseTest(unittest.TestCase):
         out = oneshot.finish_report(invented, "_Model: m_", "_Base: b, from s_")
         self.assertNotIn("nowhere", out)
         self.assertEqual(out.count("_Base:"), 1)
+
+    def test_imagine_report_keeps_its_own_title_and_stamps(self):
+        out = oneshot.finish_report(
+            IMAGINE_REPORT,
+            "_Model: m_",
+            "_Analyzed: b, from s — HEAD at abc1234_",
+            title="# Production Imagination",
+        )
+        self.assertTrue(
+            out.startswith(
+                "# Production Imagination: a thing\n\n_Model: m_\n"
+                "_Analyzed: b, from s — HEAD at abc1234_\n"
+            )
+        )
+        self.assertEqual(out.count("_Analyzed:"), 1)
+        self.assertNotIn("whatever the model claims", out)
+        # A review report is not an imagine report, and the other way round.
+        with self.assertRaises(ValueError):
+            oneshot.finish_report(
+                REPORT, "_Model: m_", title="# Production Imagination"
+            )
+        with self.assertRaises(ValueError):
+            oneshot.finish_report(IMAGINE_REPORT, "_Model: m_")
 
     def test_models_map(self):
         roles = oneshot.parse_models(read(MODELS))
@@ -250,7 +410,7 @@ class HelperTest(unittest.TestCase):
             ["review", "--model"],
             ["review", "--bogus"],
             ["review", "x"],
-            ["imagine"],
+            ["audit"],
         ):
             with self.subTest(argv), self.assertRaises(ValueError):
                 oneshot._parse_args(argv)
@@ -400,7 +560,7 @@ class _Repo(unittest.TestCase):
         self.git("add", name)
         self.git("commit", "-q", "-m", msg)
 
-    def run_oneshot(self, *args, env=None):
+    def run_oneshot(self, *args, env=None, pass_name="review"):
         full = {
             k: v
             for k, v in os.environ.items()
@@ -415,7 +575,7 @@ class _Repo(unittest.TestCase):
         )
         full.update(env or {})
         return subprocess.run(
-            [sys.executable, SCRIPT, "review", "--worktree", self.repo, *args],
+            [sys.executable, SCRIPT, pass_name, "--worktree", self.repo, *args],
             capture_output=True,
             text=True,
             env=full,
@@ -477,6 +637,104 @@ class RunTest(_Repo):
         # The key reaches the server and nothing else.
         for text in (report, json.dumps(rec), r.stderr, r.stdout):
             self.assertNotIn(KEY, text)
+
+    def test_imagine_writes_report_and_receipt(self):
+        def reply(prompt):
+            if "You are the aggregator" in prompt:
+                return IMAGINE_REPORT
+            return IMAGINE_PASS
+
+        Handler.reply = reply
+        r = self.run_oneshot(
+            "--provider", "compatible", "--model", "local-m", pass_name="imagine"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        head = self.git("rev-parse", "HEAD").strip()
+        report = read(self.artifact("imagine.md"))
+        self.assertIn(
+            "_Model: local-m via compatible (one-shot, no agent; aspects: happy-path, "
+            "state, concurrency, observability, docs)_\n"
+            f"_Analyzed: main, from the default branch — HEAD at {head[:7]}_",
+            report,
+        )
+        rec = json.loads(read(self.artifact("receipts", "imagine.json")))
+        self.assertEqual(rec["head"], head)
+        self.assertEqual(
+            rec["executor"],
+            {
+                "host": "oneshot",
+                "provider": "compatible",
+                "model": "local-m",
+                "aspects": "happy-path,state,concurrency,observability,docs",
+            },
+        )
+        # Its pass log is its own; review's isn't touched.
+        passes = [
+            json.loads(ln)
+            for ln in read(self.artifact("imagine-passes.jsonl")).split("\n")
+            if ln
+        ]
+        self.assertEqual(len(passes), 5)
+        self.assertEqual(passes[0]["lines"], IMAGINE_PASS.split("\n"))
+        self.assertFalse(os.path.exists(self.artifact("review-passes.jsonl")))
+        self.assertRegex(
+            r.stderr,
+            r"pass happy-path: done in \d+s, 1 finding line\(s\), 2 context line\(s\)",
+        )
+        # Five simulation passes built from imagine.md, then one aggregation
+        # that gets Step 3 and every kind of pass line under the agent's name.
+        self.assertEqual(len(Handler.calls), 6)
+        prompts = [c["body"]["messages"][-1]["content"] for c in Handler.calls]
+        for marker in (
+            "HAPPY PATH",
+            "STATE TRANSITIONS",
+            "CONCURRENCY",
+            "OBSERVABILITY",
+            "DOCUMENTATION COVERAGE",
+        ):
+            self.assertTrue(any(marker in p for p in prompts[:5]), marker)
+        agg = prompts[5]
+        self.assertIn("## Step 3: Aggregate and Deliver the Simulation Report", agg)
+        self.assertIn("[happy-path: Agent 1: Happy Path Simulation", agg)
+        self.assertIn("HANDLED|cleanup|the handle is closed", agg)
+        self.assertIn("transport:HTTP|API calls: 1", agg)
+        self.assertIn("`# Production Imagination:`", agg)
+        self.assertNotIn("## Step 4: Aggregate and Deliver the Verdict", agg)
+
+    def test_imagine_aspects_pick_simulation_passes(self):
+        Handler.reply = lambda p: (
+            IMAGINE_REPORT if "You are the aggregator" in p else IMAGINE_PASS
+        )
+        r = self.run_oneshot(
+            "--provider",
+            "compatible",
+            "--model",
+            "m",
+            "--aspects",
+            "docs,state",
+            pass_name="imagine",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(Handler.calls), 3)
+        self.assertIn("aspects: state, docs", read(self.artifact("imagine.md")))
+        r = self.run_oneshot(
+            "--provider",
+            "compatible",
+            "--model",
+            "m",
+            "--aspects",
+            "code",
+            pass_name="imagine",
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("happy-path", r.stderr)
+
+    def test_imagine_dry_run_prints_five_prompts_and_calls_nothing(self):
+        r = self.run_oneshot("--model", "m", "--dry-run", pass_name="imagine")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.count("===== pass: "), 5)
+        self.assertIn("5 pass call(s) + 1 aggregation call", r.stdout)
+        self.assertEqual(Handler.calls, [])
 
     def test_rejected_key_is_redacted_and_a_setup_error(self):
         Handler.status = 401
@@ -790,9 +1048,9 @@ class MainTest(_Repo):
     def test_head_moving_during_the_run_earns_nothing(self):
         real = oneshot.finish_report
 
-        def commit_then_finish(text, line, *stamps):
+        def commit_then_finish(text, line, *stamps, **kw):
             self.commit("late.py", "x = 1\n", "landed mid-run")
-            return real(text, line, *stamps)
+            return real(text, line, *stamps, **kw)
 
         with mock.patch.object(
             oneshot, "finish_report", side_effect=commit_then_finish

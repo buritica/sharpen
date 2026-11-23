@@ -2,9 +2,10 @@
 
 Fixture repos for `scripts/bench-grumpy.py`, which runs grumpy's review and imagine
 passes headlessly on a host, scores the report each pass writes, and compares runs. It
-answers three questions the old single-fixture recall eval couldn't: does a prompt or
-model change lose real findings, does it add noise, and does a review on Codex or pi
-match one on Claude Code.
+answers four questions the old single-fixture recall eval couldn't: does a prompt or
+model change lose real findings, does it add noise, does a review on Codex or pi match
+one on Claude Code, and does the no-agent path (`oneshot.py` against a chat API) match
+any of them.
 
 Local only. Nothing here runs in CI except the scorer's unit tests
 (`scripts/tests/test_bench_grumpy.py`), which call no model.
@@ -16,6 +17,8 @@ python3 scripts/bench-grumpy.py cases                       # list fixtures
 python3 scripts/bench-grumpy.py commands --host codex       # print the exact command lines
 python3 scripts/bench-grumpy.py run --host claude --model claude-opus-5-5 --pass all
 python3 scripts/bench-grumpy.py run --host codex --cases billing-planted --repeat 1
+python3 scripts/bench-grumpy.py run --host oneshot --provider openai          # OPENAI_API_KEY set
+python3 scripts/bench-grumpy.py run --host oneshot --provider compatible --model qwen3-coder  # SHARPEN_LLM_URL set
 python3 scripts/bench-grumpy.py compare .sharpen/bench/<before>/results.json .sharpen/bench/<after>/results.json
 # after changing the scorer or a key: re-score saved reports without a paid rerun
 python3 scripts/bench-grumpy.py rescore .sharpen/bench/<run>/results.json
@@ -26,8 +29,8 @@ Each run copies a case into a temp git repo (`before/` committed on `main`, `aft
 committed on `bench/<case>`), runs the pass there, and reads
 `.sharpen/grumpy/bench/<case>/<pass>.md`, and only there. If the pass printed its report but
 couldn't save it, the printed report is scored and the run is marked `scored-from-output`. The report, the host's output and
-`results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/` (`default` with no
-`--model`, `/` in a model id becomes `_`, and a second run in the same second gets a
+`results.json` land in `.sharpen/bench/<timestamp>-<host>-<model>/` (`<host>-<provider>` on `oneshot`, `default`
+with no `--model`, `/` in a model id becomes `_`, and a second run in the same second gets a
 `-2` suffix), which is gitignored; `--out` picks another root and `--keep` leaves each
 temp repo behind for inspection. `results.json` is rewritten after every run, and
 records the host, model, CLI version, the exact command, and hashes of the pass's prompt
@@ -66,6 +69,7 @@ permission setup as much as on the prompt.
 | Claude Code | `claude -p --plugin-dir plugins/grumpy /grumpy:review`, so the working tree's prompts run, not the installed plugin | yes |
 | Codex | `codex exec --sandbox workspace-write --skip-git-repo-check -`, with the pass's `SKILL.md` sent on stdin | match OpenAI's docs, no live run yet |
 | pi | `pi --print --no-session`, with the pass's `SKILL.md` sent on stdin | match pi's docs, no live run yet |
+| oneshot | `python3 plugins/grumpy/scripts/oneshot.py <pass> --provider <p> --model <m>`, this checkout's script against a chat API, no agent | yes (this repo's own script, run end to end against a stub server in the tests); no real-model run recorded yet |
 
 Codex and pi get the skill body inline because skill discovery differs per host and
 version, and inlining makes the run independent of what is installed. `--invoke inline`
@@ -77,11 +81,27 @@ review or imagine pass needs (git, python3, read-only file tools, file writes sc
 the report folder with `Edit(.sharpen/grumpy/**)`, Agent), not a permission bypass; Codex runs in its
 `workspace-write` sandbox inside the temp repo.
 
+`oneshot` is not an agent: the bench runs grumpy's `scripts/oneshot.py` from this checkout in
+the temp repo, which calls the chat API itself (see grumpy's README, "No agent installed").
+`--provider` picks the API (default `SHARPEN_LLM_PROVIDER`, else `openai`) and is refused on
+the other hosts. `run` stops before the first case when the provider's variable is missing
+(`OPENAI_API_KEY` for `openai`, `SHARPEN_LLM_URL` for `compatible`) or `compatible` has no
+model. `--model` is the model for every pass; with `--provider openai` and no `--model` it is
+`models.yaml`'s `analysis.openai`. `--analysis` pins Claude Code's alias and is refused here.
+The recorded `cli_version` is the grumpy version whose `oneshot.py` ran, and the prompt hash
+covers `oneshot.py` too, since it adds its own preamble and aggregation wording. A pass that
+earns no receipt (an aspect that failed or answered in prose) exits 1 and is a failed
+`exit-nonzero` run, not a scored one. With `--provider openai` the fixture code goes to
+OpenAI; it is planted toy code, but say so if that matters where you run it.
+
 ## Cost
 
 Seven cases, five for review and two for imagine. `run --pass all` with the default
 three repeats is 21 headless sessions per host and model. `--cases` and `--repeat 1` give a
-quick check.
+quick check. On `oneshot` a run is API calls rather than a session: eight per review run
+(seven aspects and an aggregation) and six per imagine run (five simulations and an
+aggregation), each carrying the diff and the changed files, so `--pass all` with three
+repeats is 156 calls.
 
 Before you run it:
 

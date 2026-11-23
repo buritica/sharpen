@@ -3,6 +3,31 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.17.0 — imagine with no agent installed, and a benchmark host for it
+
+`python3 <grumpy>/scripts/oneshot.py imagine` runs the imagine pass against a chat API, the
+way 2.16 ran review: every prompt is built from `commands/imagine.md` at run time (the
+persona, Step 2's five simulation prompts, the severities, the Audit Discipline, Step 3 and
+the Personality Guidelines), one call per simulation (`happy-path`, `state`, `concurrency`,
+`observability`, `docs`, the names `--aspects` takes) plus one aggregation call. It saves
+`.sharpen/grumpy/<branch>/imagine.md` with `_Model:_` and `_Analyzed:_` lines it writes
+itself, keeps the passes' lines in `imagine-passes.jsonl`, and writes the receipt, so
+`record-gate.py --verify imagine` records gate 5. The same rules as review apply: an aspect
+that fails or answers in prose leaves the report stamped `_Incomplete:_` and no receipt.
+
+- Imagine's passes return CONTEXT and `HANDLED` lines as well as findings; the parser keeps
+  them (the labels come from the prompts themselves) so the aggregation can fill the
+  narrative sections and Strengths. A sixth agent, a renamed one or a lost placeholder in
+  `imagine.md` stops the run with exit 2 until `IMAGINE_AGENTS` names it.
+- Imagine's default model on this path is `models.yaml`'s `analysis.openai`, the same as
+  review's: there is no session model to fall back to.
+- The no-agent preamble now asks for one short line, never an empty message, when a pass
+  has nothing to report. An empty answer still counts as a provider that answered nothing.
+- `scripts/bench-grumpy.py` (repo-level) gains `--host oneshot` with `--provider
+  openai|compatible`, so this path is measured on the same fixtures as Claude Code, Codex
+  and pi. No real-model run is recorded yet; `models.yaml`'s `openai` column stays
+  unverified until one is.
+
 ## 2.16.0 — review with no agent installed (`scripts/oneshot.py`)
 
 `python3 <grumpy>/scripts/oneshot.py review` runs the review pass against a chat API instead
@@ -10,8 +35,8 @@ of a coding agent: OpenAI (`--provider openai`, key in `OPENAI_API_KEY`) or any
 OpenAI-compatible server such as Ollama (`--provider compatible`, `SHARPEN_LLM_URL`). It
 builds every prompt from `commands/review.md` at run time, one finding call per aspect plus
 one aggregation call, saves `.sharpen/grumpy/<branch>/review.md` and writes the usual
-receipt, so `record-gate.py --verify review` records gate 3. Simplify, fix and (until the
-next release) imagine still need an agent host. The diff and changed files go to the
+receipt, so `record-gate.py --verify review` records gate 3. Simplify, fix and (until
+2.17) imagine still need an agent host. The diff and changed files go to the
 provider; see the README's "No agent installed".
 
 - It earns the gate only for a complete review: an aspect that fails or answers without

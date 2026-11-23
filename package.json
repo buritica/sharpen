@@ -1,6 +1,6 @@
 {
   "name": "sharpen",
-  "version": "4.22.0",
+  "version": "4.23.0",
   "description": "A local, pre-PR SDLC gate chain, an adversarial code reviewer, and opt-in branch protection — shipped as a pi package. Bundles the sdlc, grumpy, and sdlc-guardrails plugins for `pi install`.",
   "private": true,
   "type": "module",

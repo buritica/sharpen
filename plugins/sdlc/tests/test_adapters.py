@@ -18,10 +18,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.abspath(os.path.join(HERE, "..", "scripts"))
 
 STUB = """import json, os, signal, sys
-with open(os.environ["STUB_OUT"], "w") as f:
-    json.dump({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items()
-               if k.startswith(("SHARPEN_LLM", "OPENAI"))}}, f)
-code = os.environ.get("STUB_EXIT", "0")
+with open(os.environ["STUB_OUT"], "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items()
+               if k.startswith(("SHARPEN_LLM", "OPENAI"))}}) + "\\n")
+code = os.environ.get("STUB_EXIT_" + sys.argv[1], os.environ.get("STUB_EXIT", "0"))
 if code == "kill":
     os.kill(os.getpid(), signal.SIGKILL)
 sys.exit(int(code))
@@ -73,11 +73,72 @@ class AdapterTest(unittest.TestCase):
             env=full,
         )
 
-    def called(self):
+    def calls(self):
         if not os.path.exists(self.out):
-            return None
+            return []
         with open(self.out) as f:
-            return json.load(f)
+            return [json.loads(ln) for ln in f if ln.strip()]
+
+    def called(self):
+        """The first oneshot.py call, or None."""
+        calls = self.calls()
+        return calls[0] if calls else None
+
+    def test_imagine_runs_after_review_when_declared(self):
+        caps = ("test", "lint", "typecheck", "review", "imagine")
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(caps=caps, model="gpt-x"),
+            "--grumpy",
+            self.grumpy,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            [c["argv"] for c in self.calls()],
+            [
+                ["review", "--provider", "openai", "--model", "gpt-x"],
+                ["imagine", "--provider", "openai", "--model", "gpt-x"],
+            ],
+        )
+
+    def test_imagine_alone_needs_no_review(self):
+        caps = ("test", "lint", "typecheck", "imagine")
+        r = self.run_adapter(
+            "local_llm_adapter.py",
+            self.manifest(caps=caps),
+            env={"GRUMPY_PLUGIN_ROOT": self.grumpy},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            [c["argv"] for c in self.calls()],
+            [["imagine", "--provider", "compatible"]],
+        )
+
+    def test_a_review_that_earns_nothing_still_runs_imagine(self):
+        # Separate gates: a failed review must not cost the imagine pass.
+        caps = ("test", "lint", "typecheck", "review", "imagine")
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(caps=caps),
+            "--grumpy",
+            self.grumpy,
+            env={"STUB_EXIT_review": "1"},
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual([c["argv"][0] for c in self.calls()], ["review", "imagine"])
+        self.assertIn("review earned nothing (exit 1)", r.stderr)
+
+    def test_a_setup_error_stops_before_imagine(self):
+        caps = ("test", "lint", "typecheck", "review", "imagine")
+        r = self.run_adapter(
+            "openai_adapter.py",
+            self.manifest(caps=caps),
+            "--grumpy",
+            self.grumpy,
+            env={"STUB_EXIT_review": "2"},
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual([c["argv"][0] for c in self.calls()], ["review"])
 
     def test_openai_hands_review_to_oneshot(self):
         r = self.run_adapter(
@@ -183,7 +244,7 @@ class AdapterTest(unittest.TestCase):
         self.assertIsNone(self.called())
         # Exit 0 with no review is said out loud, so the sdlc README's example
         # manifest (which declares review) and this one can't be confused.
-        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertIn("declares no `review` or `imagine` capability", r.stderr)
         self.assertIn("no receipt was written", r.stderr)
 
     def test_no_review_capability_needs_no_grumpy(self):
@@ -192,7 +253,7 @@ class AdapterTest(unittest.TestCase):
         path = self.manifest(caps=("test", "lint", "typecheck"))
         r = self.run_adapter("local_llm_adapter.py", path)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("declares no `review` capability", r.stderr)
+        self.assertIn("declares no `review` or `imagine` capability", r.stderr)
         self.assertNotIn("grumpy", r.stderr.replace("grumpy's", ""))
 
     def test_trailing_grumpy_flag_is_a_usage_error(self):

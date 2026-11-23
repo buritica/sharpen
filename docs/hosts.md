@@ -57,12 +57,13 @@ names the missing passes, so the choice to install grumpy or re-init as
 
 ## No agent at all
 
-With no coding agent, grumpy's `scripts/oneshot.py review` runs the review pass
-against a chat API: OpenAI, or any OpenAI-compatible server such as Ollama.
-It builds its prompts from `commands/review.md`, saves the report and leaves
-a normal receipt naming the provider and model, so gate 3 records through
-`record-gate.py --verify review` like any host and `--status` says it came
-from `oneshot`. Nothing arms a gate cycle on this path (auto-init is a host
+With no coding agent, grumpy's `scripts/oneshot.py review` and `oneshot.py
+imagine` run those passes against a chat API: OpenAI, or any
+OpenAI-compatible server such as Ollama. They build their prompts from
+`commands/review.md` and `commands/imagine.md`, save the report and leave a
+normal receipt naming the provider and model, so gates 3 and 5 record through
+`record-gate.py --verify review|imagine` like any host and `--status` says
+they came from `oneshot`. Nothing arms a gate cycle on this path (auto-init is a host
 hook), so run `record-gate.py --init small-medium` before the pass, or
 `--verify` has no cycle to record into. It can't earn simplify or fix (they
 edit code), it sees only the diff and the changed files, and with OpenAI the
