@@ -77,8 +77,9 @@ the last skill gate. If a commit lands after it, `enforce-sdlc-gates.py`
 blocks `gh pr create` and names the stale gates. If those commits can't
 change what the review saw, carry the gates instead of re-running them (see
 **Carry** below): a clean rebase, a whitespace-only change, safe docs, or a
-small comment fix with a stated reason, or release bookkeeping (version
-numbers and release notes renumbered while restacking). Anything else means re-init and
+small comment fix or a mechanical conflict resolution with a stated reason,
+or release bookkeeping (version numbers and release notes renumbered while
+restacking). Anything else means re-init and
 re-run the chain on the new HEAD (see **Reset** below). An attested last gate
 (`--attest`) is not judged on staleness.
 
@@ -250,7 +251,8 @@ When the review gates go stale, try a carry before a reset:
 
 ```bash
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH"
-# a comment, docstring or wording fix that touches code or agent-executed files:
+# a comment, docstring or wording fix that touches code or agent-executed files,
+# or a restack whose conflict resolution only kept both sides:
 python3 "${SDLC_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/record-gate.py" --carry --branch "$BRANCH" --reason "<what changed and why it needs no review>"
 ```
 
@@ -263,7 +265,7 @@ review base (below), and carries the gates only for one of these:
 | `format` | Only trailing whitespace and blank lines changed; re-indenting, whitespace inside a line, and renames are not format | nothing |
 | `docs` | Every changed file is on the docs safe list: README, CHANGELOG, CHANGES, HISTORY, LICENSE, NOTICE, COPYING, CONTRIBUTING or AUTHORS by name, a prose file under `docs/`, or a raster image. `UPDATE.md` is not on it: the sdlc commands read it | nothing |
 | `bookkeeping` | The patch differs only in release bookkeeping: the `"version"` field of `.claude-plugin/marketplace.json`, `package.json`, `plugins/*/.claude-plugin/plugin.json` and `plugins/*/package.json`; the render stamp in `AGENTS.md`/`CLAUDE.md`; and `plugins/*/UPDATE.md`/`CHANGELOG.md`, which may renumber and pick up text already on the review base but must keep every reviewed line. Everything else is compared exactly | nothing |
-| `manual` | A comment, docstring or wording fix: at most 30 changed lines (added plus deleted) across all manual carries in the cycle, no new files (moving a file counts as one), no binary files. It may touch code or agent-executed files; the reason is what makes it honest | `--reason` |
+| `manual` | A comment, docstring or wording fix, or a restack that had to resolve a conflict mechanically (two stack layers edited the same line and the resolution kept both): at most 30 changed lines (added plus deleted) across all manual carries in the cycle, no new files (moving a file counts as one), no binary files. On commits added on top, the lines are the diff from the reviewed commit. On a restack, they are the lines where the branch's own +/- lines differ from the reviewed ones, so what the layers below changed elsewhere never counts; a line both layers edited counts on both sides (the branch's - line changed too, so one conflicting line is 4), and renumbered release bookkeeping that would carry on its own is left out. It may touch code or agent-executed files; the reason is what makes it honest | `--reason` |
 
 The docs safe list never covers a file an agent executes: anything under
 `commands/`, `skills/`, `agents/`, `hooks/`, `templates/`, `prompts/`,
@@ -545,7 +547,7 @@ Fix anything you find, then proceed.
 ## Post-gate changes
 
 **Gates are not one-time checkboxes.** A change after the full chain completes (gate 8 recorded) invalidates prior gates. The fixes made by gates 4 and 6 are inside the chain and do not count. After the chain:
-- A clean rebase, a whitespace-only change, safe docs, release bookkeeping, or a small comment fix with a reason: `--carry` (see **Carry**).
+- A clean rebase, a whitespace-only change, safe docs, release bookkeeping, or a small comment fix or mechanical conflict resolution with a reason: `--carry` (see **Carry**).
 - Any other change, including a fix you apply yourself from review or imagine findings outside `/grumpy:fix`: reset and re-run the full chain from gate 1.
 
 **Simplify and the fix gates enforce this mechanically for `tests`/`lint`/`typecheck`, so you don't have to remember to.** `simplify`, `grumpy-fix-post-review`, and `grumpy-fix-post-imagine` all pass by *editing code*, not just reporting on it — see each one's own "no actionable findings, or findings fixed" criterion above. `record_gate()` clears any already-recorded `tests`/`lint`/`typecheck` the instant one of those three records, so a stamp from before the edit can never silently outlive it: `--status` shows them missing again, and `gh pr create` blocks until they're re-run. This closes exactly the gap this section used to only describe in prose — but it covers those three gates specifically, not every case. A manual edit you make yourself outside any gate skill, or a fix you apply from `grumpy-review`/`grumpy-imagine` findings without going through `/grumpy:fix`, is not caught by those three gates: once committed, the staleness check blocks the PR, and it needs a carry (if it qualifies) or the full reset above.
@@ -561,7 +563,7 @@ A cleared gate isn't left looking identical to one that never ran: `--status` ma
 ## Gotchas
 
 - Gate ordering is load-bearing: earlier gates are cheaper to fix. Running typecheck before review wastes time when review finds logic bugs.
-- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1, unless `--carry` accepts the change (clean rebase, whitespace, safe docs, release bookkeeping, or a small comment fix with a reason). This is mandatory, not advisory — `simplify`/`grumpy-fix-post-review`/`grumpy-fix-post-imagine` enforce it mechanically for `tests`/`lint`/`typecheck` (see "Post-gate changes" above), but a manual edit or a fix applied outside `/grumpy:fix` is not covered and still needs the full reset or a carry.
+- Post-gate code changes invalidate ALL prior gates. Reset with `--init` and re-run from gate 1, unless `--carry` accepts the change (clean rebase, whitespace, safe docs, release bookkeeping, or a small comment fix or mechanical conflict resolution with a reason). This is mandatory, not advisory — `simplify`/`grumpy-fix-post-review`/`grumpy-fix-post-imagine` enforce it mechanically for `tests`/`lint`/`typecheck` (see "Post-gate changes" above), but a manual edit or a fix applied outside `/grumpy:fix` is not covered and still needs the full reset or a carry.
 - Don't re-run review to check gate 4's or gate 6's own fixes. The chain already covers them, and the re-run is a new round (see **When the chain is done**).
 - When grumpy is not installed, the self-review fallback is significantly less thorough. Acknowledge this in the PR description.
 - The simplify gate (gate 2) is the most commonly skipped. If no grumpy plugin is available, do the review manually — extract dead branches, remove over-abstraction, consolidate duplication.

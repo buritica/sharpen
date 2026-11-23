@@ -1,48 +1,32 @@
-# sdlc UPDATE — v4.23.0
+# sdlc UPDATE — v4.24.0
 
 `/sdlc:init` reads this file first (step 0) to learn what this version adds and what an
 existing repo may need wired up. If you are installing for the first time, there is
 nothing to migrate — read "What a repo gets" below and skip the rest. Notes for older
 releases move to [`CHANGELOG.md`](CHANGELOG.md) once superseded.
 
-## New in 4.23.0 — the no-agent adapters run imagine too
+## New in 4.24.0 — a restack that resolved a conflict can carry
 
-`openai_adapter.py` and `local_llm_adapter.py` now run grumpy's imagine pass as well as its
-review: when the manifest declares `imagine`, they run grumpy 2.17's `scripts/oneshot.py
-imagine` after the review, which builds its prompts from grumpy's `commands/imagine.md`,
-saves `.sharpen/grumpy/<branch>/imagine.md` and leaves a receipt, so
-`record-gate.py --verify imagine` records gate 5 and `--status` says
-`(via oneshot: <provider> <model>)` next to it.
+`record-gate.py --carry --reason "<what the resolution did>"` now covers a restack that had to
+resolve a conflict (sharpen#65). Before, a rewrite carried only when git replayed it cleanly or
+the branch's own changed lines came out byte-for-byte the same, so two stack layers editing one
+line (a README line that lists the scripts, say) left the upper layer's gates stale after every
+restack, even when the resolution just kept both edits.
 
-- **Only a manifest that declares `imagine` changes.** Without it, the adapters behave as in
-  4.22. With it, they need grumpy 2.17 or newer (an older grumpy's `oneshot.py` refuses
-  `imagine` with exit 2), and check for it up front (below).
-- **A review that earns nothing no longer ends the run.** Review and imagine are separate
-  gates, so the imagine pass still runs, and the adapter exits 1. A setup error (exit 2: a
-  bad key, model or URL) still stops both.
-- **Imagine runs on the same commit as review, before any fix.** Nobody runs `/grumpy:fix`
-  between them on this path, so the imagine report and receipt cover the pre-fix commit.
-  That is deliberate (one run, both reports), not the agent chain's review → fix → imagine
-  order. Once you commit fixes, imagine's gate sits on an older commit than `HEAD`, and
-  while it is the last review gate recorded the PR is blocked as stale; re-run the adapter
-  on the new `HEAD` so both passes see the fixed code.
-- **`generic_adapter.py` skips `imagine` too.** An `adversarial` manifest no longer needs a
-  shell command mapped for `imagine`; the adapter says the pass comes from grumpy.
-- **An existing `x-host-command-map` entry for `imagine` (or `review`) is now ignored.** All
-  three adapters skip it and log a line saying `x-host-command-map` maps it and that command
-  is ignored. `openai_adapter.py` and `local_llm_adapter.py` run grumpy's paid `oneshot.py
-  imagine` in its place, and `generic_adapter.py` runs neither. Remove the entry, or drop
-  `imagine` from the manifest to keep the adapters from calling the API for it.
-- **Declaring `imagine` needs grumpy 2.17.** The adapters check for grumpy's
-  `scripts/oneshot_prompts.py` before any gate command runs, and stop with exit 2 naming
-  grumpy 2.17 when it is missing, rather than paying for the review first.
-- **The benchmark measures this path.** `scripts/bench-grumpy.py run --host oneshot` (in the
-  sharpen repo) runs `oneshot.py` on the same fixtures as Claude Code, Codex and pi. No
-  real-model numbers are recorded yet.
+- **With `--reason`, a rewrite can carry as `manual`.** The lines counted are those where the
+  branch's own +/- lines differ from the reviewed ones (a line diff of the two patches, file by
+  file), against the same 30-line cap that covers every manual carry in the cycle. What the
+  layers below changed elsewhere never counts, and neither does renumbered release bookkeeping
+  that would carry on its own. A line both layers edited counts on both sides of the branch's
+  patch, so one conflicting line spends 4. It still cannot add a file or change a binary one. The reason is recorded and shown in
+  `--status`, and tests, lint and typecheck re-open as after every carry.
+- **Without `--reason`, the refusal names the flag**, as it already did for commits on top.
+- **Nothing to do in an existing repo.** Re-run `/sdlc:init` step 10 to pick up the reworded
+  carry line in the AGENTS.md block, or leave it: the old line is still true.
 
 ## Coming from 4.13 or earlier
 
-Ten releases (4.14 to 4.23) ship together. In upgrade order, what each one asks of an existing repo
+Eleven releases (4.14 to 4.24) ship together. In upgrade order, what each one asks of an existing repo
 (full notes for each are in [`CHANGELOG.md`](CHANGELOG.md)):
 
 - **4.14 — skill gates record from receipts.** Each grumpy pass leaves a receipt naming the
@@ -65,10 +49,12 @@ Ten releases (4.14 to 4.23) ship together. In upgrade order, what each one asks 
 - **4.22 — the no-agent adapters run grumpy's review.** Only a repo that uses
   `openai_adapter.py` or `local_llm_adapter.py` needs anything: grumpy 2.16 reachable
   through `GRUMPY_PLUGIN_ROOT` or `--grumpy`, and the `SHARPEN_LLM_*` variable names.
-- **4.23 — the no-agent adapters run imagine too** (above). Only a manifest that declares
+- **4.23 — the no-agent adapters run imagine too.** Only a manifest that declares
   `imagine` changes, and it needs grumpy 2.17.
+- **4.24 — a restack that resolved a conflict can carry** with `--carry --reason` (above).
+  Nothing to do.
 
-Upgrade grumpy to **2.17** at the same time. sdlc 4.23 with an older grumpy still records
+Upgrade grumpy to **2.17** at the same time. sdlc 4.24 with an older grumpy still records
 gates (the adapters' review and imagine steps excepted), but grumpy 2.15 or newer with an
 sdlc older than 4.21 never does.
 

@@ -511,7 +511,8 @@ def stale_message(branch_data, branch, stale):
     return (
         f"Stale ({len(stale)}): {seen}. A commit landed after the review chain "
         f'on "{branch}". If those commits are a clean rebase, release bookkeeping, whitespace, '
-        "safe docs, or a small comment fix, carry the gates instead: "
+        "safe docs, or a small comment fix or mechanical conflict "
+        "resolution, carry the gates instead: "
         "record-gate.py --carry (it says which applies, and re-opens "
         "tests/lint/typecheck). Otherwise re-run the chain on the current "
         f"HEAD: /sdlc:gate --init {branch_data.get('tier')}, then the passes again."
