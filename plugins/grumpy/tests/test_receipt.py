@@ -21,7 +21,7 @@ def git(repo, *args):
     ).stdout.strip()
 
 
-class ReceiptTest(unittest.TestCase):
+class ReceiptBase(unittest.TestCase):
     def setUp(self):
         self.repo = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.repo, True)
@@ -53,6 +53,8 @@ class ReceiptTest(unittest.TestCase):
         with open(os.path.join(self.dir, "receipts", f"{name}.json")) as f:
             return json.load(f)
 
+
+class ReceiptTest(ReceiptBase):
     def test_stage_writes_its_own_file_and_refreshes_fix_json(self):
         self.report()
         r = self.run_receipt("fix", "--stage", "review")
@@ -106,6 +108,90 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("sdlc 4.17+ records from it", r.stderr)
         self.assertEqual(self.receipt("fix-imagine")["stage"], "imagine")
+
+
+class AutoStageTest(ReceiptBase):
+    """`fix --stage auto`: the first fix after a review is the review stage,
+    even when imagine already ran (the no-agent adapters run both first)."""
+
+    def pass_receipt(self, name):
+        time.sleep(0.01)
+        with open(os.path.join(self.dir, f"{name}.md"), "w") as f:
+            f.write(f"# {name} {time.time()}\n")
+        r = self.run_receipt(name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def auto_fix(self):
+        self.report()
+        r = self.run_receipt("fix", "--stage", "auto")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return self.receipt("fix")["stage"]
+
+    def test_the_agent_chain_order_gets_one_stage_each(self):
+        self.pass_receipt("review")
+        self.assertEqual(self.auto_fix(), "review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_review_and_imagine_before_any_fix(self):
+        # The adapter's order: before 2.18 the first fix stamped imagine (its
+        # receipt was newer), and gate 4 needed --stage review by hand.
+        self.pass_receipt("review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "review")
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_a_new_review_round_starts_over_at_review(self):
+        self.pass_receipt("review")
+        self.auto_fix()
+        self.pass_receipt("imagine")
+        self.auto_fix()
+        self.pass_receipt("review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "review")
+
+    def test_the_adapter_re_run_after_the_first_fix_is_the_imagine_stage(self):
+        # Fixes committed after both passes leave imagine's gate on an older
+        # commit, so the adapter runs both again; gate 4 is already earned.
+        self.pass_receipt("review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "review")
+        self.pass_receipt("review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_a_second_fix_after_imagine_stays_on_imagine(self):
+        self.pass_receipt("review")
+        self.auto_fix()
+        self.pass_receipt("imagine")
+        self.auto_fix()
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_a_repeated_fix_before_imagine_stays_on_review(self):
+        self.pass_receipt("review")
+        self.auto_fix()
+        self.pass_receipt("imagine")
+        self.auto_fix()
+        self.pass_receipt("review")
+        self.auto_fix()
+        self.assertEqual(self.auto_fix(), "review")
+
+    def test_imagine_alone_is_the_imagine_stage(self):
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
+
+    def test_no_review_receipt_says_so_and_writes_review(self):
+        self.report()
+        r = self.run_receipt("fix", "--stage", "auto")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no review or imagine receipt", r.stderr)
+        self.assertEqual(self.receipt("fix")["stage"], "review")
+
+    def test_auto_is_only_for_fix(self):
+        self.pass_receipt("review")
+        with open(os.path.join(self.dir, "imagine.md"), "w") as f:
+            f.write("# imagine\n")
+        self.assertEqual(self.run_receipt("imagine", "--stage", "auto").returncode, 1)
 
 
 if __name__ == "__main__":

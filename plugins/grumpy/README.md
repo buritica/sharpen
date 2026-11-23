@@ -336,8 +336,12 @@ sdlc's base.json, each pass makes its own `gh pr view` call (10 s timeout).
 
 Each fix run writes its own receipt, `receipt.py fix --stage review` (gate 4)
 or `--stage imagine` (gate 6), so with sdlc 4.17+ one run can never earn both fix
-gates. It refreshes `fix.json` too, which an older sdlc reads. The stage comes
-from the review and imagine receipts' timestamps. A stageless `receipt.py fix`
+gates. It refreshes `fix.json` too, which an older sdlc reads. `/grumpy:fix`
+passes `--stage auto`, which reads the stage from the receipts already written:
+the first fix after a review is the review stage, and the next one, once imagine
+has run, the imagine stage. Before 2.18 the stage was whichever of review and
+imagine ran last, so a run where both ran before any fix (the no-agent path
+below) stamped imagine first and gate 4 needed `--stage review` by hand. A stageless `receipt.py fix`
 removes earlier stage receipts so the fresh `fix.json` is the one read.
 
 ## Keeping review loops short (sharpen#37)
@@ -443,6 +447,10 @@ installed plugin's cache folder. Arm a gate cycle first if you want the gate
 nothing to record into (the same goes for `--verify imagine`). Commit first: the pass
 reviews `HEAD`, refuses a dirty tree, and refuses a detached HEAD or the default branch
 before it calls anything.
+
+When both passes ran before any fix, run `/grumpy:fix` once for the fixes (it reads both
+reports and earns gate 4), then once more after `imagine` for gate 6: each fix run earns one
+fix gate, and the stage is picked for you.
 
 `--provider` defaults to `SHARPEN_LLM_PROVIDER`, else `openai`: **a bare `oneshot.py review`
 (or `imagine`) sends your code to OpenAI.** Set `SHARPEN_LLM_PROVIDER=compatible` on a machine that should

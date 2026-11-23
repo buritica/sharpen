@@ -3,6 +3,24 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.18.0 — the fix pass picks its own stage
+
+`/grumpy:fix` now writes its receipt with `receipt.py fix --stage auto`, which reads the stage
+from the receipts already on disk: the first fix after a review is the review stage (gate 4),
+and the next one, once imagine has run, the imagine stage (gate 6). After an imagine-stage
+fix, a newer review receipt starts a new round at review; otherwise a repeated fix stays on
+imagine.
+
+Before, the stage was whichever of review and imagine ran last. The no-agent adapters
+(sdlc 4.23's `openai_adapter.py` and `local_llm_adapter.py`) run both before any fix, so the
+first fix stamped imagine and gate 4 could only record from a hand-run
+`receipt.py fix --stage review`. Now the first fix run earns gate 4 and the next one gate 6.
+The agent chain's order (review, fix, imagine, fix) gets the same stages as before.
+
+- An explicit `receipt.py fix --stage review|imagine` still works as before.
+- The receipt line on stdout names the stage it wrote.
+- Nothing to migrate.
+
 ## 2.17.0 — imagine with no agent installed, and a benchmark host for it
 
 `python3 <grumpy>/scripts/oneshot.py imagine` runs the imagine pass against a chat API, the
