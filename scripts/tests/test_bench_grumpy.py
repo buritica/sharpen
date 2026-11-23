@@ -553,8 +553,26 @@ class SummaryCompareTest(unittest.TestCase):
         self.assertEqual(
             bench.compare(base, cand)[0], ["a/review: tokens 1,000 -> 3,000"]
         )
-        # An older results.json has neither: nothing to compare, no problem.
-        self.assertEqual(bench.compare(_results({"a/review": {}}), cand)[0], [])
+        # An older results.json has neither: no problem, but a note says the
+        # spend check didn't run, so "no regressions" can't hide it.
+        problems, notes = bench.compare(_results({"a/review": {}}), cand)
+        self.assertEqual(problems, [])
+        self.assertIn(
+            "a/review: tokens not compared: the baseline recorded none", notes
+        )
+
+    def test_a_skipped_spend_check_says_so(self):
+        base = _results({"a/review": {"cost_usd": 0.4, "tokens": 1000}})
+        lost = _results({"a/review": {"cost_usd": None, "tokens": None}})
+        problems, notes = bench.compare(base, lost)
+        self.assertEqual(problems, [])
+        self.assertIn("a/review: cost not compared: the candidate recorded none", notes)
+        zero = _results({"a/review": {"cost_usd": 0.0}})
+        _, notes = bench.compare(zero, base)
+        self.assertIn("a/review: cost not compared: the baseline recorded 0", notes)
+        # Neither side reports spend (Codex, pi): nothing to say.
+        _, notes = bench.compare(_results({"a/review": {}}), _results({"a/review": {}}))
+        self.assertFalse(any("not compared" in n for n in notes))
 
     def test_tokens_do_not_compare_across_hosts(self):
         base = dict(_results({"a/review": {"tokens": 1000}}), host="oneshot")
@@ -1176,6 +1194,32 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(r["status"], "cli-missing")
         self.assertIn("not found on PATH", r["error"])
 
+    def test_ctrl_c_kills_the_host_group(self):
+        hang = [sys.executable, "-c", "import time; time.sleep(30)"]
+        killed = []
+        real_kill = bench._kill_group
+
+        def kill(proc):
+            killed.append(proc.pid)
+            real_kill(proc)
+
+        real_communicate = subprocess.Popen.communicate
+
+        def interrupt(proc, *a, **k):
+            if proc.args == hang:  # the host, not build_repo's git calls
+                raise KeyboardInterrupt
+            return real_communicate(proc, *a, **k)
+
+        with (
+            mock.patch.object(bench, "_kill_group", kill),
+            mock.patch.object(subprocess.Popen, "communicate", interrupt),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                bench.run_one(
+                    "clean-refactor", "review", hang, None, self.tmp, "c", 60, False
+                )
+        self.assertEqual(len(killed), 1)
+
     def test_dropped_bullets_make_a_run_unparsed(self):
         report = "# Code Review\\n\\n## Serious Concerns\\n\\n    - indented [a.py:1]"
         out = [sys.executable, "-c", f"print('{report}')"]
@@ -1462,6 +1506,20 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(fan["modes"], {"fanout": 1})
         labels = [r["label"] for r in results["runs"]]
         self.assertIn("billing-planted-review-opus_fanout-1", labels)
+        # The model dimension is the model review's passes run on, fanned out too.
+        self.assertEqual(
+            {r["variant"]: r["analysis"] for r in results["runs"]},
+            {
+                "sonnet/inline": "sonnet",
+                "sonnet/fanout": "sonnet",
+                "opus/inline": "opus",
+                "opus/fanout": "opus",
+            },
+        )
+        self.assertEqual(
+            {r["pinned_mode"] for r in results["runs"]}, {"inline", "fanout"}
+        )
+        self.assertEqual(fan["mode_missed"], 0)
         with open(self.log) as f:
             argv = f.read()
         self.assertIn("--model opus", argv)
@@ -1542,18 +1600,75 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(bench.output_text("claude", "plain"), "plain")
         self.assertIsNone(bench.observed_mode("claude", None))
 
-    def test_oneshot_sums_the_tokens_it_logs(self):
+    def test_oneshot_sums_the_tokens_its_passes_log(self):
         err = (
             "[grumpy oneshot] pass code: done in 3s, 2 finding line(s), 1200 tokens\n"
-            "[grumpy oneshot] pass tests: done in 4s, 0 finding line(s)\n"
-            "[grumpy oneshot] aggregate: done in 2s, 300 tokens\n"
+            "[grumpy oneshot] pass design: done in 3s, 1 finding line(s), 300 tokens\n"
             "someone else: 99 tokens\n"
         )
         u = bench.parse_usage("oneshot", "", err)
         self.assertEqual(u["tokens"], 1500)
+        self.assertEqual(u["turns"], 2)
+        self.assertFalse(u["partial"])
         self.assertIsNone(u["cost_usd"])
         self.assertEqual(bench.observed_mode("oneshot", u), "oneshot")
         self.assertIsNone(bench.parse_usage("oneshot", "", "no counts"))
+
+    def test_oneshot_error_bodies_are_not_tokens(self):
+        # A provider error quoting a limit is not spend, and a pass that
+        # failed or reported no usage makes the run's total partial.
+        err = (
+            "[grumpy oneshot] pass code: done in 3s, 2 finding line(s), 1200 tokens\n"
+            "[grumpy oneshot] pass tests: done in 4s, 0 finding line(s)\n"
+            "[grumpy oneshot] pass design failed: HTTP 400: maximum context length is 128000 tokens\n"
+            "[grumpy oneshot] Stop: 429: limit 30000 tokens per minute\n"
+        )
+        u = bench.parse_usage("oneshot", "", err)
+        self.assertEqual(u["tokens"], 1200)
+        self.assertEqual(u["turns"], 1)
+        self.assertTrue(u["partial"])
+
+    def test_missing_claude_usage_is_none_not_zero(self):
+        data = json.loads(self.CLAUDE)
+        del data["modelUsage"]
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(u["tokens"])
+        self.assertIsNone(u["input_tokens"])
+        self.assertTrue(u["partial"])
+        self.assertEqual(u["cost_usd"], 5.3)
+        # A null or renamed inner key neither raises nor reads as 0.
+        data = json.loads(self.CLAUDE)
+        data["modelUsage"]["claude-opus-5-5"]["inputTokens"] = None
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(u["tokens"])
+        self.assertIsNone(u["models"]["claude-opus-5-5"]["tokens"])
+        self.assertEqual(
+            u["models"]["claude-sonnet-5-5"]["tokens"], 46 + 13688 + 1368605 + 60334
+        )
+
+    def test_the_report_survives_a_dropped_usage_key(self):
+        data = json.loads(self.CLAUDE)
+        del data["usage"]
+        del data["subagent_stats"]
+        self.assertEqual(bench.output_text("claude", json.dumps(data)), "the report")
+        u = bench.parse_usage("claude", json.dumps(data))
+        self.assertIsNone(bench.observed_mode("claude", u))
+
+    def test_unknown_mode_and_partial_usage_are_noted(self):
+        notes = bench._row_notes(
+            {
+                "runs": 2,
+                "unpriced": 2,
+                "partial_usage": 1,
+                "mode_unknown": 1,
+                "mode_missed": 1,
+            },
+            "claude",
+        )
+        self.assertEqual(len(notes), 4)
+        self.assertIn("though claude reports it", notes[0])
+        # Codex and pi record no usage by design: no note.
+        self.assertEqual(bench._row_notes({"runs": 2, "unpriced": 2}, "codex"), [])
 
     def test_codex_and_pi_report_nothing(self):
         self.assertIsNone(bench.parse_usage("codex", self.CLAUDE))
@@ -1579,10 +1694,41 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(argv[:3], ["env", "X=1", "claude"])
 
     def test_a_repeated_model_or_mode_runs_once(self):
-        args = argparse.Namespace(model="opus, opus,sonnet", mode="inline,inline")
+        args = argparse.Namespace(
+            model="opus, opus,sonnet", mode="inline,inline", host="claude"
+        )
         self.assertEqual(
             bench._variants(args), [("opus", "inline"), ("sonnet", "inline")]
         )
+        stamp = "S"
+        self.assertEqual(
+            bench._run_id(args, None, stamp), "S-claude-opus+sonnet-inline"
+        )
+
+    def test_variants_that_share_a_log_name_are_refused(self):
+        for model in ("claude-opus,claude_opus", "Opus,opus", "x/y,x_y"):
+            with self.subTest(model), self.assertRaises(ValueError):
+                bench._variants(argparse.Namespace(model=model, mode="auto,fanout"))
+
+    def test_a_cmd_without_model_refuses_a_model_list(self):
+        args = argparse.Namespace(model="a,b", mode=None, cmd="claude -p {prompt}")
+        with self.assertRaises(ValueError):
+            bench._variants(args)
+        args.cmd = "claude -p --model {model} {prompt}"
+        self.assertEqual(len(bench._variants(args)), 2)
+
+    def test_analysis_follows_a_claude_alias(self):
+        ns = argparse.Namespace
+        self.assertEqual(
+            bench._analysis_pin(ns(host="claude", analysis=None), "sonnet"), "sonnet"
+        )
+        self.assertEqual(
+            bench._analysis_pin(ns(host="claude", analysis="opus"), "sonnet"), "opus"
+        )
+        self.assertIsNone(
+            bench._analysis_pin(ns(host="claude", analysis=None), "claude-sonnet-5-5")
+        )
+        self.assertIsNone(bench._analysis_pin(ns(host="codex", analysis=None), "opus"))
 
 
 class FindReportTest(unittest.TestCase):

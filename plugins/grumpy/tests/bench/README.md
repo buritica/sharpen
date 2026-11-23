@@ -37,9 +37,13 @@ with no `--model`, `/` in a model id becomes `_`, several models are joined with
 pinned mode is appended, and a second run in the same second gets a
 `-2` suffix), which is gitignored; `--out` picks another root and `--keep` leaves each
 temp repo behind for inspection. `results.json` is rewritten after every run, and
-records the host, model, CLI version, the exact command, and hashes of the pass's prompt
+records the host, the `--model` value as given (a comma-separated string in an eval),
+`mode`, `variants` (each `model/mode` an eval ran), `analysis`, the CLI version, the exact
+command per pass (keyed `<pass> @model/mode` in an eval), and hashes of the pass's prompt
 files and of each case key, so two runs can be told apart later. Each run's entry says
-how every finding was classified (`assigned`).
+how every finding was classified (`assigned`), what it spent (`usage`), how its passes
+ran (`observed_mode`), the `analysis` alias it pinned and the `pinned_mode` it asked for,
+if any.
 
 ## Cost, time and how the passes ran
 
@@ -47,8 +51,14 @@ Every run records what it spent, as far as the host says. Claude Code runs with
 `--output-format json`, so a run's `usage` has its cost in dollars (list price), its
 tokens (input, cache reads, cache writes and output, also split per model, so the session
 and review's opus subagents show apart), its turns and how many subagents it started.
-`oneshot` records the total tokens each API call reports, and no cost. Codex and pi print
-no usage in the mode the bench runs them, so their runs record none. A Claude Code run
+`oneshot` records the total tokens each pass's call reports (read from its `pass <name>:
+done` lines only, so a quoted provider error is never counted), and no cost. Its
+aggregation call is not counted yet: `oneshot.py` logs no usage for it, so oneshot token
+totals run low by that one call. A run where only some calls reported tokens is marked
+`partial` and noted under the table. Codex and pi print no usage in the mode the bench
+runs them, so their runs record none. A count Claude Code should have reported and
+didn't (no `modelUsage`, a renamed or null key) is recorded as missing, never as 0, and
+a Claude or oneshot row where no run recorded usage gets a note. A Claude Code run
 that times out records none either: its JSON prints only when the run ends, and the
 timeout kills it first (a `oneshot` timeout keeps the tokens it logged). The means leave
 such runs out, so the summary counts them as `unpriced` and prints a note under the
@@ -59,9 +69,14 @@ table when a row's cost is the mean of only some of its runs. Every run also rec
 itself), `fanout` (it started subagents) or `oneshot`. This matters because headless
 Claude Code usually runs the passes inline, while an interactive session usually fans
 out, and on a real-size diff fan-out cost 4 to 11 times as much in the runs that
-prompted this (2026-11-23). `--mode` pins it: `inline` or `fanout` appends a line
+prompted this (2026-11-23). `--mode` asks for one: `inline` or `fanout` appends a line
 saying so to Claude Code's system prompt, and `auto` (the default) leaves it to the
-host. Only Claude Code takes a pinned mode; the others have one way to run.
+host. The line is a request, not a guarantee, so the summary notes runs whose
+`observed_mode` differs from the mode they asked for; their row's label is wrong for
+them. On Claude Code `observed_mode` comes from `subagent_stats.spawned` in the JSON
+result and nothing else; a run that recorded usage without that key gets a note, and
+`modes` counts only runs that scored (a run that died on its first call spawned nothing
+either way). Only Claude Code takes a pinned mode; the others have one way to run.
 
 `--model` and `--mode` each take a comma-separated list, and `run` then tries every model
 with every mode: an eval in one `results.json`. Each combination summarizes on its own
@@ -87,7 +102,10 @@ against the baseline:
 - drops precision by more than 10 points (`--precision-drop`, default 0.1);
 - spends more than 50% more (`--cost-rise`, default 0.5): mean cost where both runs
   recorded one, otherwise mean tokens, but only when both ran on the same host (hosts
-  count tokens differently; a cross-host compare says so in a note);
+  count tokens differently; a cross-host compare says so in a note). When one side
+  recorded spend and the other didn't (an older baseline, a candidate whose runs all
+  timed out or lost their usage) or the baseline recorded 0, the check can't run, and a
+  note says so instead of passing quietly;
 - has a higher share of failed runs or of runs that re-raised a settled finding;
 - or is missing a case/pass the baseline has, or has no runs at all.
 
@@ -100,11 +118,16 @@ Rows match by name. A plain row (`case/pass`) also matches the other side's
 plain baseline compares with a one-variant result, and a note says which rows were
 paired. Against an eval with several variants per case/pass nothing is guessed: every
 plain row reads as missing, so run the baseline as the same `--model`/`--mode` eval.
-A model or mode listed twice runs once.
+A model or mode listed twice runs once. Two variants whose labels fold to the same log
+name (`claude-opus` and `claude_opus`, or `Opus` and `opus` on a case-insensitive disk)
+are refused before the first run.
 
 `--mode inline` or `--mode fanout` is refused together with `--cmd`: the bench can't tell
 where in a custom command line the system-prompt flag belongs, so put
-`--append-system-prompt` in the template yourself.
+`--append-system-prompt` in the template yourself. A `--cmd` for Claude Code needs
+`--output-format json` too, or its runs record no usage and no `observed_mode`; and with
+several models in `--model` the template must contain `{model}`, or `run` refuses it
+rather than paying for identical runs under different labels.
 
 A run fails when it wrote no report, timed out (even with a half-written report), raised
 an error, or produced a report with none of the severity headings the scorer reads.
@@ -116,7 +139,7 @@ permission setup as much as on the prompt.
 
 | Host | How the pass is invoked | Flags verified |
 | --- | --- | --- |
-| Claude Code | `claude -p --plugin-dir plugins/grumpy /grumpy:review`, so the working tree's prompts run, not the installed plugin | yes |
+| Claude Code | `claude [--append-system-prompt <mode hint>] -p --plugin-dir plugins/grumpy … --output-format json [--model M] /grumpy:review`, so the working tree's prompts run, not the installed plugin. Its `<label>.log` holds the one JSON result line, with the report in `result` | yes |
 | Codex | `codex exec --sandbox workspace-write --skip-git-repo-check -`, with the pass's `SKILL.md` sent on stdin | match OpenAI's docs, no live run yet |
 | pi | `pi --print --no-session`, with the pass's `SKILL.md` sent on stdin | match pi's docs, no live run yet |
 | oneshot | `python3 plugins/grumpy/scripts/oneshot.py <pass> --provider <p> --model <m>`, this checkout's script against a chat API, no agent | yes (this repo's own script, run end to end against a stub server in the tests); no real-model run recorded yet |
@@ -172,11 +195,14 @@ Before you run it:
   and settings run in the bench session too. Bench where grumpy isn't installed, or
   compare only runs made on the same machine with the same installs.
 - `--invoke native` exists only for Claude Code; Codex and pi always run inline.
-- **On Claude Code, `--model` sets the session, not review's passes.** Review
-  dispatches its passes on `models.yaml`'s `analysis` role. To compare models for
-  review, pin it: `run --host claude --pass review --analysis sonnet`, then
-  `--analysis opus`. The run records the pin as `analysis` in `results.json`. Imagine
-  runs on the session's model, so `--model` is what changes it.
+- **On Claude Code, `--model` is the model review's passes run on, in every mode.**
+  Inline, the session runs the passes itself, so they run on `--model`. Fanned out,
+  review dispatches them on `models.yaml`'s `analysis` role, so when `--model` is a
+  Claude Code alias (`haiku`, `sonnet`, `opus`) the bench pins `analysis` to it too, and
+  `@sonnet/fanout` means sonnet passes. With a full model id nothing is pinned and
+  fanned-out passes follow `models.yaml`. `--analysis` overrides the pin for every run
+  (to compare a session model against a fixed pass model, say). Each run records the
+  alias it pinned as `analysis`. Imagine runs its passes on the session's model.
 - The fixture code is excluded from ruff (`pyproject.toml`) and from `/grumpy:simplify`
   (`.sharpen/simplify.json`), because it plants bugs on purpose. Check a new case by
   running the unit tests, which validate every key against its files.
@@ -193,9 +219,10 @@ Before you run it:
 | `imagine-concurrency` | imagine | A parallel bulk refresh: rate limit exceeded, retries with no backoff, a counter race, failures that vanish. |
 | `imagine-first-deploy` | imagine | A NOT NULL column with no default, no down migration, code that breaks if it deploys before the migration, a crash on a missing account. |
 | `replay-declared-commands` | both | A real sharpen layer (PR 57's first commit, a 16 KB diff): the gate starts running the commands AGENTS.md declares. Planted: the six issues that layer's own review and imagine found and its next two commits fixed (gate.md's root and monorepo handling, silent fallbacks in the parser, a sibling import). |
-| `replay-oneshot-imagine` | both | A real sharpen layer (PR 71 as its review saw it, a 120 KB diff): the no-agent path runs imagine. Planted: the ten issues its review and imagine found and its next two commits fixed. The acceptable list holds real issues later runs found that the layer didn't fix. |
+| `replay-oneshot-imagine` | both | A real sharpen layer (PR 71 as its review saw it, a 120 KB diff): the no-agent path runs imagine. Planted: the ten issues its review and imagine found and its next two commits fixed. |
 
-The replays are scored against the union of what review and imagine found, so a pass's
+Both replays' acceptable lists hold real issues later runs found that the layer didn't
+fix. The replays are scored against the union of what review and imagine found, so a pass's
 recall there is lower than on a toy case by design: compare runs against each other, not
 against 100%. They carry only the files the layer changed (and, for the first, the module
 its new script imports), minus version bumps, changelogs and generated SKILL.md files,

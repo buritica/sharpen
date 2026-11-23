@@ -3,8 +3,10 @@
 
 Claude Code, Codex and pi run grumpy's pass as an agent; `oneshot` runs
 grumpy's own scripts/oneshot.py against a chat API with no agent. Building
-the command line, hashing the prompt files and naming what ran live here;
-running and scoring stay in bench-grumpy.py. Pure stdlib.
+the command line (including the system-prompt hint a pinned --mode adds),
+hashing the prompt files, naming what ran, and reading what a run spent and
+how its passes ran from the host's output live here; running and scoring
+stay in bench-grumpy.py. Pure stdlib.
 """
 
 import hashlib
@@ -273,12 +275,38 @@ def _claude_json(stdout):
                 data = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(data, dict) and "usage" in data:
+            # Any of the keys a result object carries, so losing one of them
+            # (say `usage`) doesn't also lose the report text.
+            if isinstance(data, dict) and _RESULT_KEYS & set(data):
                 return data
     return None
 
 
-_ONESHOT_TOKENS = re.compile(r"^\[grumpy oneshot\] .*?\b(\d+) tokens\b", re.M)
+_RESULT_KEYS = {"result", "usage", "modelUsage", "total_cost_usd", "num_turns"}
+# Only a pass's own completion line counts: Stop, `failed:` and retry lines can
+# quote a provider's error body ("maximum context length is 128000 tokens").
+# oneshot.py logs no usage for its aggregation call, so that call isn't counted.
+_ONESHOT_TOKENS = re.compile(
+    r"^\[grumpy oneshot\] pass \S+: done in [^\n]*?\b(\d+) tokens\b", re.M
+)
+_ONESHOT_DONE = re.compile(r"^\[grumpy oneshot\] pass \S+: done in ", re.M)
+_ONESHOT_FAILED = re.compile(r"^\[grumpy oneshot\] pass \S+ failed:", re.M)
+_CLAUDE_TOKEN_KEYS = (
+    ("input_tokens", "inputTokens"),
+    ("cache_read_tokens", "cacheReadInputTokens"),
+    ("cache_write_tokens", "cacheCreationInputTokens"),
+    ("output_tokens", "outputTokens"),
+)
+# Hosts whose runs are expected to record usage; a row from one of them with
+# none is a broken measurement, not a host that can't say.
+USAGE_HOSTS = {"claude", "oneshot"}
+# Claude Code's per-subagent aliases: a model the analysis role can be pinned to.
+CLAUDE_ALIASES = ("haiku", "sonnet", "opus")
+
+
+def _count(v):
+    """A token count, or None for a missing, null or non-numeric value."""
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def parse_usage(host, stdout, stderr=""):
@@ -290,46 +318,51 @@ def parse_usage(host, stdout, stderr=""):
     its JSON result (`models` maps each model to its tokens and cost, so the
     session and its subagents show apart). oneshot logs each call's total
     tokens on stderr and no cost. Codex and pi print no usage in the mode the
-    bench runs them, so they record None."""
+    bench runs them, so they record None.
+
+    A count the host should have reported and didn't is None, never 0: a
+    missing `modelUsage` or a renamed key must not read as a free run.
+    `partial` is True when only some of the calls reported tokens."""
     if host == "claude":
         data = _claude_json(stdout)
         if data is None:
             return None
         models = {}
-        totals = dict.fromkeys(
-            (
-                "input_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
-                "output_tokens",
-            ),
-            0,
-        )
-        for name, u in (data.get("modelUsage") or {}).items():
-            row = {
-                "input_tokens": u.get("inputTokens", 0),
-                "cache_read_tokens": u.get("cacheReadInputTokens", 0),
-                "cache_write_tokens": u.get("cacheCreationInputTokens", 0),
-                "output_tokens": u.get("outputTokens", 0),
-            }
-            for k, v in row.items():
-                totals[k] += v
-            row["tokens"] = sum(row.values())
+        totals = dict.fromkeys((k for k, _ in _CLAUDE_TOKEN_KEYS), 0)
+        model_usage = data.get("modelUsage")
+        complete = isinstance(model_usage, dict) and bool(model_usage)
+        for name, u in (model_usage if complete else {}).items():
+            u = u if isinstance(u, dict) else {}
+            row = {k: _count(u.get(src)) for k, src in _CLAUDE_TOKEN_KEYS}
+            if None in row.values():
+                complete = False
+                row["tokens"] = None
+            else:
+                for k, v in row.items():
+                    totals[k] += v
+                row["tokens"] = sum(row.values())
             row["cost_usd"] = u.get("costUSD")
             models[name] = row
-        stats = data.get("subagent_stats") or {}
+        if not complete:
+            totals = dict.fromkeys(totals)
+        stats = data.get("subagent_stats")
+        spawned = stats.get("spawned") if isinstance(stats, dict) else None
         return {
             "cost_usd": data.get("total_cost_usd"),
-            "tokens": sum(totals.values()),
+            "tokens": sum(totals.values()) if complete else None,
             **totals,
             "turns": data.get("num_turns"),
-            "subagents": stats.get("spawned"),
+            "subagents": _count(spawned),
             "models": models,
+            "partial": not complete,
         }
     if host == "oneshot":
         counts = [int(n) for n in _ONESHOT_TOKENS.findall(stderr)]
         if not counts:
             return None
+        calls = len(_ONESHOT_DONE.findall(stderr)) + len(
+            _ONESHOT_FAILED.findall(stderr)
+        )
         return {
             "cost_usd": None,
             "tokens": sum(counts),
@@ -340,13 +373,18 @@ def parse_usage(host, stdout, stderr=""):
             "turns": len(counts),
             "subagents": None,
             "models": {},
+            # A failed pass, or a provider that omitted usage on some calls.
+            "partial": calls > len(counts),
         }
     return None
 
 
 def observed_mode(host, usage):
     """How the pass actually ran: `fanout` when Claude Code spawned
-    subagents, `inline` when it spawned none, None where the host can't say."""
+    subagents, `inline` when it spawned none, None where the host can't say.
+    On Claude Code this reads `subagent_stats.spawned` from the JSON result
+    and nothing else; when that key is absent the mode is None, and the
+    summary says so under the table."""
     if host == "oneshot":
         return "oneshot"
     if not usage or usage.get("subagents") is None:

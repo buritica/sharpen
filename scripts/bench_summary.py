@@ -17,8 +17,9 @@ def _mean(values):
 
 
 def summarize(runs):
-    """Aggregate per (case, pass) over repeats. Runs without a score (no report,
-    a timeout, an unparseable report, an error) count as failures.
+    """Aggregate per row over repeats: one row per (case, pass), and per
+    model/mode variant in a matrix run. Runs without a score (no report, a
+    timeout, an unparseable report, an error) count as failures.
 
     `.get` defaults read results.json files from before a key existed, so an
     older baseline still compares."""
@@ -28,6 +29,9 @@ def summarize(runs):
     out = {}
     for name, rs in sorted(groups.items()):
         scored = [r["score"] for r in rs if r.get("score")]
+        # How the passes ran, from runs that finished: a fanout-pinned run that
+        # died on its first call spawned nothing and would read as inline.
+        finished = [r for r in rs if r.get("score")]
         out[name] = {
             "runs": len(rs),
             "failed_runs": len(rs) - len(scored),
@@ -37,11 +41,27 @@ def summarize(runs):
             ),
             "statuses": _counts(r.get("status", "?") for r in rs),
             "duration_s": _mean(r["duration_s"] for r in rs if r.get("duration_s")),
+            # ponytail: timed-out runs record no usage and drop out of these means, biasing slow fanout low; estimate their spend when an eval row shows unpriced > 0
             "cost_usd": _usage_mean(rs, "cost_usd"),
             "tokens": _usage_mean(rs, "tokens"),
             "subagents": _usage_mean(rs, "subagents"),
             "unpriced": sum(1 for r in rs if not _has_usage(r)),
-            "modes": _counts(r["observed_mode"] for r in rs if r.get("observed_mode")),
+            "partial_usage": sum(
+                1 for r in rs if (r.get("usage") or {}).get("partial")
+            ),
+            "modes": _counts(
+                r["observed_mode"] for r in finished if r.get("observed_mode")
+            ),
+            "mode_unknown": sum(
+                1 for r in finished if r.get("usage") and not r.get("observed_mode")
+            ),
+            "mode_missed": sum(
+                1
+                for r in finished
+                if r.get("pinned_mode")
+                and r.get("observed_mode")
+                and r["observed_mode"] != r["pinned_mode"]
+            ),
             "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
             "held_back_failures": sum(1 for s in scored if s.get("present")),
         }
@@ -65,6 +85,7 @@ def _score_stats(scored):
     }
 
 
+# ponytail: failed runs' spend is averaged in, so a run cut short by a usage cap reads cheap; average scored runs only when an eval row with failed_runs > 0 shows a lower cost than its clean repeats
 def _usage_mean(rs, field):
     """Mean of one usage field over the runs that recorded it."""
     values = [(r.get("usage") or {}).get(field) for r in rs]
@@ -164,13 +185,16 @@ def compare(
                 f" (baseline {bs.get('held_back_failures', 0)}/{bs['runs']})"
             )
         problems += [f"{name}: {p}" for p in _quality_problems(bs, cs, limits)]
-        spend = _spend_change(bs, cs, cost_rise, same_host)
+        spend, why_not = _spend_change(bs, cs, cost_rise, same_host)
         if spend:
             problems.append(f"{name}: {spend}")
+        if why_not:
+            notes.append(f"{name}: {why_not}")
         notes += [f"{name}: {n}" for n in _run_notes(bs, cs)]
     return problems, notes
 
 
+# ponytail: pairs whatever single variant finished, even on another model; check the variant's model against the plain side's when a pairing note names a model the baseline didn't run
 def _match_variant_rows(b, c):
     """Pair a plain `case/pass` row on one side with the other side's
     `case/pass @model/mode` row when that is the only row it has for the
@@ -246,15 +270,27 @@ def _modes(s):
 
 
 def _spend_change(bs, cs, limit, same_host=True):
-    """'cost $0.40 -> $1.10' when the candidate spends more than `limit`
-    above the baseline: cost where both have it, else tokens (same host
-    only). None when it doesn't, or when there is nothing to compare."""
+    """(problem, note). The problem is 'cost $0.40 -> $1.10' when the
+    candidate spends more than `limit` above the baseline: cost where both
+    have it, else tokens (same host only). The note says why the check
+    couldn't run when one side recorded spend and the other didn't, or the
+    baseline recorded 0, so a skipped check never reads as a passed one.
+    Both are None when neither side recorded any (Codex, pi)."""
     fields = (("cost_usd", "${:.2f}"), ("tokens", "{:,.0f}"))
+    why_not = None
     for field, fmt in fields if same_host else fields[:1]:
         bv, cv = bs.get(field), cs.get(field)
-        if bv and cv is not None:
-            if cv > bv * (1 + limit):
-                label = "cost" if field == "cost_usd" else "tokens"
-                return f"{label} {fmt.format(bv)} -> {fmt.format(cv)}"
-            return None
-    return None
+        label = "cost" if field == "cost_usd" else "tokens"
+        if bv is None and cv is None:
+            continue
+        if bv is None or cv is None:
+            side = "baseline" if bv is None else "candidate"
+            why_not = why_not or f"{label} not compared: the {side} recorded none"
+            continue
+        if not bv:
+            why_not = why_not or f"{label} not compared: the baseline recorded 0"
+            continue
+        if cv > bv * (1 + limit):
+            return f"{label} {fmt.format(bv)} -> {fmt.format(cv)}", None
+        return None, None
+    return None, why_not

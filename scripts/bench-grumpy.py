@@ -2,7 +2,9 @@
 """Local benchmark for grumpy's review and imagine passes.
 
 Runs the real pass headlessly on a host (Claude Code, Codex, pi, or grumpy's
-no-agent `oneshot.py` against a chat API) against small fixture repos, scores the report the pass writes, and compares runs so
+no-agent `oneshot.py` against a chat API) against fixture repos (small planted
+cases and real-size replays), scores the report the pass writes, records what
+each run spent, and compares runs so
 a model, host or prompt change shows up as a number. Local only: nothing here
 runs in CI, and results land in the gitignored .sharpen/bench/.
 
@@ -10,11 +12,13 @@ runs in CI, and results land in the gitignored .sharpen/bench/.
                         [--mode auto|inline|fanout[,...]]
                         [--provider openai|compatible]
                         [--cases a,b] [--repeat N] [--invoke native|inline]
+                        [--analysis haiku|sonnet|opus]
                         [--cmd TEMPLATE] [--timeout S] [--out DIR] [--keep]
     bench-grumpy.py score REPORT --case NAME
     bench-grumpy.py rescore RESULTS.json
-    bench-grumpy.py compare BASELINE.json CANDIDATE.json
-    bench-grumpy.py commands --host codex [--model ID] [--pass review]
+    bench-grumpy.py compare BASELINE.json CANDIDATE.json [--cost-rise F]
+    bench-grumpy.py commands --host codex [--model ID[,ID...]]
+                        [--mode auto|inline|fanout[,...]] [--pass review]
     bench-grumpy.py cases
 
 Fixtures live in plugins/grumpy/tests/bench/<case>/: a `before/` tree, an
@@ -46,8 +50,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # How each host is invoked lives in bench_hosts.py; these names are part of
 # this script's surface (the tests reach them as bench.<name>).
 from bench_hosts import (  # noqa: E402,F401
+    CLAUDE_ALIASES,
     HOSTS,
     MODES,
+    USAGE_HOSTS,
     build_command,
     cli_version,
     observed_mode,
@@ -573,6 +579,15 @@ def _kill_group(proc):
         proc.kill()
 
 
+def _drain(proc):
+    """What a killed host printed. Bounded: a grandchild that left the
+    process group can hold the pipes open."""
+    try:
+        return proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        return "", ""
+
+
 # ponytail: cyclomatic 21 against a bar of 22; split the report-scoring tail into its own function when radon cc reports run_one above 22
 def run_one(
     case,
@@ -640,9 +655,14 @@ def run_one(
             # A timed-out run is a failed run even if it left a report: a
             # half-written report would otherwise score as a clean one.
             _kill_group(proc)
-            stdout, stderr = proc.communicate()
+            stdout, stderr = _drain(proc)
             result["exit_code"] = None
             result["status"] = "timeout"
+        except KeyboardInterrupt:
+            # The host runs in its own session, so the terminal's ^C never
+            # reaches it: kill it here or it keeps billing in a deleted repo.
+            _kill_group(proc)
+            raise
         stdout, stderr = stdout or "", stderr or ""
         result["duration_s"] = round(
             (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds(), 1
@@ -653,7 +673,11 @@ def run_one(
         # failed run. A oneshot timeout keeps the tokens it logged; a Claude
         # timeout records none (its JSON prints only at the end), and the
         # summary counts such runs as `unpriced` instead of hiding them.
-        usage = parse_usage(host, stdout, stderr)
+        try:
+            usage = parse_usage(host, stdout, stderr)
+        except Exception as e:  # a shape change must not fail a paid, scorable run
+            usage = None
+            result["usage_error"] = f"{type(e).__name__}: {e}"
         if usage is not None:
             result["usage"] = usage
         mode = observed_mode(host, usage)
@@ -724,7 +748,7 @@ def _secs(v):
     return "-" if v is None else f"{v:.0f}s"
 
 
-def print_summary(summary, stream=sys.stdout):
+def print_summary(summary, stream=sys.stdout, host=None):
     width = max([34, *(len(n) + 1 for n in summary)])
     print(
         f"{'case/pass':{width}} {'runs':>4} {'fail':>4} {'recall':>7} {'spread':>7} {'prec':>6} {'noise':>6} {'over':>5} {'unloc':>6} {'clean':>6}"
@@ -739,14 +763,41 @@ def print_summary(summary, stream=sys.stdout):
             file=stream,
         )
     for name, s in summary.items():
-        priced = s.get("cost_usd") is not None or s.get("tokens") is not None
-        if s.get("unpriced") and priced:
-            print(
-                f"note: {name}: {s['unpriced']}/{s['runs']} run(s) recorded no usage"
-                " (a Claude run that times out records none); cost and tokens"
-                " are the mean of the rest",
-                file=stream,
-            )
+        for note in _row_notes(s, host):
+            print(f"note: {name}: {note}", file=stream)
+
+
+def _row_notes(s, host):
+    """What the table can't show about a row's measurements."""
+    notes = []
+    priced = s.get("cost_usd") is not None or s.get("tokens") is not None
+    if s.get("unpriced") and priced:
+        notes.append(
+            f"{s['unpriced']}/{s['runs']} run(s) recorded no usage"
+            " (a Claude run that times out records none); cost and tokens"
+            " are the mean of the rest"
+        )
+    elif s.get("unpriced") == s.get("runs") and host in USAGE_HOSTS:
+        notes.append(
+            f"no run recorded usage, though {host} reports it; read a run's .log"
+            " (a --cmd without --output-format json records none)"
+        )
+    if s.get("partial_usage"):
+        notes.append(
+            f"{s['partial_usage']}/{s['runs']} run(s) reported usage for only some"
+            " calls; their tokens are low"
+        )
+    if s.get("mode_unknown"):
+        notes.append(
+            f"{s['mode_unknown']} run(s) recorded usage but not how the passes ran"
+            " (no subagent_stats in Claude's JSON)"
+        )
+    if s.get("mode_missed"):
+        notes.append(
+            f"{s['mode_missed']} run(s) ignored the pinned --mode; their row's"
+            " mode label is wrong for them"
+        )
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -775,6 +826,11 @@ def _run_labelled(
     """One run_one call, bracketed by progress lines on stderr. `variant`
     is (model, mode) for a matrix run, None otherwise."""
     print(f"[bench] {label} ...", file=sys.stderr, flush=True)
+    model, mode = variant or (
+        _list(getattr(args, "model", None))[0],
+        _list(getattr(args, "mode", None))[0] or "auto",
+    )
+    analysis = _analysis_pin(args, model)
     try:
         r = run_one(
             case,
@@ -785,7 +841,7 @@ def _run_labelled(
             label,
             args.timeout,
             args.keep,
-            analysis=getattr(args, "analysis", None),
+            analysis=analysis,
             host=getattr(args, "host", None),
         )
     except Exception as e:  # one broken run must not discard the paid-for rest
@@ -794,6 +850,10 @@ def _run_labelled(
     if variant:
         r["model"], r["mode"] = variant
         r["variant"] = variant_name(*variant)
+    if analysis:
+        r["analysis"] = analysis
+    if mode in ("inline", "fanout"):
+        r["pinned_mode"] = mode
     s = r.get("score")
     u = r.get("usage") or {}
     spent = "".join(
@@ -806,7 +866,7 @@ def _run_labelled(
     if s:
         detail = f" recall={_fmt(s['recall'])} noise={s['noise_blocking']}{spent}"
     else:
-        detail = f" exit={r.get('exit_code')}" + (
+        detail = f" exit={r.get('exit_code')}{spent}" + (
             f" {r['error']}" if r.get("error") else f" (see {label}.log)"
         )
     print(f"[bench] {label}: {r.get('status')}{detail}", file=sys.stderr, flush=True)
@@ -818,6 +878,18 @@ def _list(arg):
     repeated item is dropped: two identical variants would share log names."""
     items = [x.strip() for x in (arg or "").split(",") if x.strip()]
     return list(dict.fromkeys(items)) or [None]
+
+
+def _analysis_pin(args, model):
+    """The alias to pin models.yaml's analysis role to, or None. --analysis
+    wins; otherwise a Claude run on an alias pins analysis to it, so under
+    fanout review's passes run on the model the row names, as they do inline
+    (where the session runs them itself)."""
+    if getattr(args, "analysis", None):
+        return args.analysis
+    if getattr(args, "host", None) == "claude" and model in CLAUDE_ALIASES:
+        return model
+    return None
 
 
 def variant_name(model, mode):
@@ -832,7 +904,25 @@ def _variants(args):
         raise ValueError(
             f"unknown mode(s) {', '.join(bad)} (one of: {', '.join(MODES)})"
         )
-    return [(m, mode or "auto") for m in _list(args.model) for mode in modes]
+    models = _list(args.model)
+    cmd = getattr(args, "cmd", None)
+    if cmd and len(models) > 1 and "{model}" not in cmd:
+        raise ValueError(
+            "--cmd has no {model}, so every model in --model would run the same command"
+        )
+    variants = [(m, mode or "auto") for m in models for mode in modes]
+    # Labels fold punctuation to `_` and may land on a case-insensitive disk:
+    # two variants with one label would overwrite each other's logs.
+    seen = {}
+    for v in variants:
+        slug = _variant_tags(v)[0].lower()
+        if slug in seen:
+            raise ValueError(
+                f"variants {variant_name(*seen[slug])} and {variant_name(*v)}"
+                " would share log names; rename one"
+            )
+        seen[slug] = v
+    return variants
 
 
 def _plan(args, invoke, provider):
@@ -872,8 +962,9 @@ def _plan(args, invoke, provider):
 def _run_id(args, provider, stamp):
     """The results directory name: stamp, host, model(s) and any mode(s)."""
     host_id = f"{args.host}-{provider}" if provider else args.host
-    models = (args.model or "default").replace("/", "_").replace(",", "+")
-    modes = "" if args.mode in (None, "auto") else "-" + args.mode.replace(",", "+")
+    models = "+".join(m or "default" for m in _list(args.model)).replace("/", "_")
+    modes = [m or "auto" for m in _list(args.mode)]
+    modes = "" if modes == ["auto"] else "-" + "+".join(modes)
     return f"{stamp}-{host_id}-{models}{modes}"
 
 
@@ -891,16 +982,17 @@ def cmd_run(args):
     if problem:
         print(f"error: {problem}", file=sys.stderr)
         return 2
-    binary = shlex.split(args.cmd)[0] if args.cmd else profile["binary"]
-    if not shutil.which(binary):
-        print(f"error: {binary} is not on PATH", file=sys.stderr)
-        return 2
     invoke = args.invoke or profile["default_invoke"]
-    # Everything that can fail before a paid session does, before the first.
+    # Everything that can fail before a paid session does, before the first,
+    # and a bad flag is named before a missing binary.
     try:
         plan = _plan(args, invoke, provider)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
+        return 2
+    binary = shlex.split(args.cmd)[0] if args.cmd else profile["binary"]
+    if not shutil.which(binary):
+        print(f"error: {binary} is not on PATH", file=sys.stderr)
         return 2
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = _new_dir(
@@ -928,6 +1020,8 @@ def cmd_run(args):
     }
     path = os.path.join(out_dir, "results.json")
     try:
+        # ponytail: no early stop, so a usage cap fails every remaining run; stop after 3 consecutive exit-nonzero runs once an eval's results.json shows such a streak
+        # ponytail: repeats of one variant run back to back; interleave variants per repeat if a provider slowdown shows as one variant's duration_s over 2x the others' on a case
         for case, pass_name, argv, stdin_text, variant in plan:
             slug, tag = _variant_tags(variant)
             meta["commands"][pass_name + tag] = shlex.join(argv) + (
@@ -948,7 +1042,7 @@ def cmd_run(args):
         print("[bench] interrupted; writing the runs so far", file=sys.stderr)
     meta["summary"] = summarize(meta["runs"])
     write_json(path, meta)
-    print_summary(meta["summary"])
+    print_summary(meta["summary"], host=args.host)
     print(f"\nresults: {os.path.relpath(path)}")
     if not meta["flags_verified"]:
         print(
@@ -964,6 +1058,7 @@ def cmd_run(args):
 
 def write_json(path, data):
     """Write via a temp file and rename, so a kill never truncates it."""
+    # ponytail: fixed tmp name races a rescore run against a live run; use a per-process name if a results.json is ever found truncated or mixed
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -1036,7 +1131,7 @@ def cmd_rescore(args):
     if not os.path.exists(args.results + ".orig"):
         shutil.copyfile(args.results, args.results + ".orig")  # first scores kept
     write_json(args.results, meta)
-    print_summary(meta["summary"])
+    print_summary(meta["summary"], host=meta.get("host"))
     return 0
 
 
@@ -1045,12 +1140,11 @@ def cmd_compare(args):
         base = json.load(f)
     with open(args.candidate, encoding="utf-8") as f:
         cand = json.load(f)
-    print(
-        f"baseline:  {base.get('host')} {base.get('model') or 'default'} ({base.get('started_at')})"
-    )
-    print(
-        f"candidate: {cand.get('host')} {cand.get('model') or 'default'} ({cand.get('started_at')})"
-    )
+    for side, meta in (("baseline: ", base), ("candidate:", cand)):
+        print(
+            f"{side} {meta.get('host')} {meta.get('model') or 'default'}"
+            f" mode {meta.get('mode') or 'auto'} ({meta.get('started_at')})"
+        )
     if base.get("prompt_hashes") != cand.get("prompt_hashes"):
         print("prompts differ between runs")
     problems, notes = compare(
@@ -1156,7 +1250,7 @@ def main(argv=None):
         "--analysis",
         choices=["haiku", "sonnet", "opus"],
         default=None,
-        help="pin models.yaml's analysis role (review's passes on Claude Code; not oneshot)",
+        help="pin models.yaml's analysis role (review's fanned-out passes on Claude Code; not oneshot); default: --model when it is a Claude Code alias",
     )
     p.add_argument(
         "--timeout", type=int, default=1200, help="seconds per run (default 1200)"
