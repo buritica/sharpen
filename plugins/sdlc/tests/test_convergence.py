@@ -265,6 +265,21 @@ class StackTest(ReceiptTestBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("cannot add files", r.stderr)
 
+    def test_conflict_resolution_needs_a_reason_and_no_binary_change(self):
+        # Text with a NUL byte is binary to git. The branch already carries
+        # blob.bin, so changing it in the resolution adds no file.
+        self.commit_file("blob.bin", "\x00\x01" * 50)
+        self.restack_with_a_conflict(
+            "TOOLS = ['a', 'py39', 'conv']\n", extra={"blob.bin": "\x00\x02" * 50}
+        )
+        r = self.carry("--reason", "  ")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("non-empty --reason", r.stderr)
+        r = self.carry("--reason", "kept both sides")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot change binary files", r.stderr)
+        self.assertNotIn("carries", self.bd())
+
     def test_a_base_at_head_never_carries_a_code_change(self):
         self.cli("--set-base", "layer-b")
         self.start()

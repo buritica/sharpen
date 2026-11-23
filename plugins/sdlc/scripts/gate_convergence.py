@@ -532,6 +532,7 @@ def _classify_rewrite(old, new, reason=None, cwd=None, spent=0, bases=(None, Non
             None,
         )
     why, lines = _manual_rewrite_refusal(old_patch, new_patch, reason, spent)
+    # ponytail: recorded as `manual`, like a comment fix; give a restack carry its own class once anything reads the class to tell them apart
     return (None, why, None) if why else ("manual", None, lines)
 
 
@@ -574,6 +575,12 @@ def _classify_descendant(old, new, reason, cwd=None, spent=0, bases=(None, None)
     return (None, why, None) if why else ("manual", None, lines)
 
 
+# Refusals both manual paths share.
+_NO_REASON = "a manual carry needs a non-empty --reason"
+_ADDS_FILES = "a manual carry cannot add files (a rename counts as one)"
+_CHANGES_BINARY = "a manual carry cannot change binary files"
+
+
 def _over_cap(lines, spent):
     """The cap refusal for a manual carry of `lines`, or None."""
     if lines + spent <= MANUAL_CARRY_MAX_LINES:
@@ -590,7 +597,7 @@ def _manual_refusal(old, new, reason, cwd=None, spent=0):
     """(why a manual carry over commits on top is refused, None), or
     (None, the lines it spends) when it is allowed."""
     if not reason.strip():
-        return "a manual carry needs a non-empty --reason", None
+        return _NO_REASON, None
     added = _run(
         ["diff", "--name-only", "--no-renames", "--diff-filter=A", old, new], cwd=cwd
     )
@@ -598,9 +605,9 @@ def _manual_refusal(old, new, reason, cwd=None, spent=0):
     if added is None or stat is None:
         return _git_failure("measure the change"), None
     if added.strip():
-        return "a manual carry cannot add files (a rename counts as one)", None
+        return _ADDS_FILES, None
     if stat[2]:
-        return "a manual carry cannot change binary files", None
+        return _CHANGES_BINARY, None
     lines = stat[0] + stat[1]
     return _over_cap(lines, spent), lines
 
@@ -623,15 +630,17 @@ def _manual_rewrite_refusal(old_patch, new_patch, reason, spent=0):
     a conflict resolution changed in the branch's own +/- lines. Those are
     counted with a line diff, against the same cap as every manual carry."""
     if not reason.strip():
-        return "a manual carry needs a non-empty --reason", None
+        return _NO_REASON, None
     old_files, new_files = _split_by_file(old_patch), _split_by_file(new_patch)
     if old_files is None or new_files is None:
         return "the branch's patch could not be parsed", None
     if _new_files(new_files) - _new_files(old_files):
-        return "a manual carry cannot add files (a rename counts as one)", None
+        return _ADDS_FILES, None
     binary = _binary_files(old_files) | _binary_files(new_files)
     if any(old_files.get(p) != new_files.get(p) for p in binary):
-        return "a manual carry cannot change binary files", None
+        return _CHANGES_BINARY, None
+    # ponytail: one conflicting line spends 4 (the lower layer's - line counts too); count only + lines if a mechanical restack of 7 or fewer conflicting lines is refused over the cap
+    # ponytail: diffs the whole patch, not only the files whose sections differ; diff per file if a rewrite --carry takes over a second
     lines = 0
     old_lines, new_lines = old_patch.split(b"\n"), new_patch.split(b"\n")
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
