@@ -5,6 +5,39 @@ only the latest version (`/sdlc:init` reads it as step 0); an entry moves here o
 release supersedes it. Nothing reads this file programmatically — it exists so past behavior
 changes stay discoverable without bloating either the README or `UPDATE.md`.
 
+## 4.22.0 — the no-agent adapters run grumpy's review
+
+`openai_adapter.py` and `local_llm_adapter.py` no longer send a prompt of their own. After
+the manifest's gate commands pass, they run grumpy 2.16's `scripts/oneshot.py review`, which
+builds its prompts from grumpy's `commands/review.md`, saves a real report to
+`.sharpen/grumpy/<branch>/review.md` and leaves the same receipt an agent host leaves. So
+`record-gate.py --verify review` now records gate 3 from them, and `--status` names the path:
+`grumpy-review — <time> (via oneshot: openai gpt-6.2-astra)`.
+
+- **They need grumpy 2.16 or newer when the manifest declares `review`.** Set
+  `GRUMPY_PLUGIN_ROOT` to the grumpy plugin folder or pass `--grumpy <path>`; without it,
+  or with an older grumpy there (no `scripts/oneshot.py`), they stop with exit 2 before
+  running any gate command, naming the path they tried. A manifest without `review` runs
+  the gate commands with no grumpy at all.
+- **New variable names.** `SHARPEN_LLM_URL`, `SHARPEN_LLM_MODEL` and `SHARPEN_LLM_API_KEY`
+  replace `LOCAL_LLM_URL`, `LOCAL_LLM_MODEL` and `LOCAL_LLM_API_KEY`, and `SHARPEN_LLM_MODEL`
+  replaces `OPENAI_MODEL`. The old names still work for now and print a deprecation line.
+  One precedence change rides along: the variable (`SHARPEN_LLM_MODEL`, or a legacy name
+  mapped to it) now beats the manifest's `provider.model`, where before the manifest beat
+  `OPENAI_MODEL`/`LOCAL_LLM_MODEL`. A repo that sets both switches to the variable's model
+  on upgrade; unset one. The adapter says on stderr when the variable overrides a
+  manifest model.
+- **No more `gpt-4o-mini` or `llama3.1` defaults.** The model is `SHARPEN_LLM_MODEL`, else
+  the manifest's `provider.model`, else, for OpenAI only, grumpy's `models.yaml`
+  (`analysis.openai`, currently `gpt-6.2-astra`, unverified until measured). A local
+  server has no default and needs a model named. Whatever is named goes to the provider
+  as its model id; OpenAI and Ollama answer an unknown one with 404, which oneshot treats
+  as a setup error, so a placeholder in the manifest exits 2 before anything else is spent.
+- **`generic_adapter.py` no longer attaches a "review" report.** It runs the gate commands
+  and prints PASS/FAIL (a FAIL is followed by the command's output); a gate summary was
+  never a review. `record-gate.py --attach-review <path>` still attaches a report you
+  produce yourself.
+
 ## 4.21.0 — plans and reports move out of `.claude/`
 
 Plans and specs are now written to `.sharpen/sdlc/<branch>/`, and grumpy 2.15 writes its

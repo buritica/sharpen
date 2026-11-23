@@ -43,9 +43,10 @@ python3 scripts/bench-grumpy.py run --host claude --pass review   # or imagine, 
 python3 scripts/bench-grumpy.py compare <baseline results.json> <new results.json>
 ```
 
-It runs the real pass headlessly on Claude Code, Codex or pi against the fixture repos in
-`plugins/grumpy/tests/bench/` (planted issues, plus clean, comment-only and
-capability-bait diffs that measure noise), scores the report the pass writes for recall,
+It runs the real pass headlessly on Claude Code, Codex, pi or the no-agent `oneshot` path
+(`--host oneshot`, which also needs a run after a change to `scripts/oneshot.py` or
+`scripts/oneshot_prompts.py`, the two files its prompts are built in) against the fixture repos in `plugins/grumpy/tests/bench/` (planted issues,
+plus clean, comment-only and capability-bait diffs that measure noise), scores the report the pass writes for recall,
 precision and blocking noise, and writes results to the gitignored `.sharpen/bench/`. See
 `plugins/grumpy/tests/bench/README.md` for cases, cost and the per-host command lines. It
 is manual, not CI-enforced (no LLM calls in CI, per the stdlib-only constraint below), so
@@ -186,7 +187,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.22.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.23.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.

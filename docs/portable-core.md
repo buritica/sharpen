@@ -88,7 +88,7 @@ A normal portable review uses `provenance.kind: "git-range"` and records both `b
 
 The report records the executing agent/model only when the host can supply it. Identity metadata helps auditability but is not needed to make a report portable.
 
-With no coding agent installed, grumpy's `scripts/oneshot.py` runs the review pass itself against a chat API (OpenAI, or any OpenAI-compatible server) and leaves a normal grumpy receipt with an `executor` field naming the path, provider and model, so that path earns gate 3 the same way an agent host does. sdlc's `openai_adapter.py` and `local_llm_adapter.py` call it. See grumpy's README, "No agent installed".
+With no coding agent installed, grumpy's `scripts/oneshot.py` runs the review and imagine passes itself against a chat API (OpenAI, or any OpenAI-compatible server) and leaves a normal grumpy receipt with an `executor` field naming the path, provider and model, so that path earns gates 3 and 5 the same way an agent host does. sdlc's `openai_adapter.py` and `local_llm_adapter.py` call it for each of `review` and `imagine` the manifest declares. See grumpy's README, "No agent installed".
 
 An attached report is informational. `record-gate.py --status` shows it, and nothing blocks on its `status` or provenance: attaching one never completes a gate, and a `fail` report doesn't stop a PR. The gates themselves do that.
 

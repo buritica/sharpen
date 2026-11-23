@@ -1,39 +1,44 @@
 #!/usr/bin/env python3
-"""Run grumpy's review pass with no coding agent installed: one model, over HTTP.
+"""Run grumpy's review or imagine pass with no coding agent installed: one
+model, over HTTP.
 
 Usage:
-  oneshot.py review [--provider openai|compatible] [--model ID]
-                    [--worktree PATH] [--aspects code,errors,...] [--jobs N]
+  oneshot.py review|imagine [--provider openai|compatible] [--model ID]
+                    [--worktree PATH] [--aspects NAME,...] [--jobs N]
                     [--timeout SECONDS] [--dry-run]
 
 The no-agent path. A coding agent (Claude Code, Codex, pi) runs
-`commands/review.md` itself: it spawns one finding pass per review aspect,
-reads files as it goes, aggregates, saves the report and writes the receipt.
-This script does the same steps for a model that has no tools, so "reviewed"
-means one thing on every path:
+`commands/review.md` or `commands/imagine.md` itself: it spawns one pass per
+review aspect (or imagine simulation), reads files as it goes, aggregates,
+saves the report and writes the receipt. This script does the same steps for
+a model that has no tools, so "reviewed" means one thing on every path:
 
   1. Resolve the diff the way the command does (`diff_base.py`, the branch's
      own layer on a stack), capped at 200000 characters like the command.
-  2. Build every prompt from `commands/review.md` at run time (see
-     `extract_review`), so this path changes when the command changes. A
+  2. Build every prompt from the command at run time (`extract_review`,
+     `extract_imagine`), so this path changes when the command changes. A
      command edit that breaks the extraction fails loudly here and in
      `tests/test_oneshot.py`; it never falls back to a prompt of its own.
-  3. Send one finding call per aspect (in parallel: `--jobs`, 4 for openai
-     and 1 for a compatible server, which usually serializes anyway), each
-     with the command's own pass template. Save what they returned to
-     `.sharpen/grumpy/<branch>/review-passes.jsonl`, then send one
-     aggregation call with the command's Audit discipline and Step 4 text.
-     The model never runs git or writes a file.
-  4. Save the report to `.sharpen/grumpy/<branch>/review.md` with the
-     `_Model:_` and `_Base:_` lines this script writes itself (the model line
-     names the aspects that ran), then write the same receipt any host writes
+  3. Send one call per aspect (in parallel: `--jobs`, 4 for openai and 1 for
+     a compatible server, which usually serializes anyway), each with the
+     command's own pass prompt: review's template filled in per aspect, or
+     imagine's five simulation prompts (`happy-path`, `state`, `concurrency`,
+     `observability`, `docs`, the names `--aspects` takes). Save what they
+     returned to `.sharpen/grumpy/<branch>/<pass>-passes.jsonl`, then send one
+     aggregation call with the command's audit discipline, aggregation step
+     and report template. The model never runs git or writes a file.
+  4. Save the report to `.sharpen/grumpy/<branch>/<pass>.md` with the
+     `_Model:_` line and the base line (review's `_Base:_`, imagine's
+     `_Analyzed:_`) this script writes itself (the model line names the
+     aspects that ran), then write the same receipt any host writes
      (`receipt.py`), plus an `executor` naming this path, the provider, the
-     model and the aspects. `record-gate.py --verify review` records gate 3
-     from it, and `--status` shows that the gate came from this path.
+     model and the aspects. `record-gate.py --verify review` (or `imagine`)
+     records gate 3 (or 5) from it, and `--status` shows that the gate came
+     from this path.
 
 What it can't do that an agent host does: open files beyond the changed
-files handed to it, follow call sites, append the review note to the sdlc
-plan (Step 6), or run simplify and fix at all. The diff and the changed
+files handed to it, follow call sites, append the note to the sdlc plan
+(review's Step 6, imagine's Step 5), or run simplify and fix at all. The diff and the changed
 files' text are sent to the provider: with `openai` the code leaves this
 machine; `compatible` pointed at a local server (Ollama, llama.cpp, vLLM, LM
 Studio) keeps it here.
@@ -42,7 +47,8 @@ Providers (both speak OpenAI's chat-completions format; `PROVIDERS` is where
 another one goes):
   openai      https://api.openai.com/v1/chat/completions, key in OPENAI_API_KEY.
               Default model: the `analysis` role's `openai` column in
-              models.yaml (UNVERIFIED until the benchmark has measured it).
+              models.yaml for both passes (UNVERIFIED until the benchmark has
+              measured it).
   compatible  SHARPEN_LLM_URL (a base URL like http://localhost:11434/v1, or
               the full .../chat/completions URL), optional SHARPEN_LLM_API_KEY.
               No default model: pass --model or set SHARPEN_LLM_MODEL.
@@ -53,8 +59,8 @@ never written to the report, the receipt or any log line; provider error text
 is redacted before it is printed.
 
 Exit codes: 0 report saved and receipt written. 1 the pass earned nothing:
-a dirty tree, an empty diff, a git failure, any finding pass that failed or
-answered without finding lines (prose, or nothing at all; the report is
+a dirty tree, an empty diff, a git failure, any pass that failed or
+answered without pass lines (prose, or nothing at all; the report is
 saved so you can read it, stamped `_Incomplete:_`, but no receipt), an
 unusable aggregation, HEAD moving during the run, or a refused receipt.
 2 usage or configuration: unknown flag, provider or aspect, no key, no model,
@@ -83,8 +89,20 @@ sys.path.insert(0, HERE)
 import diff_base  # noqa: E402
 import receipt  # noqa: E402
 
+# The prompt extraction lives in oneshot_prompts.py; these names are part of
+# this script's surface (tests and callers reach them as oneshot.<name>).
+from oneshot_prompts import (  # noqa: E402,F401
+    SEVERITY_SECTIONS,
+    ExtractionError,
+    _fence_after,
+    _strip_frontmatter,
+    extract_review,
+    load_command,
+    section,
+)
+
 PLUGIN_ROOT = os.path.dirname(HERE)
-PASSES = ("review",)  # imagine follows in the next release
+PASSES = ("review", "imagine")
 DIFF_CAP = 200000  # the command's own cap (`| head -c 200000`)
 FILES_CAP = 200000  # total text of changed files sent as context
 FILE_CAP = 40000  # per file
@@ -94,24 +112,23 @@ EXECUTOR_HOST = "oneshot"
 # prompts queue behind each other while every socket timeout keeps ticking.
 DEFAULT_JOBS = {"openai": 4, "compatible": 1}
 RETRY_WAIT_CAP = 60  # seconds: the most a Retry-After header can make us wait
-# What the finding passes returned, saved next to the report before the
-# aggregation call so a failed aggregation loses nothing that was paid for.
-PASSES_FILE = "review-passes.jsonl"
+# What the passes returned (`<pass>-passes.jsonl`), saved next to the report
+# before the aggregation call so a failed aggregation loses nothing that was
+# paid for.
+PASSES_FILE = "{}-passes.jsonl"
+# The base line each report template has, which this script writes itself.
+BASE_LINES = {
+    "review": "_Base: {base}, from {why}_",
+    "imagine": "_Analyzed: {base}, from {why} — HEAD at {head}_",
+}
 
 # One finding pass's outcome. `failure` is the call's error text (None when it
-# answered); `errored` means it answered without finding lines; `dropped`
+# answered); `errored` means it answered without pass lines (on imagine, or
+# dropped malformed lines and kept no finding line); `dropped`
 # counts malformed lines the parser threw away.
 PassResult = collections.namedtuple("PassResult", "lines errored failure dropped")
 Reply = collections.namedtuple("Reply", "text usage model request_id")
 
-# grumpy's pass severities and the report section each one lands in. The
-# command defines them ("SEVERITY is one of CRIT ..., WARN ..., NOTE ...");
-# `extract_review` reads them back and a test pins the two together.
-SEVERITY_SECTIONS = {
-    "CRIT": "## Critical Issues",
-    "WARN": "## Serious Concerns",
-    "NOTE": "## Questionable Decisions",
-}
 FACTS = ("fact", "judgment")
 
 PROVIDERS = {
@@ -134,12 +151,9 @@ PREAMBLE = (
     "You have no tools: you cannot read files, run git or shell commands, "
     "spawn agents, or write files, so skip any instruction that needs one. "
     "Everything you may use is in this message. Answer in the exact output "
-    "format the instructions ask for, and nothing else."
+    "format the instructions ask for, and nothing else. If you have nothing "
+    "to report, answer with one short line saying so, never an empty message."
 )
-
-
-class ExtractionError(ValueError):
-    """review.md no longer has a part this path builds its prompts from."""
 
 
 class ProviderError(RuntimeError):
@@ -151,125 +165,6 @@ class ProviderError(RuntimeError):
 # A provider answering with one of these won't do better on a retry or for
 # another pass: the key, the model or the URL is wrong. That's setup (exit 2).
 SETUP_STATUSES = (400, 401, 403, 404)
-
-
-# --- reading the command ----------------------------------------------------
-
-
-def _strip_frontmatter(text):
-    if text.startswith("---\n"):
-        end = text.find("\n---\n", 4)
-        if end != -1:
-            return text[end + 5 :]
-    return text
-
-
-def _headings(lines):
-    """(index, level, title) for every markdown heading outside a code fence."""
-    out, fenced = [], False
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-            continue
-        m = None if fenced else re.match(r"^(#{1,6})\s+(.*\S)\s*$", line)
-        if m:
-            out.append((i, len(m.group(1)), m.group(2)))
-    return out
-
-
-def section(text, title, *, prefix=False):
-    """The body of the heading named `title` (or starting with it, with
-    `prefix`), up to the next heading of the same or a higher level. Headings
-    inside code fences don't count, so a template's own `## Verdict` stays in.
-    Raises ExtractionError when the heading isn't there."""
-    lines = text.split("\n")
-    heads = _headings(lines)
-    for n, (i, level, name) in enumerate(heads):
-        if name == title or (prefix and name.startswith(title)):
-            end = len(lines)
-            for j, lvl, _ in heads[n + 1 :]:
-                if lvl <= level:
-                    end = j
-                    break
-            return "\n".join(lines[i + 1 : end]).strip("\n")
-    raise ExtractionError(f"heading {title!r} not found")
-
-
-def _fence_after(text, marker):
-    at = text.find(marker)
-    if at == -1:
-        raise ExtractionError(f"{marker!r} not found")
-    m = re.search(r"```[^\n]*\n(.*?)\n```", text[at:], re.S)
-    if not m:
-        raise ExtractionError(f"no code fence after {marker!r}")
-    return m.group(1)
-
-
-def extract_review(text):
-    """The parts of review.md this path sends, and nothing else.
-
-    Taken: the persona (the text under `# Grumpy Review`), the aspect list
-    (`### Available Review Aspects`), the finding-pass prompt template (the
-    first fence after "Example agent prompt structure" in Step 3) and the
-    severities it defines, `## Audit discipline`, all of Step 4 (settled
-    findings and the report template) and `## Personality Guidelines`.
-
-    Left out, because a single call can't do them and this script does them
-    instead: level flags and worktree targeting (CLI flags here), Step 1's
-    git commands (`resolve_diff`), Step 3's subagent dispatch and model
-    routing (one call per aspect here), Step 5's save, Step 6's plan note
-    (skipped), Step 7's receipt (`receipt.write_receipt`).
-    """
-    body = _strip_frontmatter(text)
-    persona = section(body, "Grumpy Review").split("\n## ")[0].strip()
-    if "grumpy principal engineer" not in persona:
-        raise ExtractionError("persona no longer names the grumpy principal engineer")
-    aspects = re.findall(
-        r"^- \*\*([a-z]+)\*\* - (.+?)(?=\n- \*\*|\n\n|\Z)",
-        section(body, "Available Review Aspects"),
-        re.S | re.M,
-    )
-    if not any(name == "code" for name, _ in aspects):
-        raise ExtractionError("aspect list has no `code` aspect")
-    step3 = section(body, "Step 3:", prefix=True)
-    template = _fence_after(step3, "Example agent prompt structure")
-    for slot in ("[ASPECT]", "[DIFF_BASE]", "[DIFF_CONTENT]", "SEVERITY|file:line"):
-        if slot not in template:
-            raise ExtractionError(f"pass template lost {slot}")
-    sentence = re.search(r"SEVERITY is one of (.+?)\.\n", template, re.S)
-    if not sentence:
-        raise ExtractionError("pass template no longer says which severities exist")
-    severities = re.findall(r"\b([A-Z]{3,5}) \(", sentence.group(1))
-    step4 = section(body, "Step 4:", prefix=True)
-    for anchor in (
-        "# Code Review:",
-        "_Model:",
-        "## Verdict",
-        "Settled findings held back",
-    ):
-        if anchor not in step4:
-            raise ExtractionError(f"Step 4 report template lost {anchor!r}")
-    return {
-        "persona": persona,
-        "aspects": [(n, " ".join(d.split())) for n, d in aspects],
-        "pass_template": template,
-        "severities": severities,
-        "audit": section(body, "Audit discipline"),
-        "step4": step4,
-        "personality": section(body, "Personality Guidelines"),
-    }
-
-
-def load_command(pass_name, plugin_root=PLUGIN_ROOT):
-    path = os.path.join(plugin_root, "commands", f"{pass_name}.md")
-    with open(path, encoding="utf-8") as f:
-        parts = extract_review(f.read())
-    if parts["severities"] != list(SEVERITY_SECTIONS):
-        raise ExtractionError(
-            f"review.md's severities are {parts['severities']}, this path knows "
-            f"{list(SEVERITY_SECTIONS)}: update SEVERITY_SECTIONS"
-        )
-    return parts
 
 
 # --- models.yaml --------------------------------------------------------------
@@ -573,13 +468,10 @@ def settled_entries(wt, branch):
 # --- prompts and parsing ----------------------------------------------------
 
 
-def pass_messages(parts, aspect, description, base, diff, files_text):
-    prompt = (
-        parts["pass_template"]
-        .replace("[ASPECT]", f"{aspect} ({description})")
-        .replace("[DIFF_BASE]", base)
-        .replace("[DIFF_CONTENT]", diff)
-    )
+def pass_messages(parts, template, base, diff, files_text):
+    """One pass's messages: `template` is a unit's prompt from the command
+    (review's aspect already filled in), with the base and diff put in."""
+    prompt = template.replace("[DIFF_BASE]", base).replace("[DIFF_CONTENT]", diff)
     if files_text:
         prompt += (
             "\n\nFull text of the changed files at HEAD, for context only "
@@ -592,51 +484,82 @@ def pass_messages(parts, aspect, description, base, diff, files_text):
     ]
 
 
-def parse_pass_lines(text):
-    """(findings, errored, dropped). Outside-in, as the command's Audit
-    discipline says: SEVERITY and file:line from the left, FACT and ASPECT
-    from the right, the rest is the text. A line with pipes that still
-    doesn't parse (four fields, a lowercase severity, a `file` with no `:N`)
-    is dropped and counted, so the aggregator and stderr can say the aspect
-    may be incomplete. A response with no usable line is errored, never
-    salvaged, unless it is a short "nothing found": an empty answer is not
-    that, it is a provider that answered nothing (a full queue, say) and
-    must not pass for a clean review."""
+def is_finding(line):
+    return line.split("|", 1)[0] in SEVERITY_SECTIONS
+
+
+def parse_pass_lines(text, context_labels=()):
+    """(lines, errored, dropped). A finding line is read outside-in, as the
+    command's audit discipline says: SEVERITY and file:line from the left,
+    FACT and ASPECT (or DOMAIN) from the right, the rest is the text.
+    Imagine's passes also return CONTEXT lines (first field one of
+    `context_labels`, or `transport:<Name>`) and `HANDLED|area|why` lines;
+    those are kept as they are, for the aggregator's narrative sections and
+    Strengths (on review, with no labels, a HANDLED line is malformed).
+    Backticks around a line are stripped first. A line with pipes that still doesn't parse (four fields, a
+    lowercase severity, a `file` with no `:N`) is dropped and counted, so the
+    aggregator and stderr can say the aspect may be incomplete. On imagine, a
+    pass that dropped a line and kept no finding line is errored (its findings
+    may be the lines that were dropped). A response
+    with no usable line is errored, never salvaged, unless it is a short
+    "nothing found": an empty answer is not that, it is a provider that
+    answered nothing (a full queue, say) and must not pass for a clean
+    review."""
     found, dropped = [], 0
-    for line in text.strip().strip("`").split("\n"):
-        fields = line.strip().split("|")
+    for line in text.strip().split("\n"):
+        # imagine.md shows its CONTEXT lines in backticks, so a model may wrap
+        # any line (or the whole reply) in them: strip them per line.
+        fields = [f.strip() for f in line.strip().strip("`").strip().split("|")]
+        head = fields[0]
+        # HANDLED is imagine's line (a pass with context labels); review's
+        # template never asks for it, so there it is a malformed line.
+        if len(fields) >= 3 and (
+            (head == "HANDLED" and context_labels)
+            or head in context_labels
+            or (":" in head and head.split(":", 1)[0] in context_labels)
+        ):
+            found.append("|".join(fields))
+            continue
         if len(fields) < 5:
             dropped += len(fields) > 1  # pipes, but not a finding line
             continue
         sev, loc, fact, aspect = fields[0], fields[1], fields[-2], fields[-1]
-        if sev.strip() not in SEVERITY_SECTIONS or fact.strip() not in FACTS:
+        if sev not in SEVERITY_SECTIONS or fact not in FACTS:
             dropped += 1
             continue
         if not re.search(r":\d", loc):
             dropped += 1
             continue
-        middle = "|".join(fields[2:-2]).strip()
-        found.append(
-            "|".join([sev.strip(), loc.strip(), middle, fact.strip(), aspect.strip()])
-        )
+        middle = "|".join(fields[2:-2])
+        found.append("|".join([sev, loc, middle, fact, aspect]))
     body = text.strip()
     errored = not found and (not body or len(body) > 120)
+    # Imagine only: CONTEXT and HANDLED lines make a pass usable, so a pass
+    # whose finding lines were all malformed would otherwise pass for "no
+    # findings" and earn gate 5 with them gone. Review keeps its own rule
+    # (a short reply with a dropped line is not errored; tests pin it).
+    if context_labels and dropped and not any(is_finding(ln) for ln in found):
+        errored = True
     return found, errored, dropped
 
 
 def aggregate_messages(parts, results, settled, model_line):
     blocks = []
+    titles = {n: t for n, t, _ in parts["units"]}
     for aspect, r in results.items():
+        # Imagine's pass names are this script's own; the agent title is the
+        # name the aggregation step knows the pass by.
+        label = f"{aspect}: {titles[aspect]}" if parts["context_labels"] else aspect
         if r.failure:
             blocks.append(
-                f"[{aspect}] errored: the call failed ({r.failure}). Say this aspect needs manual review."
+                f"[{label}] errored: the call failed ({r.failure}). Say this aspect needs manual review."
             )
         elif r.errored:
             blocks.append(
-                f"[{aspect}] errored: the response was not pipe lines. Say this aspect needs manual review."
+                f"[{label}] errored: the response was not pipe lines. Say this aspect needs manual review."
             )
         else:
-            block = f"[{aspect}]\n" + ("\n".join(r.lines) or "(nothing found)")
+            block = f"[{label}]\n" + ("\n".join(r.lines) or "(nothing found)")
             if r.dropped:
                 block += (
                     f"\n(the runner dropped {r.dropped} malformed line(s) from this "
@@ -645,16 +568,22 @@ def aggregate_messages(parts, results, settled, model_line):
             blocks.append(block)
     prompt = "\n\n".join(
         [
-            "You are the aggregator. The runner already ran one finding pass per "
-            "aspect and gives you their pipe lines below. Follow grumpy's "
-            "aggregation rules and render the report.",
-            "## Audit discipline\n\n" + parts["audit"],
-            "## Step 4: Aggregate and Deliver the Verdict\n\n" + parts["step4"],
-            "## Personality Guidelines\n\n" + parts["personality"],
+            (
+                "You are the aggregator. The runner already ran the five "
+                "simulation passes and gives you their pipe lines below: "
+                "findings, plus CONTEXT and HANDLED lines for the narrative "
+                "sections and Strengths. Keep all three kinds. Follow grumpy's "
+                "aggregation rules and render the report."
+                if parts["context_labels"]
+                else "You are the aggregator. The runner already ran one finding "
+                "pass per aspect and gives you their pipe lines below. Follow "
+                "grumpy's aggregation rules and render the report."
+            ),
+            *(f"{heading}\n\n{text}" for heading, text in parts["aggregate"]),
             "Settled entries from fix.md (the runner read them for you):\n"
             + ("\n".join(settled) or "(none)"),
             "Pass outputs:\n\n" + "\n\n".join(blocks),
-            f"Reply with only the report, from `# Code Review:` through "
+            f"Reply with only the report, from `{parts['title']}:` through "
             f"`## Verdict`. Its model line is exactly: {model_line}",
         ]
     )
@@ -664,19 +593,23 @@ def aggregate_messages(parts, results, settled, model_line):
     ]
 
 
-def finish_report(text, model_line, *stamps):
+def finish_report(text, model_line, *stamps, title="# Code Review"):
     """The model's report with the `_Model:_` line (and any other `_Name:_`
-    stamp lines this script writes itself: `_Base:_`, `_Incomplete:_`) set
-    here, or ValueError when it isn't a report (then nothing is saved). A
-    preamble before the `# Code Review` heading, or a note after a closing
-    fence, is dropped rather than failing the run at its last step."""
+    stamp lines this script writes itself: `_Base:_` or `_Analyzed:_`,
+    `_Incomplete:_`) set here, or ValueError when it isn't a report (then
+    nothing is saved). `title` is the report's heading (`# Code Review`,
+    `# Production Imagination`). A preamble before it, or a note after a
+    closing fence, is dropped rather than failing the run at its last
+    step."""
     text = text.strip()
     fence = re.match(r"^```[a-z]*\n(.*)\n```$", text, re.S)
     if fence:
         text = fence.group(1).strip()
-    start = re.search(r"^# Code Review", text, re.M)
+    start = re.search(rf"^{re.escape(title)}", text, re.M)
     if not start or "## Verdict" not in text[start.start() :]:
-        raise ValueError("the aggregation reply is not a review report")
+        raise ValueError(
+            f"the aggregation reply is not a report ({title} ... ## Verdict)"
+        )
     lines = text[start.start() :].strip().split("\n")
     # After the Verdict heading, a closing fence that no fence opened is the
     # one the preamble opened: the report ends there, the note after it goes.
@@ -774,14 +707,16 @@ def configure(args, env):
 
 
 def select_aspects(parts, wanted):
-    known = [n for n, _ in parts["aspects"]]
+    """The units (name, description, prompt) `--aspects` picked, in the
+    command's order; all of them without the flag."""
+    known = [n for n, _, _ in parts["units"]]
     names = [n.strip() for n in wanted.split(",") if n.strip()] if wanted else known
     unknown = [n for n in names if n not in known]
     if unknown or not names:
         raise Stop(
             2, f"unknown aspect(s) {unknown or wanted!r} (known: {', '.join(known)})"
         )
-    return [(n, d) for n, d in parts["aspects"] if n in names]
+    return [u for u in parts["units"] if u[0] in names]
 
 
 def _timed_chat(client, model, messages, timeout, label):
@@ -790,8 +725,9 @@ def _timed_chat(client, model, messages, timeout, label):
     return reply, time.monotonic() - started
 
 
-def run_passes(client, model, passes, jobs, timeout):
-    """{aspect: PassResult}, in parallel. Stop(2) when the provider rejected
+def run_passes(client, model, passes, jobs, timeout, labels=()):
+    """{aspect: PassResult}, in parallel; `labels` are the CONTEXT line labels
+    the parser keeps (imagine's). Stop(2) when the provider rejected
     the request as setup (key, model, URL); Stop(1) when every call failed.
     Each pass logs one line when it completes (duration, findings, tokens,
     request id), so a hung server and a slow model look different. On a setup
@@ -815,15 +751,19 @@ def run_passes(client, model, passes, jobs, timeout):
                 results[name] = PassResult([], False, str(e), 0)
                 _log(f"pass {name} failed: {e}")
                 continue
-            lines, errored, dropped = parse_pass_lines(reply.text)
+            lines, errored, dropped = parse_pass_lines(reply.text, labels)
             results[name] = PassResult(lines, errored, None, dropped)
-            detail = [f"{len(lines)} finding line(s)"]
+            findings = sum(1 for ln in lines if is_finding(ln))
+            detail = [f"{findings} finding line(s)"]
+            if len(lines) > findings:
+                detail.append(f"{len(lines) - findings} context line(s)")
             if errored:
-                detail.append(
-                    "no finding lines: errored"
-                    if reply.text.strip()
-                    else "empty answer: errored"
-                )
+                if not reply.text.strip():
+                    detail.append("empty answer: errored")
+                elif lines:
+                    detail.append("malformed line(s) and no finding line: errored")
+                else:
+                    detail.append("no pass lines: errored")
             if dropped:
                 detail.append(f"{dropped} malformed line(s) dropped")
             if reply.usage is not None:
@@ -868,12 +808,12 @@ def _write_text(path, text):
         raise
 
 
-def save_passes(artifacts, head, model, results):
+def save_passes(artifacts, pass_name, head, model, results):
     """The finding passes' outcome, one JSON line per aspect, next to the
     report and before the aggregation call: what every pass returned stays
     on disk when the aggregation fails, and stays comparable with review.md
     when it succeeds."""
-    path = os.path.join(artifacts, PASSES_FILE)
+    path = os.path.join(artifacts, PASSES_FILE.format(pass_name))
     lines = [
         json.dumps(
             {
@@ -908,23 +848,23 @@ def run(args, env):
         # Before any paid call: the receipt would refuse these anyway.
         branch = receipt.named_branch(wt)
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
-        raise Stop(2, f"no review: {e}") from None
+        raise Stop(2, f"no {pass_name}: {e}") from None
     try:
         base, head, diff, names, why = resolve_diff(
             wt, require_clean=not args["dry_run"]
         )
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
-        raise Stop(1, f"no review: {e}") from None
+        raise Stop(1, f"no {pass_name}: {e}") from None
     if not diff.strip():
-        raise Stop(1, f"nothing to review against {base}")
+        raise Stop(1, f"nothing to {pass_name} against {base}")
     files_text = changed_files_text(wt, names, head)
-    aspect_names = ", ".join(n for n, _ in aspects)
+    aspect_names = ", ".join(n for n, _, _ in aspects)
     model_line = (
         f"_Model: {model} via {provider} (one-shot, no agent; aspects: {aspect_names})"
         f"{'; ' + note if note else ''}_"
     )
-    base_line = f"_Base: {base}, from {why}_"
-    passes = {n: pass_messages(parts, n, d, base, diff, files_text) for n, d in aspects}
+    base_line = BASE_LINES[pass_name].format(base=base, why=why, head=head[:7])
+    passes = {n: pass_messages(parts, t, base, diff, files_text) for n, _, t in aspects}
     if args["dry_run"]:
         for name, messages in passes.items():
             sys.stdout.write(f"===== pass: {name}\n{messages[1]['content']}\n")
@@ -937,13 +877,15 @@ def run(args, env):
     except ValueError as e:
         raise Stop(2, str(e)) from None
     _log(
-        f"{len(passes)} finding pass(es) on {provider} {model}, {jobs} at a time, "
+        f"{len(passes)} {pass_name} pass(es) on {provider} {model}, {jobs} at a time, "
         f"base {base} ({why}); the diff and changed files are sent to the provider"
     )
-    results = run_passes(client, model, passes, jobs, args["timeout"])
+    results = run_passes(
+        client, model, passes, jobs, args["timeout"], parts["context_labels"]
+    )
     try:
         artifacts = artifacts_dir(wt, branch)
-        passes_path = save_passes(artifacts, head, model, results)
+        passes_path = save_passes(artifacts, pass_name, head, model, results)
         settled = settled_entries(wt, branch)
     except (OSError, subprocess.CalledProcessError) as e:
         raise Stop(1, f"pass results not saved: {e}. No report, no receipt") from None
@@ -951,13 +893,14 @@ def run(args, env):
     stamps = [base_line]
     if incomplete:
         stamps.append(
-            f"_Incomplete: {', '.join(incomplete)} (failed or no finding lines); "
+            f"_Incomplete: {', '.join(incomplete)} (failed, no pass lines, or "
+            "malformed lines and no finding line); "
             "this report earned no receipt_"
         )
     messages = aggregate_messages(parts, results, settled, model_line)
     try:
         reply, _ = _timed_chat(client, model, messages, args["timeout"], "aggregation")
-        report = finish_report(reply.text, model_line, *stamps)
+        report = finish_report(reply.text, model_line, *stamps, title=parts["title"])
     except (ProviderError, ValueError) as e:
         raise Stop(
             1,
@@ -969,18 +912,18 @@ def run(args, env):
     except OSError as e:
         raise Stop(1, f"report not saved: {e}") from None
     if incomplete:
-        # A review with an aspect missing isn't the review gate 3 asks for.
+        # A pass with an aspect missing isn't the pass gate 3 or 5 asks for.
         raise Stop(
             1,
-            f"aspect(s) {', '.join(incomplete)} failed or answered without finding "
-            "lines: the report is saved for reading, but no receipt. Re-run to earn "
-            "the gate",
+            f"aspect(s) {', '.join(incomplete)} failed, answered without pass "
+            "lines, or dropped malformed lines and kept no finding line: the report "
+            "is saved for reading, but no receipt. Re-run to earn the gate",
         )
     executor = {
         "host": EXECUTOR_HOST,
         "provider": provider,
         "model": model,
-        "aspects": ",".join(n for n, _ in aspects),
+        "aspects": ",".join(n for n, _, _ in aspects),
     }
     try:
         # `head=` makes the receipt name the commit that was diffed, or refuse.

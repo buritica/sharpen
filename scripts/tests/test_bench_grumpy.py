@@ -19,7 +19,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 spec = importlib.util.spec_from_file_location(
@@ -654,6 +657,60 @@ class CommandTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bench.build_command("codex", "review", invoke="native")
 
+    def test_oneshot_runs_this_checkouts_script(self):
+        argv, stdin = bench.build_command(
+            "oneshot", "imagine", "m", grumpy="/g", provider="compatible"
+        )
+        self.assertEqual(
+            argv,
+            [
+                sys.executable,
+                "/g/scripts/oneshot.py",
+                "imagine",
+                "--provider",
+                "compatible",
+                "--model",
+                "m",
+            ],
+        )
+        self.assertIsNone(stdin)
+        # No provider, no flag: oneshot.py picks SHARPEN_LLM_PROVIDER itself.
+        argv, _ = bench.build_command("oneshot", "review", "m", grumpy="/g")
+        self.assertNotIn("--provider", argv)
+        with self.assertRaises(ValueError):
+            bench.build_command("oneshot", "review", invoke="inline")
+
+    def test_bare_placeholders_drop_without_a_value(self):
+        argv, _ = bench.build_command(
+            "codex", "review", template="x {model} --p {provider} y"
+        )
+        self.assertEqual(argv, ["x", "y"])
+
+    def test_oneshot_version_names_grumpy_or_nothing(self):
+        self.assertRegex(bench.oneshot_version(), r"^grumpy \d+\.\d+\.\d+ oneshot\.py$")
+        self.assertIsNone(bench.oneshot_version(grumpy="/nonexistent"))
+
+    def test_oneshot_prompt_hash_covers_the_script(self):
+        self.assertNotEqual(
+            bench.prompt_hash("review"), bench.prompt_hash("review", host="oneshot")
+        )
+
+    def test_oneshot_prompt_hash_covers_the_prompt_extraction(self):
+        # The extractors live in oneshot_prompts.py: an edit there changes
+        # the prompts, so it must change the hash compare reads.
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        os.makedirs(os.path.join(root, "scripts"))
+        for name in ("oneshot.py", "oneshot_prompts.py"):
+            with open(os.path.join(root, "scripts", name), "w") as f:
+                f.write("x = 1\n")
+        before = bench.prompt_hash("review", grumpy=root, host="oneshot")
+        with open(os.path.join(root, "scripts", "oneshot_prompts.py"), "a") as f:
+            f.write("y = 2\n")
+        self.assertNotEqual(
+            before, bench.prompt_hash("review", grumpy=root, host="oneshot")
+        )
+
 
 class FixtureTest(unittest.TestCase):
     """Every shipped case is internally consistent."""
@@ -1175,6 +1232,9 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("imagine: codex exec", stdout)
         self.assertIn("SKILL.md as the prompt", stdout)
         self.assertIn("unverified", stdout)
+        # The same refusal `run` gives, not a silently dropped flag.
+        code, _ = self.run_cli("commands", "--host", "pi", "--provider", "openai")
+        self.assertEqual(code, 2)
         code, stdout = self.run_cli("cases")
         self.assertEqual(code, 0)
         self.assertIn("billing-planted", stdout)
@@ -1201,6 +1261,161 @@ class FindReportTest(unittest.TestCase):
         # .sharpen/; a report under .claude/ is a contract miss.
         self._write(".claude", "grumpy", "bench", "x", "review.md")
         self.assertIsNone(bench.find_report(self.repo, "bench/x", "review"))
+
+
+class _ChatStub(BaseHTTPRequestHandler):
+    """An OpenAI-compatible server that answers every pass with one finding
+    line and the aggregation with a report naming the counter race."""
+
+    calls = 0
+    report = textwrap.dedent(
+        """\
+        # Production Imagination: bulk refresh
+
+        _It will page someone._
+
+        ## 🚨 Bugs Found (Fix These)
+
+        - [concurrency]: the shared counter race loses updates with `+=` from 32 threads [sync/bulk.py:21]
+
+        ## ⚠️ Serious Concerns (Should Fix)
+
+        ## 🤔 Questionable Decisions (Worth Discussing)
+
+        ## Strengths
+
+        ## Verdict
+
+        Fix and reship.
+        """
+    )
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        type(self).calls += 1
+        prompt = body["messages"][-1]["content"]
+        if "You are the aggregator" in prompt:
+            content = self.report
+        else:
+            content = "CRIT|sync/bulk.py:21|counter race|fact|concurrency"
+        data = json.dumps(
+            {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+class OneshotHostTest(unittest.TestCase):
+    """The oneshot host end to end: the bench runs this checkout's oneshot.py
+    in a fixture repo against a local stub server and scores what it saved."""
+
+    def setUp(self):
+        _ChatStub.calls = 0
+        self.server = HTTPServer(("127.0.0.1", 0), _ChatStub)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+        keep = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("SHARPEN_LLM", "OPENAI"))
+        }
+        # No gh on PATH: diff_base falls back to the fixture's main.
+        keep.update(PATH="/usr/bin:/bin", SHARPEN_LLM_URL=url)
+        patcher = mock.patch.dict(os.environ, keep, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_cli(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = bench.main(list(args))
+        return code, out.getvalue() + err.getvalue()
+
+    def test_imagine_on_a_compatible_server_is_scored(self):
+        out = os.path.join(self.tmp, "results")
+        code, text = self.run_cli(
+            "run",
+            "--host",
+            "oneshot",
+            "--provider",
+            "compatible",
+            "--model",
+            "stub-m",
+            "--cases",
+            "imagine-concurrency",
+            "--repeat",
+            "1",
+            "--out",
+            out,
+        )
+        self.assertEqual(code, 0, text)
+        (run_dir,) = os.listdir(out)
+        self.assertIn("-oneshot-compatible-stub-m", run_dir)
+        with open(os.path.join(out, run_dir, "results.json")) as f:
+            results = json.load(f)
+        self.assertEqual(results["host"], "oneshot")
+        self.assertEqual(results["provider"], "compatible")
+        self.assertTrue(results["flags_verified"])
+        self.assertTrue(results["cli_version"].startswith("grumpy "))
+        (run,) = results["runs"]
+        self.assertEqual(run["status"], "scored", run)
+        self.assertEqual(run["score"]["hits"], ["counter-race"])
+        # Five simulation passes and one aggregation per run.
+        self.assertEqual(_ChatStub.calls, 6)
+        with open(os.path.join(out, run_dir, "imagine-concurrency-imagine-1.md")) as f:
+            self.assertIn("_Model: stub-m via compatible (one-shot", f.read())
+
+    def test_setup_problems_fail_before_any_run(self):
+        out = os.path.join(self.tmp, "results")
+        base = [
+            "run",
+            "--host",
+            "oneshot",
+            "--cases",
+            "imagine-concurrency",
+            "--out",
+            out,
+        ]
+        cases = {
+            "no model": (["--provider", "compatible"], {}, "needs --model"),
+            "no key": (["--provider", "openai"], {}, "OPENAI_API_KEY"),
+            "no url": (
+                ["--provider", "compatible", "--model", "m"],
+                {"SHARPEN_LLM_URL": ""},
+                "SHARPEN_LLM_URL",
+            ),
+            "analysis pin": (
+                ["--provider", "compatible", "--model", "m", "--analysis", "opus"],
+                {},
+                "--analysis",
+            ),
+        }
+        for name, (extra, env, says) in cases.items():
+            with self.subTest(name), mock.patch.dict(os.environ, env):
+                code, text = self.run_cli(*base, *extra)
+                self.assertEqual(code, 2)
+                self.assertIn(says, text)
+        with mock.patch.dict(os.environ, {"SHARPEN_LLM_PROVIDER": "bogus"}):
+            code, text = self.run_cli(*base, "--model", "m")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown provider 'bogus'", text)
+        code, text = self.run_cli(
+            "run", "--host", "pi", "--provider", "openai", "--out", out
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--provider is for --host oneshot", text)
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(_ChatStub.calls, 0)
 
 
 if __name__ == "__main__":
