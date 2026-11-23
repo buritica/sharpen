@@ -500,7 +500,7 @@ The ladder is the map's `escalation` list, `exec-trivial < exec < analysis`;
 `analysis` is the ceiling. The `audit` role is not a rung. If two rungs
 resolve to the same alias (an override pinned `analysis` to `sonnet`, say),
 escalating between them changes nothing: treat it as having no higher rung,
-and report the task as blocked instead of spending the escalation.
+and report the finding as blocked instead of spending the escalation.
 
 `--max-tier <role>` **clamps** routing to that ceiling (order:
 `exec-trivial < exec < analysis`). `--max-tier exec` forces everything to
