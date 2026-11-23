@@ -722,8 +722,13 @@ class MainTest(_Repo):
     def test_rate_limit_waits_for_retry_after_and_says_so(self):
         Handler.status = lambda prompt, n: 429 if n == 1 else 200
         Handler.retry_after = 7
+        # Swap oneshot's own `time` name, not the shared module's `sleep`: the
+        # base lookup's `gh pr view` runs under subprocess.run(timeout=...), whose
+        # wait polls time.sleep, so a global patch counted those polls too.
+        clock = mock.Mock(wraps=time)
+        sleep = clock.sleep = mock.Mock()
         # Nested, not parenthesized: the 3.9 floor doesn't parse `with (a, b):`.
-        with mock.patch.object(oneshot.time, "sleep") as sleep:
+        with mock.patch.object(oneshot, "time", clock):
             with mock.patch.object(oneshot, "_log") as log:
                 self.assertEqual(self.main(env={"SHARPEN_LLM_API_KEY": KEY}), 0)
         self.assertEqual(sleep.call_count, 1)
