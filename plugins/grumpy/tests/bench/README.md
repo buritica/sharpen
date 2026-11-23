@@ -89,7 +89,8 @@ the other hosts. `run` stops before the first case when the provider's variable 
 model. `--model` is the model for every pass; with `--provider openai` and no `--model` it is
 `models.yaml`'s `analysis.openai`. `--analysis` pins Claude Code's alias and is refused here.
 The recorded `cli_version` is the grumpy version whose `oneshot.py` ran, and the prompt hash
-covers `oneshot.py` too, since it adds its own preamble and aggregation wording. A pass that
+covers `oneshot.py` and `oneshot_prompts.py` too, since the first adds its own preamble and
+aggregation wording and the second cuts the per-pass prompts out of the command. A pass that
 earns no receipt (an aspect that failed or answered in prose) exits 1 and is a failed
 `exit-nonzero` run, not a scored one. With `--provider openai` the fixture code goes to
 OpenAI; it is planted toy code, but say so if that matters where you run it.

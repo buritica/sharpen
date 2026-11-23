@@ -695,6 +695,22 @@ class CommandTest(unittest.TestCase):
             bench.prompt_hash("review"), bench.prompt_hash("review", host="oneshot")
         )
 
+    def test_oneshot_prompt_hash_covers_the_prompt_extraction(self):
+        # The extractors live in oneshot_prompts.py: an edit there changes
+        # the prompts, so it must change the hash compare reads.
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        os.makedirs(os.path.join(root, "scripts"))
+        for name in ("oneshot.py", "oneshot_prompts.py"):
+            with open(os.path.join(root, "scripts", name), "w") as f:
+                f.write("x = 1\n")
+        before = bench.prompt_hash("review", grumpy=root, host="oneshot")
+        with open(os.path.join(root, "scripts", "oneshot_prompts.py"), "a") as f:
+            f.write("y = 2\n")
+        self.assertNotEqual(
+            before, bench.prompt_hash("review", grumpy=root, host="oneshot")
+        )
+
 
 class FixtureTest(unittest.TestCase):
     """Every shipped case is internally consistent."""
@@ -1216,6 +1232,9 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("imagine: codex exec", stdout)
         self.assertIn("SKILL.md as the prompt", stdout)
         self.assertIn("unverified", stdout)
+        # The same refusal `run` gives, not a silently dropped flag.
+        code, _ = self.run_cli("commands", "--host", "pi", "--provider", "openai")
+        self.assertEqual(code, 2)
         code, stdout = self.run_cli("cases")
         self.assertEqual(code, 0)
         self.assertIn("billing-planted", stdout)

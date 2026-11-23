@@ -313,6 +313,40 @@ class ParseTest(unittest.TestCase):
         # Review keeps no context lines: a label there is just a malformed line.
         self.assertEqual(oneshot.parse_pass_lines("cleanup|a|b")[2], 1)
 
+    def test_backticks_are_stripped_per_line(self):
+        # imagine.md shows CONTEXT lines in backticks; a model that copies
+        # that wraps every line, not just the reply.
+        labels = oneshot.load_command("imagine")["context_labels"]
+        lines, errored, dropped = oneshot.parse_pass_lines(
+            "`cleanup|Cleanup guarantees: never|User-facing error: cryptic`\n"
+            "`transport:Slack|API calls: 2|UX: janky|Logs: none|Metrics: none`\n"
+            "`WARN|a.py:3|counter race|fact|concurrency`",
+            labels,
+        )
+        self.assertEqual(
+            lines,
+            [
+                "cleanup|Cleanup guarantees: never|User-facing error: cryptic",
+                "transport:Slack|API calls: 2|UX: janky|Logs: none|Metrics: none",
+                "WARN|a.py:3|counter race|fact|concurrency",
+            ],
+        )
+        self.assertFalse(errored)
+        self.assertEqual(dropped, 0)
+        # And on review, a backticked finding line is still a finding.
+        self.assertEqual(
+            oneshot.parse_pass_lines("`CRIT|a.py:3|x|fact|errors`")[0],
+            ["CRIT|a.py:3|x|fact|errors"],
+        )
+
+    def test_review_does_not_accept_handled_lines(self):
+        # Review's template never asks for HANDLED: a reply of only that is
+        # a malformed line, not "answered, nothing found".
+        self.assertEqual(
+            oneshot.parse_pass_lines("HANDLED|retries|bounded with backoff"),
+            ([], False, 1),
+        )
+
     def test_model_line_is_ours(self):
         out = oneshot.finish_report(
             "```markdown\n" + REPORT + "```", "_Model: m via p_"

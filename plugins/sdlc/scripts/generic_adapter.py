@@ -219,7 +219,9 @@ def _model_flags(manifest, env, name):
 def _run_passes(oneshot, passes, flags, env, name):
     """Run `oneshot.py <pass> <flags>` for each pass. A pass that earns
     nothing doesn't skip the next (separate gates); exit 2 (setup) or a
-    signal stops the run. Returns the worst exit code, 0/1/2."""
+    signal stops the run. Returns the worst exit code, 0/1/2. Every pass
+    reviews the same commit: imagine runs straight after review, with no
+    fix between them (see run_with_oneshot)."""
     # ponytail: no deadline on the pass subprocesses and no --timeout/--jobs/
     # --aspects pass-through; oneshot's own defaults bound each at two attempts
     # times --timeout per aspect (about thirty minutes when a provider hangs).
@@ -248,7 +250,12 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     report under .sharpen/grumpy/<branch>/ and a receipt that `record-gate.py
     --verify review|imagine` records gate 3 or 5 from. One pass earning
     nothing doesn't skip the other (they are separate gates); a setup error
-    (exit 2) stops both. `legacy_env` maps an old variable name to the one
+    (exit 2) stops both. Imagine runs on the same commit as review, before
+    any fix: on this path nobody runs `/grumpy:fix` between them, so its
+    report covers the pre-fix code. That is deliberate, not the agent
+    chain's review -> fix -> imagine order; once fixes are committed the
+    imagine gate sits on an older commit and blocks the PR as stale until
+    the adapter runs again on the new HEAD. `legacy_env` maps an old variable name to the one
     oneshot.py reads, honored with a warning. Exit codes: 2 setup error, 1 a
     gate command failed or a pass earned nothing, 0 every gate command passed
     and every declared pass wrote its report and receipt. A manifest with

@@ -142,14 +142,19 @@ def skill_prompt(pass_name, grumpy=GRUMPY):
 
 def prompt_hash(pass_name, grumpy=GRUMPY, host=None):
     """Hash of the files the pass's prompt comes from. On `oneshot` that
-    includes oneshot.py, which adds its own preamble and aggregation text."""
+    includes oneshot.py, which adds its own preamble and aggregation text,
+    and oneshot_prompts.py, which cuts the per-pass prompts out of the
+    command."""
     h = hashlib.sha256()
     rels = [
         os.path.join("commands", f"{pass_name}.md"),
         os.path.join("skills", pass_name, "SKILL.md"),
     ]
     if host == "oneshot":
-        rels.append(os.path.join("scripts", "oneshot.py"))
+        rels += [
+            os.path.join("scripts", "oneshot.py"),
+            os.path.join("scripts", "oneshot_prompts.py"),
+        ]
     for rel in rels:
         path = os.path.join(grumpy, rel)
         if os.path.exists(path):

@@ -1088,6 +1088,10 @@ def cmd_compare(args):
 
 def cmd_commands(args):
     profile = HOSTS[args.host]
+    if args.provider and args.host != "oneshot":
+        # The same refusal `run` gives (oneshot_setup), not a dropped flag.
+        print("error: --provider is for --host oneshot", file=sys.stderr)
+        return 2
     for pass_name in _passes(args.pass_):
         argv, stdin_text = build_command(
             args.host,

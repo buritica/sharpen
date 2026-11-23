@@ -92,14 +92,10 @@ import receipt  # noqa: E402
 # The prompt extraction lives in oneshot_prompts.py; these names are part of
 # this script's surface (tests and callers reach them as oneshot.<name>).
 from oneshot_prompts import (  # noqa: E402,F401
-    EXTRACTORS,
-    IMAGINE_AGENTS,
     SEVERITY_SECTIONS,
     ExtractionError,
     _fence_after,
-    _headings,
     _strip_frontmatter,
-    extract_imagine,
     extract_review,
     load_command,
     section,
@@ -498,7 +494,8 @@ def parse_pass_lines(text, context_labels=()):
     Imagine's passes also return CONTEXT lines (first field one of
     `context_labels`, or `transport:<Name>`) and `HANDLED|area|why` lines;
     those are kept as they are, for the aggregator's narrative sections and
-    Strengths. A line with pipes that still doesn't parse (four fields, a
+    Strengths (on review, with no labels, a HANDLED line is malformed).
+    Backticks around a line are stripped first. A line with pipes that still doesn't parse (four fields, a
     lowercase severity, a `file` with no `:N`) is dropped and counted, so the
     aggregator and stderr can say the aspect may be incomplete. A response
     with no usable line is errored, never salvaged, unless it is a short
@@ -506,11 +503,15 @@ def parse_pass_lines(text, context_labels=()):
     answered nothing (a full queue, say) and must not pass for a clean
     review."""
     found, dropped = [], 0
-    for line in text.strip().strip("`").split("\n"):
-        fields = [f.strip() for f in line.strip().split("|")]
+    for line in text.strip().split("\n"):
+        # imagine.md shows its CONTEXT lines in backticks, so a model may wrap
+        # any line (or the whole reply) in them: strip them per line.
+        fields = [f.strip() for f in line.strip().strip("`").strip().split("|")]
         head = fields[0]
+        # HANDLED is imagine's line (a pass with context labels); review's
+        # template never asks for it, so there it is a malformed line.
         if len(fields) >= 3 and (
-            head == "HANDLED"
+            (head == "HANDLED" and context_labels)
             or head in context_labels
             or (":" in head and head.split(":", 1)[0] in context_labels)
         ):
@@ -558,9 +559,17 @@ def aggregate_messages(parts, results, settled, model_line):
             blocks.append(block)
     prompt = "\n\n".join(
         [
-            "You are the aggregator. The runner already ran one finding pass per "
-            "aspect and gives you their pipe lines below. Follow grumpy's "
-            "aggregation rules and render the report.",
+            (
+                "You are the aggregator. The runner already ran the five "
+                "simulation passes and gives you their pipe lines below: "
+                "findings, plus CONTEXT and HANDLED lines for the narrative "
+                "sections and Strengths. Keep all three kinds. Follow grumpy's "
+                "aggregation rules and render the report."
+                if parts["context_labels"]
+                else "You are the aggregator. The runner already ran one finding "
+                "pass per aspect and gives you their pipe lines below. Follow "
+                "grumpy's aggregation rules and render the report."
+            ),
             *(f"{heading}\n\n{text}" for heading, text in parts["aggregate"]),
             "Settled entries from fix.md (the runner read them for you):\n"
             + ("\n".join(settled) or "(none)"),

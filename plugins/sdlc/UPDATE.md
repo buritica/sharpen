@@ -20,6 +20,12 @@ saves `.sharpen/grumpy/<branch>/imagine.md` and leaves a receipt, so
 - **A review that earns nothing no longer ends the run.** Review and imagine are separate
   gates, so the imagine pass still runs, and the adapter exits 1. A setup error (exit 2: a
   bad key, model or URL) still stops both.
+- **Imagine runs on the same commit as review, before any fix.** Nobody runs `/grumpy:fix`
+  between them on this path, so the imagine report and receipt cover the pre-fix commit.
+  That is deliberate (one run, both reports), not the agent chain's review → fix → imagine
+  order. Once you commit fixes, imagine's gate sits on an older commit than `HEAD`, and
+  while it is the last review gate recorded the PR is blocked as stale; re-run the adapter
+  on the new `HEAD` so both passes see the fixed code.
 - **`generic_adapter.py` skips `imagine` too.** An `adversarial` manifest no longer needs a
   shell command mapped for `imagine`; the adapter says the pass comes from grumpy.
 - **The benchmark measures this path.** `scripts/bench-grumpy.py run --host oneshot` (in the

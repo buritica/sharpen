@@ -44,8 +44,8 @@ python3 scripts/bench-grumpy.py compare <baseline results.json> <new results.jso
 ```
 
 It runs the real pass headlessly on Claude Code, Codex, pi or the no-agent `oneshot` path
-(`--host oneshot`, which also needs a run after a change to `scripts/oneshot.py`'s own
-prompt text) against the fixture repos in `plugins/grumpy/tests/bench/` (planted issues,
+(`--host oneshot`, which also needs a run after a change to `scripts/oneshot.py` or
+`scripts/oneshot_prompts.py`, the two files its prompts are built in) against the fixture repos in `plugins/grumpy/tests/bench/` (planted issues,
 plus clean, comment-only and capability-bait diffs that measure noise), scores the report the pass writes for recall,
 precision and blocking noise, and writes results to the gitignored `.sharpen/bench/`. See
 `plugins/grumpy/tests/bench/README.md` for cases, cost and the per-host command lines. It

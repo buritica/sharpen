@@ -35,7 +35,8 @@ SEVERITY_SECTIONS = {
 
 
 class ExtractionError(ValueError):
-    """review.md no longer has a part this path builds its prompts from."""
+    """review.md or imagine.md no longer has a part this path builds its
+    prompts from."""
 
 
 # --- reading the command ----------------------------------------------------
