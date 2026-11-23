@@ -814,9 +814,10 @@ def _run_labelled(
 
 
 def _list(arg):
-    """'a,b' -> ['a', 'b']; None or '' -> [None] (the host default)."""
+    """'a,b' -> ['a', 'b']; None or '' -> [None] (the host default). A
+    repeated item is dropped: two identical variants would share log names."""
     items = [x.strip() for x in (arg or "").split(",") if x.strip()]
-    return items or [None]
+    return list(dict.fromkeys(items)) or [None]
 
 
 def variant_name(model, mode):

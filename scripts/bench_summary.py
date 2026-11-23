@@ -136,6 +136,8 @@ def compare(
             f"hosts differ ({baseline.get('host')} vs {candidate.get('host')}):"
             " they count tokens differently, so only cost is compared"
         )
+    b, c, matched = _match_variant_rows(b, c)
+    notes += [f"{bn}: compared with candidate's {cn}" for bn, cn in matched]
     for name in sorted(set(b) | set(c)):
         if name not in c:
             problems.append(f"{name}: in baseline, not in candidate")
@@ -167,6 +169,36 @@ def compare(
             problems.append(f"{name}: {spend}")
         notes += [f"{name}: {n}" for n in _run_notes(bs, cs)]
     return problems, notes
+
+
+def _match_variant_rows(b, c):
+    """Pair a plain `case/pass` row on one side with the other side's
+    `case/pass @model/mode` row when that is the only row it has for the
+    case/pass, so a plain baseline compares with a one-variant candidate (and
+    the other way round). Returns the summaries keyed so paired rows share
+    the plain name, and the (baseline name, candidate name) pairs."""
+
+    def by_case(summary):
+        out = {}
+        for name in summary:
+            out.setdefault(name.split(" @", 1)[0], []).append(name)
+        return out
+
+    b, c = dict(b), dict(c)
+    bc, cc = by_case(b), by_case(c)
+    matched = []
+    for plain in sorted(set(bc) & set(cc)):
+        bn, cn = bc[plain], cc[plain]
+        if len(bn) != 1 or len(cn) != 1 or bn == cn:
+            continue
+        if bn[0] == plain:
+            c[plain] = c.pop(cn[0])
+        elif cn[0] == plain:
+            b[plain] = b.pop(bn[0])
+        else:
+            continue  # two different variants: not the same run
+        matched.append((bn[0], cn[0]))
+    return b, c, matched
 
 
 # (field, label, format, limit key, worse when lower). The order is the
@@ -203,7 +235,8 @@ def _run_notes(bs, cs):
     bt, ct = bs.get("duration_s"), cs.get("duration_s")
     if bt and ct and ct > bt * 1.5:
         notes.append(f"wall time {bt:.0f}s -> {ct:.0f}s")
-    if bs.get("modes") and cs.get("modes") and bs["modes"] != cs["modes"]:
+    # Which modes ran, not how often: counts differ whenever --repeat does.
+    if bs.get("modes") and cs.get("modes") and set(bs["modes"]) != set(cs["modes"]):
         notes.append(f"passes ran {_modes(bs)} in baseline, {_modes(cs)} in candidate")
     return notes
 

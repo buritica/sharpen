@@ -92,7 +92,19 @@ against the baseline:
 - or is missing a case/pass the baseline has, or has no runs at all.
 
 A run that took more than 1.5 times as long, or whose passes ran differently (inline in
-one, fanned out in the other), is printed as a note.
+one, fanned out in the other; how often each mode ran doesn't count, so a different
+`--repeat` alone prints nothing), is printed as a note.
+
+Rows match by name. A plain row (`case/pass`) also matches the other side's
+`case/pass @model/mode` row when that is the only row it has for the case/pass, so a
+plain baseline compares with a one-variant result, and a note says which rows were
+paired. Against an eval with several variants per case/pass nothing is guessed: every
+plain row reads as missing, so run the baseline as the same `--model`/`--mode` eval.
+A model or mode listed twice runs once.
+
+`--mode inline` or `--mode fanout` is refused together with `--cmd`: the bench can't tell
+where in a custom command line the system-prompt flag belongs, so put
+`--append-system-prompt` in the template yourself.
 
 A run fails when it wrote no report, timed out (even with a half-written report), raised
 an error, or produced a report with none of the severity headings the scorer reads.

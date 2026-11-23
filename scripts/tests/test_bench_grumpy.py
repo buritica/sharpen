@@ -581,6 +581,32 @@ class SummaryCompareTest(unittest.TestCase):
         bench.print_summary(summary, stream=out)
         self.assertIn("c/review: 1/2 run(s) recorded no usage", out.getvalue())
 
+    def test_mode_note_ignores_a_different_repeat(self):
+        base = _results({"a/review": {"modes": {"inline": 3}}})
+        cand = _results({"a/review": {"runs": 1, "modes": {"inline": 1}}})
+        self.assertFalse(any("passes ran" in n for n in bench.compare(base, cand)[1]))
+
+    def test_a_plain_row_matches_a_single_variant_row(self):
+        plain = _results({"a/review": {"recall": 1.0}})
+        one = _results({"a/review @opus/fanout": {"recall": 0.5}})
+        problems, notes = bench.compare(plain, one)
+        self.assertEqual(problems, ["a/review: recall 100% -> 50%"])
+        self.assertIn(
+            "a/review: compared with candidate's a/review @opus/fanout", notes
+        )
+        # The other way round too.
+        self.assertEqual(bench.compare(one, plain)[0], [])
+        # Several variants, or two different ones, are not the same run.
+        two = _results({"a/review @opus/fanout": {}, "a/review @opus/inline": {}})
+        self.assertIn(
+            "a/review: in baseline, not in candidate", bench.compare(plain, two)[0]
+        )
+        other = _results({"a/review @sonnet/inline": {}})
+        self.assertIn(
+            "a/review @opus/fanout: in baseline, not in candidate",
+            bench.compare(one, other)[0],
+        )
+
     def test_slower_runs_are_a_note(self):
         _, notes = bench.compare(
             _results({"a/review": {"duration_s": 40.0}}),
@@ -1541,6 +1567,22 @@ class UsageTest(unittest.TestCase):
         self.assertNotIn("--append-system-prompt", argv)
         with self.assertRaises(ValueError):
             bench.build_command("pi", "review", "m", mode="inline")
+        # A --cmd template owns its flags: splicing at argv[1] would land in
+        # `env`'s arguments here.
+        with self.assertRaises(ValueError):
+            bench.build_command(
+                "claude", "review", mode="fanout", template="env X=1 claude -p {prompt}"
+            )
+        argv, _ = bench.build_command(
+            "claude", "review", mode="auto", template="env X=1 claude -p {prompt}"
+        )
+        self.assertEqual(argv[:3], ["env", "X=1", "claude"])
+
+    def test_a_repeated_model_or_mode_runs_once(self):
+        args = argparse.Namespace(model="opus, opus,sonnet", mode="inline,inline")
+        self.assertEqual(
+            bench._variants(args), [("opus", "inline"), ("sonnet", "inline")]
+        )
 
 
 class FindReportTest(unittest.TestCase):
