@@ -7,8 +7,9 @@ past release's behavior change stays discoverable without bloating the current R
 
 `/grumpy:fix` now writes its receipt with `receipt.py fix --stage auto`, which reads the stage
 from the receipts already on disk: the stage of the pass still owed a fix (its receipt is
-newer than that stage's last fix receipt), imagine first when both are. That is the order
-sdlc's `determine_gate` fills the fix gates in once both pass gates are recorded. When
+newer than that stage's last fix receipt; imagine's also newer than review's, so one left
+from before a reset doesn't count), imagine first when both are. That is the order sdlc's
+`determine_gate` fills the fix gates in once both pass gates are recorded. When
 neither is owed, a repeated fix keeps the last fix's stage.
 
 Before, the stage was whichever of review and imagine ran last, so after the first fix the

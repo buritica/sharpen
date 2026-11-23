@@ -167,7 +167,9 @@ def choose_stage(worktree="."):
     """Which review this fix run resolved, from the receipts on disk.
 
     A pass is owed a fix while its receipt is newer than its stage's last fix
-    receipt (or it has none):
+    receipt (or it has none); imagine also only while its receipt is newer
+    than review's, so an imagine left from a round before a reset (review run
+    again since) is not owed:
 
     * imagine owed: `imagine` (gate 6), even when review is owed too. sdlc's
       `determine_gate` fills post-imagine first whenever the imagine gate is
@@ -202,14 +204,18 @@ def choose_stage(worktree="."):
         ran, fixed = newest(name), newest(f"fix-{name}")
         return ran is not None and (fixed is None or fixed < ran)
 
-    if owed("imagine"):
+    review = newest("review")
+    # ponytail: picks imagine when both are owed, the order sdlc wants once
+    # both pass gates are recorded; if a host with no end-of-turn sweep reports
+    # this refused for post-review (imagine not verified yet), ask sdlc instead
+    if owed("imagine") and (review is None or newest("imagine") > review):
         return "imagine"
     if owed("review"):
         return "review"
     fix_review, fix_imagine = newest("fix-review"), newest("fix-imagine")
     if fix_imagine and (fix_review is None or fix_imagine > fix_review):
         return "imagine"
-    if fix_review is None and newest("review") is None:
+    if fix_review is None and review is None:
         sys.stderr.write(
             "[grumpy] no review or imagine receipt found; writing the review stage\n"
         )

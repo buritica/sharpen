@@ -160,6 +160,17 @@ class AutoStageTest(ReceiptBase):
         self.pass_receipt("review")
         self.assertEqual(self.auto_fix(), "review")
 
+    def test_an_imagine_from_before_a_reset_is_not_owed(self):
+        # Round 1 stopped after imagine; the cycle was reset and review ran
+        # again. sdlc has only the review gate, so the fix is review's.
+        self.pass_receipt("review")
+        self.assertEqual(self.auto_fix(), "review")
+        self.pass_receipt("imagine")
+        self.pass_receipt("review")
+        self.assertEqual(self.auto_fix(), "review")
+        self.pass_receipt("imagine")
+        self.assertEqual(self.auto_fix(), "imagine")
+
     def test_a_second_fix_after_imagine_stays_on_imagine(self):
         self.pass_receipt("review")
         self.auto_fix()
