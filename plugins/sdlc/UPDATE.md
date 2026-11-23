@@ -14,9 +14,11 @@ line (a README line that lists the scripts, say) left the upper layer's gates st
 restack, even when the resolution just kept both edits.
 
 - **With `--reason`, a rewrite can carry as `manual`.** The lines counted are those where the
-  branch's own +/- lines differ from the reviewed ones (a line diff of the two patches), so the
-  layers below never count, against the same 30-line cap that covers every manual carry in the
-  cycle. It still cannot add a file or change a binary one. The reason is recorded and shown in
+  branch's own +/- lines differ from the reviewed ones (a line diff of the two patches, file by
+  file), against the same 30-line cap that covers every manual carry in the cycle. What the
+  layers below changed elsewhere never counts, and neither does renumbered release bookkeeping
+  that would carry on its own. A line both layers edited counts on both sides of the branch's
+  patch, so one conflicting line spends 4. It still cannot add a file or change a binary one. The reason is recorded and shown in
   `--status`, and tests, lint and typecheck re-open as after every carry.
 - **Without `--reason`, the refusal names the flag**, as it already did for commits on top.
 - **Nothing to do in an existing repo.** Re-run `/sdlc:init` step 10 to pick up the reworded

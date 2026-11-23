@@ -194,21 +194,27 @@ class StackTest(ReceiptTestBase):
         git(self.repo, "merge", "-q", "--no-edit", "layer-b")
         self.assert_carried(self.carry(), "rebase")
 
-    def restack_with_a_conflict(self, resolution, extra=None):
+    def restack_with_a_conflict(self, resolution, extra=None, top=None, below=None):
         """sharpen#65: layer-b and BRANCH both edit one line. After the chain,
         layer-b is rewritten on that line, and the restack resolves the
-        conflict with `resolution` (and writes `extra` files, if any)."""
+        conflict with `resolution` (and writes `extra` files, if any). `top`
+        files go into BRANCH's reviewed commit, `below` into layer-b's
+        rewrite."""
         git(self.repo, "checkout", "-q", "layer-b")
         self.commit_file("tools.py", "TOOLS = ['a']\n")
         git(self.repo, "checkout", "-q", BRANCH)
         git(self.repo, "rebase", "-q", "layer-b")
         self.cli("--set-base", "layer-b")
+        for rel, text in (top or {}).items():
+            self.write(rel, text)
         self.commit_file("tools.py", "TOOLS = ['a', 'conv']\n", msg="top layer")
         self.start()
         self.run_chain()
         old_b = git(self.repo, "rev-parse", "layer-b").strip()
         git(self.repo, "checkout", "-q", "layer-b")
         self.write("tools.py", "TOOLS = ['a', 'py39']\n")
+        for rel, text in (below or {}).items():
+            self.write(rel, text)
         git(self.repo, "commit", "-q", "-a", "--amend", "--no-edit")
         git(self.repo, "checkout", "-q", BRANCH)
         rebase = subprocess.run(
@@ -249,6 +255,26 @@ class StackTest(ReceiptTestBase):
         # the layer below's rewrite of the same file.
         self.assertEqual(hop["lines"], 4)
         self.assertNotIn("tests", self.gates())
+
+    def test_conflict_resolution_does_not_count_renumbered_versions(self):
+        # Both layers bump package.json; the restack renumbers the upper
+        # layer's version. That would carry as bookkeeping on its own, so only
+        # the tools line counts.
+        def pkg(v):
+            return '{\n  "name": "x",\n  "version": "%s"\n}\n' % v
+
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.commit_file("package.json", pkg("1.0.0"))
+        git(self.repo, "checkout", "-q", BRANCH)
+        self.restack_with_a_conflict(
+            "TOOLS = ['a', 'py39', 'conv']\n",
+            extra={"package.json": pkg("1.2.0")},
+            top={"package.json": pkg("1.1.0")},
+            below={"package.json": pkg("1.1.0")},
+        )
+        r = self.carry("--reason", "kept both sides, renumbered to 1.2.0")
+        self.assert_carried(r, "manual")
+        self.assertEqual(self.bd()["carries"][-1]["lines"], 4)
 
     def test_conflict_resolution_over_the_cap_is_refused(self):
         padding = "".join(f"# kept {i}\n" for i in range(30))

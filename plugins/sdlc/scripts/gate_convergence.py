@@ -531,7 +531,9 @@ def _classify_rewrite(old, new, reason=None, cwd=None, spent=0, bases=(None, Non
             ),
             None,
         )
-    why, lines = _manual_rewrite_refusal(old_patch, new_patch, reason, spent)
+    why, lines = _manual_rewrite_refusal(
+        old_patch, new_patch, reason, spent, (new, cwd, new_base)
+    )
     # ponytail: recorded as `manual`, like a comment fix; give a restack carry its own class once anything reads the class to tell them apart
     return (None, why, None) if why else ("manual", None, lines)
 
@@ -620,15 +622,53 @@ def _binary_files(file_patches):
     return {p for p, text in file_patches.items() if b"\nGIT binary patch" in text}
 
 
-def _manual_rewrite_refusal(old_patch, new_patch, reason, spent=0):
+def _bookkeeping_paths(old_files, new_files, at):
+    """The release bookkeeping files whose part of the branch patch differs,
+    when `_only_bookkeeping` accepts those differences on their own; else
+    an empty set. `at` is (new, cwd, new_base), as `_only_bookkeeping`
+    takes them."""
+    paths = [
+        p
+        for p in sorted(set(old_files) | set(new_files))
+        if old_files.get(p) != new_files.get(p)
+        and (
+            BOOKKEEPING_VERSION_FILES.match(p)
+            or BOOKKEEPING_STAMP_FILES.match(p)
+            or BOOKKEEPING_NOTE_FILES.match(p)
+        )
+    ]
+    old_sub = b"\n".join(old_files[p] for p in paths if p in old_files)
+    new_sub = b"\n".join(new_files[p] for p in paths if p in new_files)
+    ok = paths and _only_bookkeeping(old_sub, new_sub, *at)[0]
+    return set(paths) if ok else set()
+
+
+def _changed_lines(old_text, new_text):
+    """Lines (removed plus added) a line diff of two patch parts finds."""
+    # An absent side is no lines, not one empty line.
+    old_lines = old_text.split(b"\n") if old_text else []
+    new_lines = new_text.split(b"\n") if new_text else []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    return sum(
+        (i2 - i1) + (j2 - j1)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    )
+
+
+def _manual_rewrite_refusal(old_patch, new_patch, reason, spent=0, at=(None,) * 3):
     """(why a manual carry over a rewrite is refused, None), or (None, the
     lines it spends) when it is allowed (sharpen#65).
 
     The two heads don't share history, so the diff between them is every
     change the layers below made too. What the reason vouches for is the
-    difference between the reviewed and the current branch patch: the lines
-    a conflict resolution changed in the branch's own +/- lines. Those are
-    counted with a line diff, against the same cap as every manual carry."""
+    difference between the reviewed and the current branch patch, file by
+    file: the lines a conflict resolution changed in the branch's own +/-
+    lines, counted with a line diff against the same cap as every manual
+    carry. A line both layers edited counts on both sides (the branch's -
+    line changed too), so one conflicting line is 4. Release bookkeeping
+    that would carry on its own (a renumbered version, stamp or note) is
+    left out; `at` is (new, cwd, new_base) for that check."""
     if not reason.strip():
         return _NO_REASON, None
     old_files, new_files = _split_by_file(old_patch), _split_by_file(new_patch)
@@ -639,14 +679,13 @@ def _manual_rewrite_refusal(old_patch, new_patch, reason, spent=0):
     binary = _binary_files(old_files) | _binary_files(new_files)
     if any(old_files.get(p) != new_files.get(p) for p in binary):
         return _CHANGES_BINARY, None
+    skip = _bookkeeping_paths(old_files, new_files, at)
     # ponytail: one conflicting line spends 4 (the lower layer's - line counts too); count only + lines if a mechanical restack of 7 or fewer conflicting lines is refused over the cap
-    # ponytail: diffs the whole patch, not only the files whose sections differ; diff per file if a rewrite --carry takes over a second
-    lines = 0
-    old_lines, new_lines = old_patch.split(b"\n"), new_patch.split(b"\n")
-    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "equal":
-            lines += (i2 - i1) + (j2 - j1)
+    lines = sum(
+        _changed_lines(old_files.get(p, b""), new_files.get(p, b""))
+        for p in set(old_files) | set(new_files)
+        if p not in skip and old_files.get(p) != new_files.get(p)
+    )
     return _over_cap(lines, spent), lines
 
 
