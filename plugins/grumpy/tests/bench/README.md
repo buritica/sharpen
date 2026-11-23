@@ -82,7 +82,7 @@ the report folder with `Edit(.sharpen/grumpy/**)`, Agent), not a permission bypa
 `workspace-write` sandbox inside the temp repo.
 
 `oneshot` is not an agent: the bench runs grumpy's `scripts/oneshot.py` from this checkout in
-the temp repo, which calls the chat API itself (see grumpy's README, "No agent installed").
+the temp repo (the host profiles live in `scripts/bench_hosts.py`), which calls the chat API itself (see grumpy's README, "No agent installed").
 `--provider` picks the API (default `SHARPEN_LLM_PROVIDER`, else `openai`) and is refused on
 the other hosts. `run` stops before the first case when the provider's variable is missing
 (`OPENAI_API_KEY` for `openai`, `SHARPEN_LLM_URL` for `compatible`) or `compatible` has no

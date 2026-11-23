@@ -19,6 +19,8 @@ that fails or answers in prose leaves the report stamped `_Incomplete:_` and no 
   them (the labels come from the prompts themselves) so the aggregation can fill the
   narrative sections and Strengths. A sixth agent, a renamed one or a lost placeholder in
   `imagine.md` stops the run with exit 2 until `IMAGINE_AGENTS` names it.
+- The prompt extraction for both passes moved from `oneshot.py` to
+  `scripts/oneshot_prompts.py`; `oneshot.py` still exposes the same names.
 - Imagine's default model on this path is `models.yaml`'s `analysis.openai`, the same as
   review's: there is no session model to fall back to.
 - The no-agent preamble now asks for one short line, never an empty message, when a pass

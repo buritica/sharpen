@@ -488,7 +488,7 @@ fill the narrative sections and Strengths. The passes' lines go to
 `_Model:_` and `_Analyzed: <base>, from <source> — HEAD at <sha>_` lines written by the
 script, and the receipt earns gate 5 through `record-gate.py --verify imagine`. A sixth
 agent in `imagine.md`, a renamed one, or a lost placeholder stops the run with exit 2
-until `IMAGINE_AGENTS` in `oneshot.py` names it. Imagine uses the same default model as
+until `IMAGINE_AGENTS` in `scripts/oneshot_prompts.py` names it. Imagine uses the same default model as
 review: there is no session model on this path, so `models.yaml`'s `analysis.openai`.
 
 While it runs, stderr gets one line per finished pass (duration, finding lines, tokens when

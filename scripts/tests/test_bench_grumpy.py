@@ -680,6 +680,16 @@ class CommandTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bench.build_command("oneshot", "review", invoke="inline")
 
+    def test_bare_placeholders_drop_without_a_value(self):
+        argv, _ = bench.build_command(
+            "codex", "review", template="x {model} --p {provider} y"
+        )
+        self.assertEqual(argv, ["x", "y"])
+
+    def test_oneshot_version_names_grumpy_or_nothing(self):
+        self.assertRegex(bench.oneshot_version(), r"^grumpy \d+\.\d+\.\d+ oneshot\.py$")
+        self.assertIsNone(bench.oneshot_version(grumpy="/nonexistent"))
+
     def test_oneshot_prompt_hash_covers_the_script(self):
         self.assertNotEqual(
             bench.prompt_hash("review"), bench.prompt_hash("review", host="oneshot")
@@ -1376,6 +1386,10 @@ class OneshotHostTest(unittest.TestCase):
                 code, text = self.run_cli(*base, *extra)
                 self.assertEqual(code, 2)
                 self.assertIn(says, text)
+        with mock.patch.dict(os.environ, {"SHARPEN_LLM_PROVIDER": "bogus"}):
+            code, text = self.run_cli(*base, "--model", "m")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown provider 'bogus'", text)
         code, text = self.run_cli(
             "run", "--host", "pi", "--provider", "openai", "--out", out
         )

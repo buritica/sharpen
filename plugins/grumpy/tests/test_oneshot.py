@@ -194,6 +194,31 @@ class ExtractionTest(unittest.TestCase):
         for step in ("Step 4", "Step 5", "Step 6", "receipt.py"):
             self.assertNotIn(step, sent)
 
+    def test_imagine_prompt_checks(self):
+        import oneshot_prompts as op
+
+        agents = "".join(
+            f"### {start} x\n\n```\n`ctx|a|b`\n[DIFF_BASE] [DIFF_CONTENT] "
+            "SEVERITY|file:line\nSEVERITY is CRIT (a), WARN (b), or NOTE (c).\nend\n```\n\n"
+            for _, start in op.IMAGINE_AGENTS
+        )
+        units, labels = op._imagine_units(agents)
+        self.assertEqual(len(units), 5)
+        self.assertEqual(op._imagine_severities(units), ["CRIT", "WARN", "NOTE"])
+        broken = {
+            "no fence": agents.replace("```\n`ctx", "`ctx", 1),
+            "no context line": agents.replace("`ctx|a|b`", "ctx"),
+        }
+        for name, text in broken.items():
+            with self.subTest(name), self.assertRaises(op.ExtractionError):
+                op._imagine_units(text)
+        no_sentence = [("a", "A", "CRIT WARN NOTE")]
+        with self.assertRaises(op.ExtractionError):
+            op._imagine_severities(no_sentence)
+        missing = [units[0], ("b", "B", "only CRIT and WARN here")]
+        with self.assertRaisesRegex(op.ExtractionError, "NOTE"):
+            op._imagine_severities(missing)
+
     def test_imagine_drift_fails_loudly(self):
         text = read(IMAGINE_MD)
         sixth = text.replace(

@@ -189,6 +189,56 @@ def missing_grumpy_message(name, root):
     )
 
 
+def declared_passes(manifest):
+    """The one-shot passes the manifest declares, in gate order."""
+    return [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
+
+
+def _map_legacy_env(env, legacy_env, name):
+    """Copy each deprecated variable to its new name, with a warning, unless
+    the new name is already set."""
+    for old, new in (legacy_env or {}).items():
+        if env.get(old) and not env.get(new):
+            _log(f"[{name}] {old} is deprecated; set {new} instead")
+            env[new] = env[old]
+
+
+def _model_flags(manifest, env, name):
+    """`--model <provider.model>` unless SHARPEN_LLM_MODEL beats it (said)."""
+    model = (manifest.get("provider") or {}).get("model")
+    if model and not env.get("SHARPEN_LLM_MODEL"):
+        return ["--model", model]
+    if model:
+        _log(
+            f"[{name}] SHARPEN_LLM_MODEL={env['SHARPEN_LLM_MODEL']} overrides the "
+            f"manifest's provider.model ({model})"
+        )
+    return []
+
+
+def _run_passes(oneshot, passes, flags, env, name):
+    """Run `oneshot.py <pass> <flags>` for each pass. A pass that earns
+    nothing doesn't skip the next (separate gates); exit 2 (setup) or a
+    signal stops the run. Returns the worst exit code, 0/1/2."""
+    # ponytail: no deadline on the pass subprocesses and no --timeout/--jobs/
+    # --aspects pass-through; oneshot's own defaults bound each at two attempts
+    # times --timeout per aspect (about thirty minutes when a provider hangs).
+    # Add a manifest `provider.timeout` the first time an adapter run is
+    # reported hanging past that, or a caller has to kill it.
+    worst = 0
+    for pass_name in passes:
+        code = subprocess.call([sys.executable, oneshot, pass_name, *flags], env=env)
+        if code < 0:  # killed by a signal: outside the 0/1/2 contract
+            _log(f"[{name}] oneshot.py was killed by signal {-code}; no {pass_name}")
+            return 1
+        if code == 2:  # the key, the model or the URL: the next pass fails too
+            return 2
+        if code:
+            _log(f"[{name}] {pass_name} earned nothing (exit {code})")
+        worst = max(worst, code)
+    return worst
+
+
 def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     """Gate commands from the manifest, then grumpy's one-shot passes.
 
@@ -213,21 +263,16 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
     if isinstance(resolved, int):
         return resolved
     manifest, profile = resolved
-    passes = [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
+    passes = declared_passes(manifest)
     # Only a declared pass needs grumpy, and then it should fail here, before
     # the gate commands run, not after.
     if passes and oneshot is None:
         _log(missing_grumpy_message(name, grumpy_root))
         return 2
-    for old, new in (legacy_env or {}).items():
-        if env.get(old) and not env.get(new):
-            _log(f"[{name}] {old} is deprecated; set {new} instead")
-            env[new] = env[old]
+    _map_legacy_env(env, legacy_env, name)
     results = run_gates(manifest, profile, skip_capabilities=ONESHOT_PASSES)
     if summarize(results, name):
-        _log(
-            f"[{name}] gate command(s) failed; {' and '.join(passes) or 'review'} skipped"
-        )
+        _log(f"[{name}] gate command(s) failed; no grumpy pass run")
         return 1
     if not passes:
         _log(
@@ -236,32 +281,8 @@ def run_with_oneshot(argv, name, provider, legacy_env=None, env=None):
             "was written"
         )
         return 0
-    flags = ["--provider", provider]
-    model = (manifest.get("provider") or {}).get("model")
-    if model and not env.get("SHARPEN_LLM_MODEL"):
-        flags += ["--model", model]
-    elif model:
-        _log(
-            f"[{name}] SHARPEN_LLM_MODEL={env['SHARPEN_LLM_MODEL']} overrides the "
-            f"manifest's provider.model ({model})"
-        )
-    # ponytail: no deadline on the pass subprocesses and no --timeout/--jobs/
-    # --aspects pass-through; oneshot's own defaults bound each at two attempts
-    # times --timeout per aspect (about thirty minutes when a provider hangs).
-    # Add a manifest `provider.timeout` the first time an adapter run is
-    # reported hanging past that, or a caller has to kill it.
-    worst = 0
-    for pass_name in passes:
-        code = subprocess.call([sys.executable, oneshot, pass_name, *flags], env=env)
-        if code < 0:  # killed by a signal: outside the 0/1/2 contract
-            _log(f"[{name}] oneshot.py was killed by signal {-code}; no {pass_name}")
-            return 1
-        if code == 2:  # the key, the model or the URL: the next pass fails too
-            return 2
-        if code:
-            _log(f"[{name}] {pass_name} earned nothing (exit {code})")
-        worst = max(worst, code)
-    return worst
+    flags = ["--provider", provider, *_model_flags(manifest, env, name)]
+    return _run_passes(oneshot, passes, flags, env, name)
 
 
 def main(argv):
@@ -278,7 +299,7 @@ def main(argv):
         _log(f"[generic-adapter] {len(failures)} gate command(s) failed")
         return 1
     _log("[generic-adapter] all gate commands passed")
-    declared = [p for p in ONESHOT_PASSES if p in manifest["capabilities"]]
+    declared = declared_passes(manifest)
     if declared:
         _log(
             f"[generic-adapter] {' and '.join(f'`{p}`' for p in declared)} "
