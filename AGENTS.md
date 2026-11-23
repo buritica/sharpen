@@ -186,7 +186,7 @@ fails a push), and `.claude/settings.json`, which runs `scripts/pre-merge-check.
 `gh pr create` / `gh pr merge` under Claude Code.
 
 <!-- sdlc:begin -->
-<!-- rendered by sdlc 4.21.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
+<!-- rendered by sdlc 4.22.0 from templates/agents-sdlc.md; `agents_md.py --check` reports drift -->
 ## SDLC
 
 Managed by `/sdlc:init` between the `sdlc:begin`/`sdlc:end` markers — re-running init updates this block and nothing else. Repo rules go outside the markers, in this file. `CLAUDE.md` includes this file via `@AGENTS.md`; hosts that read `AGENTS.md` directly (Codex, Gemini, Cursor, Copilot) get the same contract.
