@@ -47,15 +47,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # How each host is invoked lives in bench_hosts.py; these names are part of
 # this script's surface (the tests reach them as bench.<name>).
 from bench_hosts import (  # noqa: E402,F401
-    CLAUDE_TOOLS,
     HOSTS,
-    ONESHOT_ENV,
     build_command,
     cli_version,
     oneshot_setup,
     oneshot_version,
     prompt_hash,
-    skill_prompt,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

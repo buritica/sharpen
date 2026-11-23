@@ -206,7 +206,11 @@ class ExtractionTest(unittest.TestCase):
         self.assertEqual(len(units), 5)
         self.assertEqual(op._imagine_severities(units), ["CRIT", "WARN", "NOTE"])
         broken = {
-            "no fence": agents.replace("```\n`ctx", "`ctx", 1),
+            "no fence": agents.replace(
+                agents[agents.index("```") : agents.index("```\n\n") + 4],
+                "no prompt here\n",
+                1,
+            ),
             "no context line": agents.replace("`ctx|a|b`", "ctx"),
         }
         for name, text in broken.items():
