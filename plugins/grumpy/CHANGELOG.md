@@ -8,20 +8,32 @@ past release's behavior change stays discoverable without bloating the current R
 `/grumpy:fix` dispatches one fixer per file, carrying every finding in that file, instead
 of one per finding. A fixer's cost is mostly reading the file, its callers and its tests
 before it edits, so fifteen findings in three files are now three fixers, not fifteen. A
-file with more than eight findings is split into tasks of at most eight, run one after
-another.
+finding that spans files waits for the tasks of the other files it touches.
 
 Findings without an `exec:` hint (everything except `/grumpy:audit`'s steps) used to route
 to `analysis` (Opus) every time. They now route by what the report says: Critical and
 untagged (`fact`) Serious findings stay on `analysis`; Serious findings tagged `(judgment)`
-and Questionable findings you choose to fix in Step 5 go to `exec` (Sonnet). A file's task
-runs on the highest role any of its findings needs. A judgment fix that fails its check,
-or that its fixer couldn't apply cleanly, escalates once to `analysis` as before.
+and Questionable findings you choose to fix in Step 5 go to `exec` (Sonnet), except ones
+that touch correctness, security, data loss or a trust boundary, which stay on `analysis`.
+A file's task runs on the highest role any of its findings needs. Fixing a rename or a doc
+on Opus paid the strong tier for nothing, and a review's Serious list often carries
+several judgment calls.
+
+Non-audit findings carry no `accept:` command, so a Sonnet fix has no machine check. The
+new escalation trigger is the fixer's own report: a fixer that says it couldn't apply a
+finding cleanly sends that finding one rung up, once. A fix Sonnet believes is clean is
+checked by the orchestrator reading its hunk against the finding, and by the next review pass. Escalation is now counted
+per finding, and a retry undoes the first attempt's edit before fixing.
 
 - The summary says how many tasks ran on each model.
-- To keep every fix on Opus, pin `exec` to `opus` in `.sharpen/models.yaml`. That also
-  moves audit's `exec: standard` steps.
-- Nothing to migrate.
+- To keep every review and imagine fix on Opus, pin `exec` to `opus` in
+  `.sharpen/models.yaml`. That also moves audit's `exec: standard` steps; audit's
+  `exec: trivial` steps stay on `exec-trivial` unless you pin that role too.
+- A repo `.sharpen/models.yaml` that pinned `exec` lower than Sonnet now also covers
+  judgment Serious and chosen Questionable fixes, which used to ignore it.
+- Exec fixes without an `accept:` check get a read of their hunk from the orchestrator
+  before the commit, marked `self-checked` in fix.md. A finding that fails is undone on its
+  own; the rest of its file is still committed.
 
 ## 2.18.0 — the fix pass picks its own stage
 

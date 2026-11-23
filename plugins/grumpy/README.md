@@ -68,9 +68,14 @@ agent and escalating one tier on a failed `accept:` check:
 
 - `exec: trivial` → Haiku · `exec: standard` → Sonnet · large/unverifiable → Opus
 - Findings from review, imagine and the other passes carry no tier, so they route by
-  severity: Critical and fact-tagged Serious → Opus, judgment-tagged Serious and
-  Questionable findings you chose to fix → Sonnet
-- One fixer per file, holding all of that file's findings, not one per finding
+  severity: Critical and untagged Serious (a fact) → Opus, Serious tagged `(judgment)` and
+  Questionable findings you chose to fix → Sonnet (Opus when they touch correctness,
+  security or data loss)
+- One fixer per file, holding all of that file's findings, not one per finding; it runs
+  on the highest role among them, so one Opus finding puts the whole file on Opus
+- To keep every review and imagine fix on Opus, pin `exec` to `opus` in
+  `.sharpen/models.yaml`. With `exec` and `analysis` on the same model a failed `exec`
+  fix has no rung to escalate to, so it is reported blocked instead of retried
 - `--max-tier <role>` clamps the ceiling (fix's ladder tops at the `analysis` role: `exec-trivial < exec < analysis`)
 
 The role→model map lives in `models.yaml`. Each role has the Anthropic API id,
@@ -79,7 +84,7 @@ model to start a Codex session on, since Codex (like pi) can't pick a model per
 subagent, plus the OpenAI API id the no-agent path calls (`openai`, see "No agent
 installed"). Review runs its finding passes on the `analysis` role; imagine stays
 on the session's model until a larger benchmark run settles which model suits
-it; fix routes by `exec:` tier, or by severity and fact/judgment when there is none; audit dispatches its dimension reviews on
+it; fix routes as listed above; audit dispatches its dimension reviews on
 `analysis`. A repo can override single values in a committed
 `.sharpen/models.yaml`; the lookup and merge rules are at the top of
 `models.yaml`, and every report names the model that ran. Lowering `analysis`
