@@ -27,7 +27,11 @@ Two pieces, both host-neutral (stdlib + git):
             MANUAL_CARRY_MAX_LINES changed lines and no new files. The reason
             is the only check that it is a comment or wording fix; this is the
             honest path for a small wording fix in an agent-executed file,
-            recorded as a carry, never as a review
+            recorded as a carry, never as a review. On a rewrite (a restack
+            that resolved a conflict) the lines counted are those where the
+            reviewed and the current branch patch differ (sharpen#65), not
+            the whole diff between the two heads, which takes in every change
+            the layers below made
 
   Anything else stays strict. `apply_carry` records the hop (from, to, class,
   reason) and clears tests/lint/typecheck so they run again on the new HEAD;
@@ -46,6 +50,7 @@ Store shape this adds to a branch entry:
   "rounds":  [{"head": sha, "added": int|null, "at": iso}]   # survives --init
 """
 
+import difflib
 import os
 import re
 import subprocess
@@ -396,12 +401,6 @@ def _numstat(old, new, cwd=None):
     return added, deleted, binary
 
 
-def change_size(old, new, cwd=None):
-    """Changed lines (added + deleted) from `old` to `new`, or None."""
-    stat = _numstat(old, new, cwd)
-    return stat[0] + stat[1] if stat else None
-
-
 def _clean_replay(old, new, cwd=None, old_base=None, new_base=None):
     """True when HEAD is exactly what git produces by merging the reviewed
     commit onto HEAD's base with no conflicts and no hand edits; False when
@@ -455,20 +454,30 @@ def _whitespace_only(old, new, cwd=None):
 def classify_carry(
     old, new, reason=None, cwd=None, spent=0, old_base=None, new_base=None
 ):
-    """(class, None) when the commits from `old` to `new` may carry the skill
-    gates, else (None, why-not). `reason` asks for the manual class, used only
-    when no mechanical class applies. `spent` is the lines earlier manual
-    carries in this cycle already used: the cap covers them all, so manual
-    hops can't chain past it without a review. `old_base`/`new_base` are the
-    round's base commit when the gates were earned and now (gate_base); the
-    branch's own patch is measured from them, never from below them."""
+    """(class, None, lines) when the commits from `old` to `new` may carry the
+    skill gates, else (None, why-not, None). `lines` is what a manual carry
+    spends of the cap, None for every other class. `reason` asks for the
+    manual class, used only when no mechanical class applies. `spent` is the
+    lines earlier manual carries in this cycle already used: the cap covers
+    them all, so manual hops can't chain past it without a review.
+    `old_base`/`new_base` are the round's base commit when the gates were
+    earned and now (gate_base); the branch's own patch is measured from them,
+    never from below them."""
     if not old or not new:
-        return None, "no evidence head to carry from"
+        return None, "no evidence head to carry from", None
     if old == new:
-        return None, "nothing to carry: the last review gate is already on HEAD"
+        return (
+            None,
+            "nothing to carry: the last review gate is already on HEAD",
+            None,
+        )
     ancestor = is_ancestor(old, new, cwd)
     if ancestor is None:
-        return None, _git_failure(f"tell whether {old[:12]} is in HEAD's history")
+        return (
+            None,
+            _git_failure(f"tell whether {old[:12]} is in HEAD's history"),
+            None,
+        )
     sides = ((old_base, old, "--reviewed-base"), (new_base, new, "--set-base"))
     for base, head, flag in sides:
         # A base at or past the head it measures (`--set-base HEAD`, the
@@ -478,97 +487,158 @@ def classify_carry(
             continue
         past = base == head or is_ancestor(head, base, cwd)
         if past is None:
-            return None, _git_failure(f"tell whether {base[:12]} is below {head[:12]}")
+            why = _git_failure(f"tell whether {base[:12]} is below {head[:12]}")
+            return None, why, None
         if past:
-            return None, (
-                f"the review base {base[:12]} is not below {head[:12]}, so the "
-                f"branch's own patch can't be measured; point {flag} at the "
-                "parent branch"
+            return (
+                None,
+                (
+                    f"the review base {base[:12]} is not below {head[:12]}, so "
+                    "the branch's own patch can't be measured; point "
+                    f"{flag} at the parent branch"
+                ),
+                None,
             )
     bases = (old_base, new_base)
     if not ancestor:
-        return _classify_rewrite(old, new, cwd, bases)
+        return _classify_rewrite(old, new, reason, cwd, spent, bases)
     return _classify_descendant(old, new, reason, cwd, spent, bases)
 
 
-def _classify_rewrite(old, new, cwd=None, bases=(None, None)):
+def _classify_rewrite(old, new, reason=None, cwd=None, spent=0, bases=(None, None)):
     """classify_carry for a `new` that does not have `old` in its history."""
     old_base, new_base = bases
     if _clean_replay(old, new, cwd, old_base, new_base):
-        return "rebase", None
+        return "rebase", None, None
     old_patch = _branch_patch(old, cwd, old_base)
     new_patch = _branch_patch(new, cwd, new_base)
     if old_patch is None or new_patch is None:
-        return None, _git_failure("compute the branch's patch")
+        return None, _git_failure("compute the branch's patch"), None
     if old_patch == new_patch:
-        return "rebase", None
+        return "rebase", None, None
     ok, path = _only_bookkeeping(old_patch, new_patch, new, cwd, new_base)
     if ok:
-        return "bookkeeping", None
-    return None, (
-        f"{old[:12]} is not an ancestor of HEAD and the branch's patch "
-        f"changed beyond release bookkeeping, first in {path} (a rebase that "
-        "resolved real conflicts, or a rewrite)"
-    )
+        return "bookkeeping", None, None
+    if reason is None:
+        return (
+            None,
+            (
+                f"{old[:12]} is not an ancestor of HEAD and the branch's patch "
+                f"changed beyond release bookkeeping, first in {path} (a rebase "
+                "that resolved real conflicts, or a rewrite); a mechanical "
+                "conflict resolution can carry with --carry --reason "
+                '"<what the resolution did>"'
+            ),
+            None,
+        )
+    why, lines = _manual_rewrite_refusal(old_patch, new_patch, reason, spent)
+    return (None, why, None) if why else ("manual", None, lines)
 
 
 def _classify_descendant(old, new, reason, cwd=None, spent=0, bases=(None, None)):
     """classify_carry for a `new` that has `old` in its history."""
     if _whitespace_only(old, new, cwd):
-        return "format", None
+        return "format", None, None
     # --no-renames: a rename prints both paths, so moving a command file into
     # docs/ is judged on the command file it removes, not only where it lands.
     names = _run(["diff", "--name-only", "--no-renames", old, new], cwd=cwd)
     if names is None:
-        return None, _git_failure("list the changed files")
+        return None, _git_failure("list the changed files"), None
     paths = [p for p in names.decode(errors="replace").splitlines() if p]
     if paths and all(is_docs_safe(p) for p in paths):
-        return "docs", None
+        return "docs", None, None
     old_base, new_base = bases
     old_patch = _branch_patch(old, cwd, old_base)
     new_patch = _branch_patch(new, cwd, new_base)
     if old_patch is None or new_patch is None:
-        return None, _git_failure("compute the branch's patch")
+        return None, _git_failure("compute the branch's patch"), None
     if old_patch == new_patch:
         # A clean merge of the default branch: the branch's own patch is
         # untouched, exactly as after a clean rebase.
-        return "rebase", None
+        return "rebase", None, None
     if _only_bookkeeping(old_patch, new_patch, new, cwd, new_base)[0]:
-        return "bookkeeping", None
+        return "bookkeeping", None, None
     if reason is None:
         unsafe = [p for p in paths if not is_docs_safe(p)]
-        return None, (
-            "the change touches code or agent-executed files "
-            f"({', '.join(unsafe[:3])}{', ...' if len(unsafe) > 3 else ''}); "
-            'a comment, docstring or wording fix can carry with --carry --reason "<why>"'
+        return (
+            None,
+            (
+                "the change touches code or agent-executed files "
+                f"({', '.join(unsafe[:3])}{', ...' if len(unsafe) > 3 else ''}); "
+                "a comment, docstring or wording fix can carry with "
+                '--carry --reason "<why>"'
+            ),
+            None,
         )
-    why = _manual_refusal(old, new, reason, cwd, spent)
-    return (None, why) if why else ("manual", None)
+    why, lines = _manual_refusal(old, new, reason, cwd, spent)
+    return (None, why, None) if why else ("manual", None, lines)
+
+
+def _over_cap(lines, spent):
+    """The cap refusal for a manual carry of `lines`, or None."""
+    if lines + spent <= MANUAL_CARRY_MAX_LINES:
+        return None
+    earlier = f" plus {spent} from earlier manual carries" if spent else ""
+    return (
+        f"manual carries are capped at {MANUAL_CARRY_MAX_LINES} changed "
+        f"lines (added plus deleted) per cycle; this change has {lines}"
+        f"{earlier}. Reset and re-run the chain"
+    )
 
 
 def _manual_refusal(old, new, reason, cwd=None, spent=0):
-    """Why a manual carry is refused, or None when it is allowed."""
+    """(why a manual carry over commits on top is refused, None), or
+    (None, the lines it spends) when it is allowed."""
     if not reason.strip():
-        return "a manual carry needs a non-empty --reason"
+        return "a manual carry needs a non-empty --reason", None
     added = _run(
         ["diff", "--name-only", "--no-renames", "--diff-filter=A", old, new], cwd=cwd
     )
     stat = _numstat(old, new, cwd)
     if added is None or stat is None:
-        return _git_failure("measure the change")
+        return _git_failure("measure the change"), None
     if added.strip():
-        return "a manual carry cannot add files (a rename counts as one)"
+        return "a manual carry cannot add files (a rename counts as one)", None
     if stat[2]:
-        return "a manual carry cannot change binary files"
+        return "a manual carry cannot change binary files", None
     lines = stat[0] + stat[1]
-    if lines + spent > MANUAL_CARRY_MAX_LINES:
-        earlier = f" plus {spent} from earlier manual carries" if spent else ""
-        return (
-            f"manual carries are capped at {MANUAL_CARRY_MAX_LINES} changed "
-            f"lines (added plus deleted) per cycle; this change has {lines}"
-            f"{earlier}. Reset and re-run the chain"
-        )
-    return None
+    return _over_cap(lines, spent), lines
+
+
+def _new_files(file_patches):
+    return {p for p, text in file_patches.items() if b"\nnew file mode " in text}
+
+
+def _binary_files(file_patches):
+    return {p for p, text in file_patches.items() if b"\nGIT binary patch" in text}
+
+
+def _manual_rewrite_refusal(old_patch, new_patch, reason, spent=0):
+    """(why a manual carry over a rewrite is refused, None), or (None, the
+    lines it spends) when it is allowed (sharpen#65).
+
+    The two heads don't share history, so the diff between them is every
+    change the layers below made too. What the reason vouches for is the
+    difference between the reviewed and the current branch patch: the lines
+    a conflict resolution changed in the branch's own +/- lines. Those are
+    counted with a line diff, against the same cap as every manual carry."""
+    if not reason.strip():
+        return "a manual carry needs a non-empty --reason", None
+    old_files, new_files = _split_by_file(old_patch), _split_by_file(new_patch)
+    if old_files is None or new_files is None:
+        return "the branch's patch could not be parsed", None
+    if _new_files(new_files) - _new_files(old_files):
+        return "a manual carry cannot add files (a rename counts as one)", None
+    binary = _binary_files(old_files) | _binary_files(new_files)
+    if any(old_files.get(p) != new_files.get(p) for p in binary):
+        return "a manual carry cannot change binary files", None
+    lines = 0
+    old_lines, new_lines = old_patch.split(b"\n"), new_patch.split(b"\n")
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            lines += (i2 - i1) + (j2 - j1)
+    return _over_cap(lines, spent), lines
 
 
 def manual_lines_spent(branch_data):

@@ -8,6 +8,7 @@ suite under the runner's per-file timeout.
 import json
 import os
 import re
+import subprocess
 import unittest
 
 import time
@@ -192,6 +193,77 @@ class StackTest(ReceiptTestBase):
         git(self.repo, "checkout", "-q", BRANCH)
         git(self.repo, "merge", "-q", "--no-edit", "layer-b")
         self.assert_carried(self.carry(), "rebase")
+
+    def restack_with_a_conflict(self, resolution, extra=None):
+        """sharpen#65: layer-b and BRANCH both edit one line. After the chain,
+        layer-b is rewritten on that line, and the restack resolves the
+        conflict with `resolution` (and writes `extra` files, if any)."""
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.commit_file("tools.py", "TOOLS = ['a']\n")
+        git(self.repo, "checkout", "-q", BRANCH)
+        git(self.repo, "rebase", "-q", "layer-b")
+        self.cli("--set-base", "layer-b")
+        self.commit_file("tools.py", "TOOLS = ['a', 'conv']\n", msg="top layer")
+        self.start()
+        self.run_chain()
+        old_b = git(self.repo, "rev-parse", "layer-b").strip()
+        git(self.repo, "checkout", "-q", "layer-b")
+        self.write("tools.py", "TOOLS = ['a', 'py39']\n")
+        git(self.repo, "commit", "-q", "-a", "--amend", "--no-edit")
+        git(self.repo, "checkout", "-q", BRANCH)
+        rebase = subprocess.run(
+            ["git", "rebase", "-q", "--onto", "layer-b", old_b],
+            cwd=self.repo,
+            capture_output=True,
+        )
+        self.assertNotEqual(rebase.returncode, 0, "the restack should conflict")
+        self.write("tools.py", resolution)
+        for rel, text in (extra or {}).items():
+            self.write(rel, text)
+        git(self.repo, "add", "-A")
+        env = dict(os.environ, GIT_EDITOR="true")
+        subprocess.run(
+            ["git", "rebase", "--continue"],
+            cwd=self.repo,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+
+    def test_conflict_resolution_is_refused_without_a_reason(self):
+        self.restack_with_a_conflict("TOOLS = ['a', 'py39', 'conv']\n")
+        r = self.carry()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--carry --reason", r.stderr)
+        self.assertIn("conflict resolution can use --reason", r.stderr)
+        self.assertNotIn("carries", self.bd())
+
+    def test_conflict_resolution_carries_with_a_reason(self):
+        self.restack_with_a_conflict("TOOLS = ['a', 'py39', 'conv']\n")
+        self.assertEqual(self.pr_create().returncode, 2)
+        r = self.carry("--reason", "kept both sides of the tools line")
+        self.assert_carried(r, "manual")
+        hop = self.bd()["carries"][-1]
+        self.assertEqual(hop["reason"], "kept both sides of the tools line")
+        # Only the branch's own -/+ pair changed: two lines each side, not
+        # the layer below's rewrite of the same file.
+        self.assertEqual(hop["lines"], 4)
+        self.assertNotIn("tests", self.gates())
+
+    def test_conflict_resolution_over_the_cap_is_refused(self):
+        padding = "".join(f"# kept {i}\n" for i in range(30))
+        self.restack_with_a_conflict("TOOLS = ['a', 'py39', 'conv']\n" + padding)
+        r = self.carry("--reason", "kept both sides")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("capped", r.stderr)
+
+    def test_conflict_resolution_cannot_add_files(self):
+        self.restack_with_a_conflict(
+            "TOOLS = ['a', 'py39', 'conv']\n", extra={"new.py": "N = 1\n"}
+        )
+        r = self.carry("--reason", "kept both sides")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot add files", r.stderr)
 
     def test_a_base_at_head_never_carries_a_code_change(self):
         self.cli("--set-base", "layer-b")

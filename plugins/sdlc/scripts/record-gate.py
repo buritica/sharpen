@@ -48,8 +48,9 @@ Usage:
                                       # that can't change what the review
                                       # saw (clean rebase, release
                                       # bookkeeping, whitespace, safe docs;
-                                      # or a small comment fix with a
-                                      # reason). Re-opens tests/lint/typecheck
+                                      # or a small comment fix or mechanical
+                                      # conflict resolution with a reason).
+                                      # Re-opens tests/lint/typecheck
   record-gate.py --attest <gate> --reason "<text>"
                                       # last-resort: stamp a skill-gated gate
                                       # on human attestation instead of the
@@ -402,7 +403,7 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
         stored = old_base = named
     else:
         old_base = gc.reviewed_base(old, stored, (base or {}).get("ref"))
-    klass, why = gc.classify_carry(
+    klass, why, lines = gc.classify_carry(
         old,
         head,
         reason=reason,
@@ -437,13 +438,17 @@ def _carry(path, branch, reason, reviewed_base_ref=None):
             "If that is not this branch's parent (the parent merged, or a "
             "stale --set-base), fix it with --set-base <parent> (or auto) and "
             "--carry again. Otherwise "
-            + ("a wording fix can use --reason; anything else needs " if manual else "")
+            + (
+                "a wording fix or a mechanical conflict resolution can use "
+                "--reason; anything else needs "
+                if manual
+                else ""
+            )
             + f"a re-run of the chain: --init {bd.get('tier')} (with the same "
             "--branch/--route-from you started the cycle with)"
         )
         return 1
     note = reason.strip() if reason and reason.strip() else None
-    lines = gc.change_size(old, head) if klass == "manual" else None
 
     def mutate(d):
         # Classification ran on a snapshot outside the lock; refuse if the
