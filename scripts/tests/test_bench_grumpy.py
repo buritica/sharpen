@@ -556,6 +556,31 @@ class SummaryCompareTest(unittest.TestCase):
         # An older results.json has neither: nothing to compare, no problem.
         self.assertEqual(bench.compare(_results({"a/review": {}}), cand)[0], [])
 
+    def test_tokens_do_not_compare_across_hosts(self):
+        base = dict(_results({"a/review": {"tokens": 1000}}), host="oneshot")
+        cand = dict(_results({"a/review": {"tokens": 3000000}}), host="claude")
+        problems, notes = bench.compare(base, cand)
+        self.assertEqual(problems, [])
+        self.assertTrue(any("hosts differ (oneshot vs claude)" in n for n in notes))
+        # Cost still compares across hosts.
+        base["summary"]["a/review"]["cost_usd"] = 0.4
+        cand["summary"]["a/review"]["cost_usd"] = 2.0
+        self.assertEqual(
+            bench.compare(base, cand)[0], ["a/review: cost $0.40 -> $2.00"]
+        )
+
+    def test_runs_without_usage_are_counted_and_noted(self):
+        runs = [
+            {"case": "c", "pass": "review", "usage": {"cost_usd": 0.5, "tokens": 10}},
+            {"case": "c", "pass": "review", "status": "timeout"},
+        ]
+        summary = bench.summarize(runs)
+        self.assertEqual(summary["c/review"]["unpriced"], 1)
+        self.assertEqual(summary["c/review"]["cost_usd"], 0.5)
+        out = io.StringIO()
+        bench.print_summary(summary, stream=out)
+        self.assertIn("c/review: 1/2 run(s) recorded no usage", out.getvalue())
+
     def test_slower_runs_are_a_note(self):
         _, notes = bench.compare(
             _results({"a/review": {"duration_s": 40.0}}),

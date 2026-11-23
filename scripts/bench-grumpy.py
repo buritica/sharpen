@@ -573,6 +573,7 @@ def _kill_group(proc):
         proc.kill()
 
 
+# ponytail: cyclomatic 21 against a bar of 22; split the report-scoring tail into its own function when radon cc reports run_one above 22
 def run_one(
     case,
     pass_name,
@@ -649,7 +650,9 @@ def run_one(
         with open(os.path.join(out_dir, f"{label}.log"), "w", encoding="utf-8") as f:
             f.write(stdout + "\n----- stderr -----\n" + stderr)
         # What the run spent and how its passes ran, recorded even for a
-        # failed run: a timeout that burned tokens is still a cost.
+        # failed run. A oneshot timeout keeps the tokens it logged; a Claude
+        # timeout records none (its JSON prints only at the end), and the
+        # summary counts such runs as `unpriced` instead of hiding them.
         usage = parse_usage(host, stdout, stderr)
         if usage is not None:
             result["usage"] = usage
@@ -735,6 +738,15 @@ def print_summary(summary, stream=sys.stdout):
             f" {_money(s.get('cost_usd')):>7} {_ktok(s.get('tokens')):>8} {_secs(s.get('duration_s')):>6} {_fmt(s.get('subagents'), False):>6}",
             file=stream,
         )
+    for name, s in summary.items():
+        priced = s.get("cost_usd") is not None or s.get("tokens") is not None
+        if s.get("unpriced") and priced:
+            print(
+                f"note: {name}: {s['unpriced']}/{s['runs']} run(s) recorded no usage"
+                " (a Claude run that times out records none); cost and tokens"
+                " are the mean of the rest",
+                file=stream,
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -48,8 +48,12 @@ Every run records what it spent, as far as the host says. Claude Code runs with
 tokens (input, cache reads, cache writes and output, also split per model, so the session
 and review's opus subagents show apart), its turns and how many subagents it started.
 `oneshot` records the total tokens each API call reports, and no cost. Codex and pi print
-no usage in the mode the bench runs them, so their runs record none. Every run also
-records `duration_s`.
+no usage in the mode the bench runs them, so their runs record none. A Claude Code run
+that times out records none either: its JSON prints only when the run ends, and the
+timeout kills it first (a `oneshot` timeout keeps the tokens it logged). The means leave
+such runs out, so the summary counts them as `unpriced` and prints a note under the
+table when a row's cost is the mean of only some of its runs. Every run also records
+`duration_s`.
 
 `observed_mode` says how the passes actually ran: `inline` (the session ran every pass
 itself), `fanout` (it started subagents) or `oneshot`. This matters because headless
@@ -82,7 +86,8 @@ against the baseline:
 - gains duplicate findings by more than one per run (`--dup-rise`);
 - drops precision by more than 10 points (`--precision-drop`, default 0.1);
 - spends more than 50% more (`--cost-rise`, default 0.5): mean cost where both runs
-  recorded one, otherwise mean tokens;
+  recorded one, otherwise mean tokens, but only when both ran on the same host (hosts
+  count tokens differently; a cross-host compare says so in a note);
 - has a higher share of failed runs or of runs that re-raised a settled finding;
 - or is missing a case/pass the baseline has, or has no runs at all.
 
@@ -142,7 +147,7 @@ to $5.30 fanned out (single runs, 2026-11-23). `--cases` and `--repeat 1` give a
 quick check. On `oneshot` a run is API calls rather than a session: eight per review run
 (seven aspects and an aggregation) and six per imagine run (five simulations and an
 aggregation), each carrying the diff and the changed files, so `--pass all` with three
-repeats is 222 calls.
+repeats is 240 calls.
 
 Before you run it:
 

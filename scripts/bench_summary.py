@@ -40,6 +40,7 @@ def summarize(runs):
             "cost_usd": _usage_mean(rs, "cost_usd"),
             "tokens": _usage_mean(rs, "tokens"),
             "subagents": _usage_mean(rs, "subagents"),
+            "unpriced": sum(1 for r in rs if not _has_usage(r)),
             "modes": _counts(r["observed_mode"] for r in rs if r.get("observed_mode")),
             "clean_rate": _mean(1.0 if s["clean"] else 0.0 for s in scored),
             "held_back_failures": sum(1 for s in scored if s.get("present")),
@@ -68,6 +69,13 @@ def _usage_mean(rs, field):
     """Mean of one usage field over the runs that recorded it."""
     values = [(r.get("usage") or {}).get(field) for r in rs]
     return _mean(v for v in values if v is not None)
+
+
+def _has_usage(run):
+    """Whether a run recorded a cost or a token count. A Claude run that
+    times out records neither: its JSON prints only when the run ends."""
+    usage = run.get("usage") or {}
+    return usage.get("cost_usd") is not None or usage.get("tokens") is not None
 
 
 def _counts(values):
@@ -120,6 +128,14 @@ def compare(
         problems.append("candidate run was interrupted")
     if baseline.get("key_hashes", {}) != candidate.get("key_hashes", {}):
         notes.append("case keys differ between runs; rescore both with the same keys")
+    # Hosts count tokens differently (Claude adds cache reads, oneshot takes
+    # the API's total), so tokens compare only within one host.
+    same_host = baseline.get("host") == candidate.get("host")
+    if not same_host:
+        notes.append(
+            f"hosts differ ({baseline.get('host')} vs {candidate.get('host')}):"
+            " they count tokens differently, so only cost is compared"
+        )
     for name in sorted(set(b) | set(c)):
         if name not in c:
             problems.append(f"{name}: in baseline, not in candidate")
@@ -146,7 +162,7 @@ def compare(
                 f" (baseline {bs.get('held_back_failures', 0)}/{bs['runs']})"
             )
         problems += [f"{name}: {p}" for p in _quality_problems(bs, cs, limits)]
-        spend = _spend_change(bs, cs, cost_rise)
+        spend = _spend_change(bs, cs, cost_rise, same_host)
         if spend:
             problems.append(f"{name}: {spend}")
         notes += [f"{name}: {n}" for n in _run_notes(bs, cs)]
@@ -196,11 +212,12 @@ def _modes(s):
     return ", ".join(f"{m} x{n}" for m, n in s["modes"].items())
 
 
-def _spend_change(bs, cs, limit):
+def _spend_change(bs, cs, limit, same_host=True):
     """'cost $0.40 -> $1.10' when the candidate spends more than `limit`
-    above the baseline: cost where both have it, else tokens. None when it
-    doesn't, or when either run recorded neither."""
-    for field, fmt in (("cost_usd", "${:.2f}"), ("tokens", "{:,.0f}")):
+    above the baseline: cost where both have it, else tokens (same host
+    only). None when it doesn't, or when there is nothing to compare."""
+    fields = (("cost_usd", "${:.2f}"), ("tokens", "{:,.0f}"))
+    for field, fmt in fields if same_host else fields[:1]:
         bv, cv = bs.get(field), cs.get(field)
         if bv and cv is not None:
             if cv > bv * (1 + limit):
