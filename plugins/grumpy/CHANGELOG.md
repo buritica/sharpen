@@ -3,6 +3,24 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.20.0 — review runs every aspect in one Opus agent on small and medium diffs
+
+`/grumpy:review` used to start one subagent per aspect, up to seven, on every diff. It
+now picks by size. A diff up to 60,000 characters (about 1,500 diff lines) runs
+**single**: one subagent on the `analysis` role (Opus) works through every aspect in
+turn. A larger diff still runs **fanout**, one subagent per aspect. `--single` and
+`--fanout` override the rule, and the report's `_Model:_` line says which ran and why.
+
+Most of a pass's cost is the agent reading the repository around the diff, and fanout
+pays it once per aspect. In the first benchmark round (2026-11-23, Opus, two real-size
+replays), fanout found 15 to 25 points more of the planted issues but cost three to four
+times as much and raised blocking noise from about 1 finding per run to 5 to 11. Small
+and medium diffs take the cheaper, quieter path; large ones keep the recall. The single agent runs on `analysis` whatever model the
+session uses, because a Sonnet session running the aspects itself missed most planted
+issues.
+
+The benchmark takes `--mode single`, and `observed_mode` reads one subagent as `single`.
+
 ## 2.19.0 — the fix pass costs less: one fixer per file, judgment calls on Sonnet
 
 `/grumpy:fix` dispatches one fixer per file, carrying every finding in that file, instead

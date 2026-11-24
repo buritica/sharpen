@@ -1595,6 +1595,15 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(bench.observed_mode("claude", u), "fanout")
         self.assertEqual(bench.output_text("claude", self.CLAUDE), "the report")
 
+    def test_observed_mode_counts_subagents(self):
+        for n, mode in ((0, "inline"), (1, "single"), (2, "fanout"), (7, "fanout")):
+            self.assertEqual(bench.observed_mode("claude", {"subagents": n}), mode)
+
+    def test_single_mode_pins_its_own_hint(self):
+        argv, _ = bench.build_command("claude", "review", mode="single")
+        hint = argv[argv.index("--append-system-prompt") + 1]
+        self.assertIn("single path", hint)
+
     def test_claude_without_json_records_nothing(self):
         self.assertIsNone(bench.parse_usage("claude", "plain text\n{not json"))
         self.assertEqual(bench.output_text("claude", "plain"), "plain")

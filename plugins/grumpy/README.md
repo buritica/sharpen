@@ -45,7 +45,7 @@ forcing a fix at review time. See "Deferring findings" below.
 | --- | --- | --- |
 | `/grumpy:audit` | Whole project | Composes every grumpy review into one picture + a prioritized, honestly-sized improvement plan |
 | `/grumpy:simplify` | Current diff | Code-quality thresholds judged against the merge base — new and regressed violations are fixed, legacy debt is reported, not failed |
-| `/grumpy:review` | Current diff | Comprehensive code review across 7 parallel aspects |
+| `/grumpy:review` | Current diff | Comprehensive code review across 7 aspects: one Opus agent for a diff up to 60,000 characters, one per aspect above that (`--single`/`--fanout` to choose) |
 | `/grumpy:imagine` | Current diff | Production imagination: UX, logs, metrics, concurrency, error paths, docs coverage |
 | `/grumpy:edge-cases` | Current diff | Code, product, and security blind spots |
 | `/grumpy:fix` | Conversation | Reads prior review (or audit plan) and dispatches tier-routed agents to fix findings |

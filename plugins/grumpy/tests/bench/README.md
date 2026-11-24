@@ -66,10 +66,11 @@ table when a row's cost is the mean of only some of its runs. Every run also rec
 `duration_s`.
 
 `observed_mode` says how the passes actually ran: `inline` (the session ran every pass
-itself), `fanout` (it started subagents) or `oneshot`. This matters because headless
+itself), `single` (one subagent ran them all, review's default for a diff up to 60,000
+characters), `fanout` (it started more than one) or `oneshot`. This matters because headless
 Claude Code usually runs the passes inline, while an interactive session usually fans
 out, and on a real-size diff fan-out cost 4 to 11 times as much in the runs that
-prompted this (2026-11-23). `--mode` asks for one: `inline` or `fanout` appends a line
+prompted this (2026-11-23). `--mode` asks for one: `inline`, `single` or `fanout` appends a line
 saying so to Claude Code's system prompt, and `auto` (the default) leaves it to the
 host. The line is a request, not a guarantee, so the summary notes runs whose
 `observed_mode` differs from the mode they asked for; their row's label is wrong for

@@ -133,11 +133,16 @@ HOSTS = {
 # a bench that never pins the mode measures the cheaper path only. `inline`
 # and `fanout` pin it with a line appended to Claude Code's system prompt.
 # Codex, pi and oneshot have one way to run, so only `auto` applies there.
-MODES = ("auto", "inline", "fanout")
+MODES = ("auto", "inline", "single", "fanout")
 MODE_HINTS = {
     "inline": (
         "Run every review or simulation pass yourself, one after another, in "
         "this session. Do not use the Agent tool for them."
+    ),
+    "single": (
+        "This harness supports subagents: the Agent tool is available. Take "
+        "the command's single path: one Agent call, on the model the command "
+        "specifies, runs every pass in turn."
     ),
     "fanout": (
         "This harness supports subagents: the Agent tool is available. Take "
@@ -380,8 +385,9 @@ def parse_usage(host, stdout, stderr=""):
 
 
 def observed_mode(host, usage):
-    """How the pass actually ran: `fanout` when Claude Code spawned
-    subagents, `inline` when it spawned none, None where the host can't say.
+    """How the pass actually ran: `inline` when Claude Code spawned no
+    subagent, `single` when it spawned one (review's single path), `fanout`
+    when it spawned more, None where the host can't say.
     On Claude Code this reads `subagent_stats.spawned` from the JSON result
     and nothing else; when that key is absent the mode is None, and the
     summary says so under the table."""
@@ -389,7 +395,8 @@ def observed_mode(host, usage):
         return "oneshot"
     if not usage or usage.get("subagents") is None:
         return None
-    return "fanout" if usage["subagents"] else "inline"
+    n = usage["subagents"]
+    return "inline" if not n else "single" if n == 1 else "fanout"
 
 
 def oneshot_version(grumpy=GRUMPY):

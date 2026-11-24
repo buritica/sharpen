@@ -9,7 +9,7 @@ a model, host or prompt change shows up as a number. Local only: nothing here
 runs in CI, and results land in the gitignored .sharpen/bench/.
 
     bench-grumpy.py run --host claude [--model ID[,ID...]] [--pass review|imagine|all]
-                        [--mode auto|inline|fanout[,...]]
+                        [--mode auto|inline|single|fanout[,...]]
                         [--provider openai|compatible]
                         [--cases a,b] [--repeat N] [--invoke native|inline]
                         [--analysis haiku|sonnet|opus]
@@ -18,7 +18,7 @@ runs in CI, and results land in the gitignored .sharpen/bench/.
     bench-grumpy.py rescore RESULTS.json
     bench-grumpy.py compare BASELINE.json CANDIDATE.json [--cost-rise F]
     bench-grumpy.py commands --host codex [--model ID[,ID...]]
-                        [--mode auto|inline|fanout[,...]] [--pass review]
+                        [--mode auto|inline|single|fanout[,...]] [--pass review]
     bench-grumpy.py cases
 
 Fixtures live in plugins/grumpy/tests/bench/<case>/: a `before/` tree, an
@@ -852,7 +852,7 @@ def _run_labelled(
         r["variant"] = variant_name(*variant)
     if analysis:
         r["analysis"] = analysis
-    if mode in ("inline", "fanout"):
+    if mode and mode != "auto":
         r["pinned_mode"] = mode
     s = r.get("score")
     u = r.get("usage") or {}

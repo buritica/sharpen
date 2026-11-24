@@ -44,8 +44,8 @@ python3 scripts/bench-grumpy.py compare <baseline results.json> <new results.jso
 ```
 
 A change meant to make grumpy cheaper or faster runs it too: each run records cost, tokens,
-time and whether the passes ran in one session or as subagents, `--model a,b --mode
-inline,fanout` runs every combination in one go, and `compare` flags a cost rise as it
+time and whether the passes ran in one session, one subagent or several, `--model a,b --mode
+inline,single,fanout` runs every combination in one go, and `compare` flags a cost rise as it
 does a recall drop.
 
 It runs the real pass headlessly on Claude Code, Codex, pi or the no-agent `oneshot` path

@@ -39,6 +39,9 @@ level-appropriate version:
   garbage, call it garbage. Every harsh judgment must be backed by a specific
   technical argument. No softening, no hedging."
 
+Detect `--single` or `--fanout` in `$ARGUMENTS` and remove it before
+processing the rest. It overrides the dispatch size rule in Step 3.
+
 **Review Aspects (optional):** "$ARGUMENTS"
 
 ## Worktree targeting
@@ -100,7 +103,9 @@ After determining the correct diff command, run it capped at 200000 characters
 output as `DIFF_CONTENT`. This diff gets inlined into every one of the
 parallel agent prompts below, uncapped it multiplies token cost by the agent
 count on a large diff — the cap bounds that the same way dispatch already
-does for its own diff capture. Also capture the diff base as `DIFF_BASE`
+does for its own diff capture. Note `DIFF_CHARS`, the captured diff's size in
+characters (the same command piped to `wc -c` instead of saved); Step 3 picks
+how to dispatch from it. Also capture the diff base as `DIFF_BASE`
 (e.g., 'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's
 appended separately in the git command), 'staged changes', 'unstaged
 changes', or 'HEAD~1'). These will be passed directly to agents — a separate
@@ -142,10 +147,29 @@ run all applicable reviews.
 Run one specialized review pass per applicable review aspect. Each pass MUST
 review in the grumpy principal engineer voice—skeptical, direct, exasperated.
 
+**Dispatch by size.** A small or medium diff (`DIFF_CHARS` up to 60,000,
+roughly 1,500 diff lines) runs **single**: every aspect in one agent, one
+after another. A larger diff runs **fanout**: one agent per aspect. `--single`
+or `--fanout` overrides the rule. Most of a pass's cost is the agent reading
+the repository around the diff, not the diff itself. One agent reads it once,
+while one per aspect reads it once each, so fanout costs three to four times
+as much. It finds more on a large diff, where one agent can't cover every
+aspect closely, and on a small diff it mostly adds noise
+(`plugins/grumpy/tests/bench/README.md` has the measurements). Say which mode
+ran, and why, in the report's `_Model:_` line.
+
 **If your harness supports spawning independent subagents** (a task/agent
-dispatch primitive that runs separately from this conversation), launch one
-per applicable aspect, in parallel for speed, each with its own prompt built
-from the template below.
+dispatch primitive that runs separately from this conversation):
+
+- **single**: launch **one** subagent on the `analysis` role (below). Its
+  prompt holds the template below once per applicable aspect. It works through
+  them in order, keeps each pass isolated (findings from one aspect don't
+  shape how it judges another), and returns every pass's pipe lines, each
+  tagged with its own ASPECT. One agent on the strong model, rather than the
+  passes run in this session, keeps the review on `analysis` whatever model
+  the session runs on.
+- **fanout**: launch one subagent per applicable aspect, in parallel, each with
+  its own prompt built from the template below.
 
 **If it doesn't**, there is no separate agent to launch — work through each
 applicable aspect yourself, sequentially, in this same session. The template
@@ -159,8 +183,8 @@ it returns.
 Read the role→model map from `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override, following the lookup
 rules at the top of that file. When your dispatch primitive takes a
 per-subagent model (Claude Code's Agent tool takes `sonnet`/`opus`/`haiku`),
-pass the role's `native` value; if the map can't be read, pass `opus` and say
-so. When it doesn't, or you run the passes yourself, they run on the
+pass the role's `native` value (for the single agent and for each fanout
+agent alike); if the map can't be read, pass `opus` and say so. When it doesn't, or you run the passes yourself, they run on the
 session's model. If a pass fails because its model was rejected or
 rate-limited, rerun it once on the session's model and say so. The report's
 `_Model:_` line names the model the passes ran on, and the override if one
@@ -280,7 +304,7 @@ Once all agents complete, combine their findings into one unified review:
 ```markdown
 # Code Review: [Brief Description]
 
-_Model: [the model the passes ran on; the override file and entries, if one changed it]_
+_Model: [the model the passes ran on; the override file and entries, if one changed it] · [single|fanout]: [N aspects in one agent, or N agents], [DIFF_CHARS] chars[, forced by --single/--fanout]_
 
 _[One grumpy sentence summarizing your overall impression]_
 
