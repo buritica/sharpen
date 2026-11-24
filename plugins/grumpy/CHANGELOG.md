@@ -19,9 +19,22 @@ pays it once per aspect. In the first benchmark round (2026-11-23, Opus, two rea
 replays), fanout was compared with one session running every aspect inline, not with
 one subagent. Fanout found 15 to 25 points more of the planted issues but cost three to
 four times as much and raised blocking noise from about 1 finding per run to 5 to 11.
-Single (one subagent) has not been benchmarked yet. It is expected, not measured, to be
-cheaper and quieter than fanout on small and medium diffs. To measure it, run
-`python3 scripts/bench-grumpy.py run --host claude --pass review --mode single,fanout`.
+The follow-up round (2026-11-24, 3 runs per row, on this release's first commit)
+measured single directly:
+
+| Case | Mode | Recall | Blocking noise | Cost |
+|---|---|---|---|---|
+| 16 KB replay | single, Opus session | 44% | 3.7 | $0.96 |
+| 16 KB replay | single, Sonnet session (Opus agent) | 50% | 1.0 | $0.45 |
+| 16 KB replay | fanout, Opus (first round, 2 runs) | 67% | 7.0 | $2.30 |
+| 120 KB replay | single, Opus session | 43% | 1.3 | $1.46 |
+| 120 KB replay | single, Sonnet session (Opus agent) | 50% | 3.7 | $0.97 |
+| 120 KB replay | fanout, Opus | 70% | 3.3 | $4.81 |
+
+Single trades 15 to 27 points of recall for a third to a fifth of the cost and less
+noise, the same trade the first round showed. The 120 KB replay is over the cutoff, so
+it still fans out by default. `--mode fanout` on the 16 KB replay ran single: review's
+size rule outranks the benchmark's mode hint, so that row came from the first round.
 On Claude Code the single agent runs on `analysis` whatever model the session uses, because a Sonnet
 session running the aspects itself missed most planted issues.
 

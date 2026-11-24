@@ -154,8 +154,9 @@ or `--fanout` overrides the rule. Most of a pass's cost is the agent reading
 the repository around the diff, not the diff itself; one agent reads it once, fanout
 once per aspect. Versus one session doing every aspect (CHANGELOG 2.20.0), fanout
 cost 3-4x, found 15-25 points more planted issues on real-size replays, and raised
-blocking noise from ~1 to 5-11 per run. Unbenchmarked single mode trades some recall
-for cost and noise. Say which mode ran, and why, in the report's `_Model:_` line.
+blocking noise from ~1 to 5-11 per run. Single, measured on the same replays
+(2026-11-24), cost $0.45-1.46 per run against fanout's $2.30-4.81, with about a third of
+the noise and 15-27 points less recall. Say which mode ran, and why, in the report's `_Model:_` line.
 
 **If your harness supports spawning independent subagents** (a task/agent
 dispatch primitive that runs separately from this conversation):
