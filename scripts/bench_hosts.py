@@ -209,8 +209,9 @@ def build_command(
 ):
     """Return (argv, stdin_text) for one run. `{model}` and `{provider}`
     each drop with the flag before them when no value is given. A pinned
-    `mode` (inline or fanout) appends its hint to Claude Code's system prompt
-    and is refused on a host with one way to run, or with a `template`."""
+    `mode` (inline, single or fanout) appends its hint to Claude Code's system
+    prompt and is refused on a host with one way to run, or with a `template`;
+    `single` is refused for any pass but review, the only one with that path."""
     profile = HOSTS[host]
     invoke = invoke or profile["default_invoke"]
     if template:
@@ -255,6 +256,11 @@ def build_command(
             raise ValueError(
                 f"--mode {mode} can't be added to a --cmd template; put"
                 " --append-system-prompt in the template instead"
+            )
+        if mode == "single" and pass_name != "review":
+            raise ValueError(
+                f"--mode single is for review only; {pass_name} has no single"
+                " path, so use --pass review"
             )
         argv[1:1] = ["--append-system-prompt", MODE_HINTS[mode]]
     stdin_text = None if invoke == "native" else skill_prompt(pass_name, grumpy)

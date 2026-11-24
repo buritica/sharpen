@@ -1702,6 +1702,17 @@ class UsageTest(unittest.TestCase):
         )
         self.assertEqual(argv[:3], ["env", "X=1", "claude"])
 
+    def test_single_mode_is_refused_for_a_pass_without_a_single_path(self):
+        # Only review.md has a single path; a hint for imagine would label
+        # whatever the model improvised as `single`.
+        with self.assertRaises(ValueError) as cm:
+            bench.build_command("claude", "imagine", "sonnet", mode="single")
+        self.assertIn("--pass review", str(cm.exception))
+        argv, _ = bench.build_command("claude", "review", "sonnet", mode="single")
+        self.assertEqual(argv[1], "--append-system-prompt")
+        argv, _ = bench.build_command("claude", "imagine", "sonnet", mode="fanout")
+        self.assertEqual(argv[1], "--append-system-prompt")
+
     def test_a_repeated_model_or_mode_runs_once(self):
         args = argparse.Namespace(
             model="opus, opus,sonnet", mode="inline,inline", host="claude"

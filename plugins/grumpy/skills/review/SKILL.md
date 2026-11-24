@@ -150,18 +150,18 @@ review in the grumpy principal engineer voice—skeptical, direct, exasperated.
 roughly 1,500 diff lines) runs **single**: every aspect in one agent, one
 after another. A larger diff runs **fanout**: one agent per aspect. `--single`
 or `--fanout` overrides the rule. Most of a pass's cost is the agent reading
-the repository around the diff, not the diff itself. One agent reads it once,
-while one per aspect reads it once each, so fanout costs three to four times
-as much. It finds more on a large diff, where one agent can't cover every
-aspect closely, and on a small diff it mostly adds noise
-(`plugins/grumpy/tests/bench/README.md` has the measurements). Say which mode
-ran, and why, in the report's `_Model:_` line.
+the repository around the diff, not the diff itself; one agent reads it once, fanout
+once per aspect. Versus one session doing every aspect (CHANGELOG 2.20.0), fanout
+cost 3-4x, found 15-25 points more planted issues on real-size replays, and raised
+blocking noise from ~1 to 5-11 per run. Unbenchmarked single mode trades some recall
+for cost and noise. Say which mode ran, and why, in the report's `_Model:_` line.
 
 **If your harness supports spawning independent subagents** (a task/agent
 dispatch primitive that runs separately from this conversation):
 
 - **single**: launch **one** subagent on the `analysis` role (below). Its
-  prompt holds the template below once per applicable aspect. It works through
+  prompt follows the template below with `[DIFF_CONTENT]` inlined once and
+  only the `[ASPECT]` focus repeated per applicable aspect. It works through
   them in order, keeps each pass isolated (findings from one aspect don't
   shape how it judges another), and returns every pass's pipe lines, each
   tagged with its own ASPECT. One agent on the strong model, rather than the

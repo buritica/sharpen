@@ -125,7 +125,8 @@ are refused before the first run.
 
 Any `--mode` but `auto` is refused together with `--cmd`: the bench can't tell
 where in a custom command line the system-prompt flag belongs, so put
-`--append-system-prompt` in the template yourself. A `--cmd` for Claude Code needs
+`--append-system-prompt` in the template yourself. `--mode single` is refused for any
+pass but `review`, the only command with a single path. A `--cmd` for Claude Code needs
 `--output-format json` too, or its runs record no usage and no `observed_mode`; and with
 several models in `--model` the template must contain `{model}`, or `run` refuses it
 rather than paying for identical runs under different labels.
