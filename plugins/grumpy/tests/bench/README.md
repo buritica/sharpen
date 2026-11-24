@@ -67,10 +67,12 @@ table when a row's cost is the mean of only some of its runs. Every run also rec
 
 `observed_mode` says how the passes actually ran: `inline` (the session ran every pass
 itself), `single` (one subagent ran them all, review's default for a diff up to 60,000
-characters), `fanout` (it started more than one) or `oneshot`. This matters because headless
-Claude Code usually runs the passes inline, while an interactive session usually fans
-out, and on a real-size diff fan-out cost 4 to 11 times as much in the runs that
-prompted this (2026-11-23). `--mode` asks for one: `inline`, `single` or `fanout` appends a line
+characters), `fanout` (it started more than one) or `oneshot`. This matters because the
+runs before review's size rule (grumpy 2.20.0) showed headless Claude Code usually running
+the passes inline, while an interactive session usually fanned out, and on a real-size diff
+fan-out cost 4 to 11 times as much in the runs that prompted this (2026-11-23). Review now
+picks `single` or `fanout` by diff size when it has subagents, so which path an `auto` run
+takes is up to the host and command. `--mode` asks for one: `inline`, `single` or `fanout` appends a line
 saying so to Claude Code's system prompt, and `auto` (the default) leaves it to the
 host. The line is a request, not a guarantee, so the summary notes runs whose
 `observed_mode` differs from the mode they asked for; their row's label is wrong for
@@ -176,6 +178,7 @@ OpenAI; it is planted toy code, but say so if that matters where you run it.
 
 ## Cost
 
+<!-- ponytail: no cost figures for `single` yet; add them when a bench run records --mode single on the replays -->
 Nine cases: five for review, two for imagine, and two real-size replays that run both.
 `run --pass all` with the default three repeats is 33 headless sessions per host, model
 and mode, so a two-model, two-mode eval is 132. The replays are where the money goes: on

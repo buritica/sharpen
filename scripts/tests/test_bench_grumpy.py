@@ -1599,6 +1599,31 @@ class UsageTest(unittest.TestCase):
         for n, mode in ((0, "inline"), (1, "single"), (2, "fanout"), (7, "fanout")):
             self.assertEqual(bench.observed_mode("claude", {"subagents": n}), mode)
 
+    def test_a_single_run_observed_as_fanout_is_flagged(self):
+        score = bench.score(KEY, [])
+        runs = [
+            {
+                "case": "c",
+                "pass": "review",
+                "score": score,
+                "usage": {"subagents": 3},
+                "pinned_mode": "single",
+                "observed_mode": "fanout",
+            },
+            {
+                "case": "c",
+                "pass": "review",
+                "score": score,
+                "usage": {"subagents": 1},
+                "pinned_mode": "single",
+                "observed_mode": "single",
+            },
+        ]
+        s = bench.summarize(runs)["c/review"]
+        self.assertEqual(s["mode_missed"], 1)
+        notes = bench._row_notes(s, "claude")
+        self.assertTrue(any("ignored the pinned --mode" in n for n in notes))
+
     def test_single_mode_pins_its_own_hint(self):
         argv, _ = bench.build_command("claude", "review", mode="single")
         hint = argv[argv.index("--append-system-prompt") + 1]

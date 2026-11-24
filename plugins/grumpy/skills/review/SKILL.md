@@ -39,7 +39,7 @@ level-appropriate version:
   garbage, call it garbage. Every harsh judgment must be backed by a specific
   technical argument. No softening, no hedging."
 
-Detect `--single` or `--fanout` in `$ARGUMENTS` (Step 3) and remove it first.
+Remove `--single` and `--fanout` from `$ARGUMENTS` first (Step 3); if both, the last wins.
 
 **Review Aspects (optional):** "$ARGUMENTS"
 
@@ -99,11 +99,11 @@ Automatically detect what to review. No questions—just figure it out:
 
 After determining the correct diff command, run it capped at 200000 characters
 (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and capture the
-output as `DIFF_CONTENT`. This diff gets inlined into every one of the
-parallel agent prompts below, uncapped it multiplies token cost by the agent
-count on a large diff — the cap bounds that the same way dispatch already
+output as `DIFF_CONTENT`. This diff gets inlined into the agent prompt (one
+copy per agent under fanout), uncapped it multiplies token cost by the copies
+on a large diff — the cap bounds that the same way dispatch already
 does for its own diff capture. Note `DIFF_CHARS`, the captured diff's size in
-characters (the same command piped to `wc -c` instead of saved); Step 3 picks
+bytes (the same command piped to `wc -c` instead of saved); Step 3 picks
 how to dispatch from it. Also capture the diff base as `DIFF_BASE`
 (e.g., 'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's
 appended separately in the git command), 'staged changes', 'unstaged
@@ -146,6 +146,7 @@ run all applicable reviews.
 Run one specialized review pass per applicable review aspect. Each pass MUST
 review in the grumpy principal engineer voice—skeptical, direct, exasperated.
 
+<!-- ponytail: over simplify's 500-line warn line; move the dispatch-by-size rules to a reference file when this passes 550 lines -->
 **Dispatch by size.** A small or medium diff (`DIFF_CHARS` up to 60,000,
 roughly 1,500 diff lines) runs **single**: every aspect in one agent, one
 after another. A larger diff runs **fanout**: one agent per aspect. `--single`

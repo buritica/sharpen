@@ -127,13 +127,12 @@ HOSTS = {
         "verified": True,
     },
 }
-# How a pass runs its finding passes. `auto` leaves it to the host: headless
-# Claude Code (`claude -p`) usually runs every pass itself in one session,
-# while an interactive session usually fans out to one subagent per pass, so
-# a bench that never pins the mode measures the cheaper path only. `inline`,
-# `single` and `fanout` pin it with a line appended to Claude Code's system
-# prompt. Codex, pi and oneshot have one way to run, so only `auto` applies
-# there.
+# How a pass runs its finding passes. `auto` leaves it to the host and the
+# command (headless Claude Code has often run the passes itself; with
+# subagents, review picks single or fanout by diff size), so an unpinned bench
+# may not measure the path you care about. `inline`, `single` and `fanout`
+# pin it with a line appended to Claude Code's system prompt. Codex, pi and
+# oneshot have one way to run, so only `auto` applies there.
 MODES = ("auto", "inline", "single", "fanout")
 _HAS_AGENTS = "This harness supports subagents: the Agent tool is available. "
 MODE_HINTS = {
@@ -146,9 +145,9 @@ MODE_HINTS = {
         "model the command specifies, runs every pass in turn."
     ),
     "fanout": (
-        _HAS_AGENTS + "Take the command's subagent path: dispatch each pass "
-        "as its own Agent call, in parallel, with the model the command "
-        "specifies."
+        _HAS_AGENTS + "Take the command's fanout subagent path whatever the "
+        "diff's size, as if `--fanout` were passed: dispatch each pass as its "
+        "own Agent call, in parallel, with the model the command specifies."
     ),
 }
 MODE_HOSTS = {"claude"}
@@ -402,6 +401,7 @@ def observed_mode(host, usage):
         return "oneshot"
     if not usage or usage.get("subagents") is None:
         return None
+    # ponytail: one subagent reads as `single` for every pass; split by pass when an imagine row reports observed_mode single
     n = usage["subagents"]
     return "inline" if not n else "single" if n == 1 else "fanout"
 
