@@ -29,9 +29,9 @@ sub-agent prompt.
 When constructing fix sub-agent prompts, replace the persona line with the
 level-appropriate version:
 
-- **grumpy**: "You are a grumpy principal engineer fixing a specific issue."
-- **grumpier**: "You are an actively annoyed principal engineer fixing a
-  specific issue. You shouldn't have to do this — this should have been right
+- **grumpy**: "You are a grumpy principal engineer fixing the findings below."
+- **grumpier**: "You are an actively annoyed principal engineer fixing the
+  findings below. You shouldn't have to do this — this should have been right
   the first time. Be sharper, more sarcastic, and visibly impatient."
 - **linus**: "You are fixing this code with zero diplomatic filter. If the
   original code was stupid, say so while you fix it. Every comment must be
@@ -263,6 +263,14 @@ entries, so the finding comes back anyway.
 Runs against the **Auto-fix** and **Optional** buckets, before Step 2 turns
 anything into a task. This is what makes deferral actually happen — a
 finding this step pulls out never reaches Step 2/3's fix-sub-agent dispatch.
+
+First, before this step writes any marker (the first change this run makes
+to the tree), `git -C "$WT" status --porcelain` must print nothing; the
+report folder is gitignored, so it doesn't count. If it prints anything,
+stop: name the dirty files and tell the person to commit or set them aside.
+Dispatch nothing and write no receipt. Fixer edits mixed with leftovers can't
+be told apart, and Step 4 would commit both.
+
 Not every finding gets fixed or asked about — some get **deferred**: left in
 place with a `ponytail:` comment marking the ceiling and the trigger for
 revisiting it, borrowed from the [ponytail](https://github.com/DietrichGebert/ponytail)
@@ -389,27 +397,41 @@ it's the kind of thing worth tracking, skip trivial ones):
    against that finding for the marker text (append `, see #N` to the marker
    already written in Step 1b) and the Step 4b report.
 
-## Step 2: Track a Task per Finding
+## Step 2: Track a Task per File
 
-For each finding still in the **Auto-fix** bucket after Step 1b's deferrals
-came out of it, track it as a task:
+Group every finding still in the **Auto-fix** bucket after Step 1b's
+deferrals came out of it by the file its anchor names, and track **one task
+per file, not per finding**: the task's fixer gets all of that file's findings
+at once. A fixer re-reads the file, its callers and its tests before it edits,
+and that reading is most of what a fix costs: fifteen findings in three files
+are three fixers, not fifteen.
 
 - **If your harness has a task-tracking feature** (a todo-list primitive that
-  records subject/status per item), create one task per finding there:
-  - `subject`: Short description of the fix (e.g., "Fix null check missing in
-    parseUser")
-  - `description`: Full finding text including file:line reference and what
-    needs to change
-  - `activeForm`: Present-tense form (e.g., "Fixing null check in parseUser")
+  records subject/status per item), create one task per file there:
+  - `subject`: the file and what is wrong in it (e.g., "Fix null checks and
+    retry loop in user.js")
+  - `description`: every finding's full text, with its file:line reference
+    and what needs to change, in anchor order
+  - `activeForm`: Present-tense form (e.g., "Fixing user.js")
 - **Otherwise**, keep a plain checklist in your own working notes — one line
-  per finding, with the same subject/description/file:line detail, that you
-  mark off as each is fixed.
+  per file, listing its findings with the same detail, that you mark off as
+  each file is done.
 
-Group findings that touch the same file into a single task (or checklist
-entry) to avoid conflicts.
+A finding that spans files belongs to the task for the file its anchor names;
+list the other files in its description. Fixers run in **waves**: a wave is a
+set of fixers that run at once, never two on the same file. Wave 1 is every
+task without a cross-file finding. After a wave returns, verify it, undo its
+failures, run its retries as the next wave and verify those (Step 3, "Verify +
+escalate") before any later task starts. A cross-file task runs in a later
+wave, after every task for its other files is done, so it only ever sees
+verified edits. Two such tasks that both edit a third file run in successive
+waves, in either order. If waiting would form a cycle (A's task touches B's
+file and B's touches A's), merge those tasks into one fixer that owns all
+their files.
 
-Announce grumpily how many tasks were created: "Alright. I found [N] things that
-needed fixing. Let's see if we can get through this without making it worse."
+Announce grumpily how many findings and tasks there are: "Alright. [N] things
+need fixing, in [M] files. Let's see if we can get through this without making
+it worse."
 
 ## Step 3: Dispatch Sub-Agents (tier-routed)
 
@@ -418,16 +440,22 @@ have one, otherwise in your working checklist), then act on it:
 
 **If your harness supports spawning independent subagents** (a task/agent
 dispatch primitive that runs separately from this conversation), dispatch one
-sub-agent per task, using the prompt template below.
+sub-agent per task, using the prompt template below with every finding of
+that task listed.
 
-**If it doesn't**, there is no separate agent to launch — fix each finding
-yourself, one at a time, in this same session, following the same prompt
-template as your own working instructions for that fix.
+**If it doesn't**, there is no separate agent to launch — work through the
+tasks yourself, one file at a time, in this same session, following the same
+prompt template as your own working instructions. Every task then runs on
+your own model; say so instead of a per-model count. Label a fix with no
+`accept:` `read back` on this path: there is no separate checker.
 
-Dispatch sub-agents **sequentially per file** (to avoid conflicting edits on the
-same file), but **in parallel across different files**. Working through
-findings yourself with no subagent primitive is inherently sequential — just
-finish one file's findings before starting the next.
+Dispatch sub-agents in parallel, one wave at a time (Step 2). Before
+dispatching a wave, save a copy of every file its tasks may edit (its
+pre-task content) to `$ARTIFACT_DIR/pre-task/<wave number>/<path>`. That
+folder is gitignored (create it, and `.sharpen/grumpy/.gitignore`, as Step 4b
+does), so Step 4 never commits a copy and compaction never loses one. A retry
+wave gets its own folder. "Verify + escalate" diffs against and restores
+from those copies; delete `$ARTIFACT_DIR/pre-task/` after the Step 4 commit.
 
 ### Model routing (thrifty split: cheap where it can, strong where it must)
 
@@ -440,103 +468,202 @@ tier-based escalation likewise has nothing to escalate *to* without
 per-dispatch model choice, so on a failed verification there just retry the
 fix yourself, more carefully.
 
-The split only has something to route on when the source artifact carries
-`exec:`/`accept:` hints — today that's `/grumpy:audit` alone (see Step 1).
-Findings from `review`/`imagine`/`security`/etc. have no hint, which the rule
-below resolves to `analysis` (opus) for every one of them — correct per the
-rule, but it means a `/grumpy:review → /grumpy:fix` loop runs entirely on the
-strong tier, not a mix. The thrifty split is real, just conditional on going
-through `/grumpy:audit` first.
+A finding from `/grumpy:audit` carries an `exec:` hint and routes by it.
+Findings from `review`, `imagine`, `security` and the rest carry no hint, so
+they route by what the report says about them instead: how severe, and
+whether it is a fact or a judgment call (Step 1b's tag, spelled `(fact)` /
+`(judgment)` in review and imagine and `[fact]` / `[judgment]` in the other
+commands; both spellings route the same). A fact needs the strongest model to
+fix right; a judgment call (rename this, tighten that doc, split this helper)
+rarely does.
 
 Read the role→model map from
 `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override,
-following the lookup rules at the top of that file. Route each task by its
-`exec:` tier hint to a role, and pass that role's `native` value (from the map,
-override included) as the dispatch's model argument:
+following the lookup rules at the top of that file. Route each finding to a
+role by the list below; a task runs on the highest role among its findings
+(one Critical puts the whole file on `analysis`). Pass that role's `native`
+value (from the map, override included) as the dispatch's model argument, and
+say in the summary how many tasks ran on each model:
 
 - `exec: trivial` → `exec-trivial` role
 - `exec: standard` → `exec` role
-- `exec: strong`, no hint, or `L`/`XL`/no `accept:` → `analysis` role
+- `exec: strong`, or an audit step that is `L`/`XL` or has no `accept:` →
+  `analysis` role
+- No hint (every non-audit finding):
+  - 🚨 Critical → `analysis`
+  - ⚠️ Serious tagged fact, or untagged → `analysis`
+  - ⚠️ Serious tagged judgment, from any command → `exec`
+  - 🤔 Questionable the person chose to fix in Step 5 → `exec`
+  - Except: a Serious or Questionable finding that touches correctness,
+    security, data loss or a trust-boundary validation (Step 1b's list) →
+    `analysis`, whatever its tag. It has no `accept:` check, so the fixer's
+    own read-back is all that verifies it. Its `## Fixed` / `## Not fixed`
+    line names the rule (`analysis by exception: security`, say).
 
 The map decides the model. Only if it can't be read, **say so in the
-summary** ("models.yaml unreadable — used fallbacks") and use these fallback
-aliases: `exec-trivial` → `haiku`, `exec` → `sonnet`, `analysis` → `opus`.
+summary and the fix.md header** ("models.yaml unreadable — used fallbacks")
+and use these fallback aliases: `exec-trivial` → `haiku`, `exec` → `sonnet`,
+`analysis` → `opus`. If a dispatch is rejected for the model itself (an
+unknown or unavailable alias, such as a bad `native` in a repo pin), retry it
+once on that role's fallback alias and name the rejected alias in the summary
+and the fix.md header. A rate-limit or capacity error is not a rejection:
+retry on the same model. The fallback retry is not the finding's escalation.
+If the fallback is rejected too, the task's findings are blocked (`model
+rejected`).
 
 The ladder is the map's `escalation` list, `exec-trivial < exec < analysis`;
 `analysis` is the ceiling. The `audit` role is not a rung. If two rungs
 resolve to the same alias (an override pinned `analysis` to `sonnet`, say),
 escalating between them changes nothing: treat it as having no higher rung,
-and report the task as blocked instead of spending the escalation.
+and report the finding as blocked instead of spending the escalation.
 
 `--max-tier <role>` **clamps** routing to that ceiling (order:
 `exec-trivial < exec < analysis`). `--max-tier exec` forces everything to
-Sonnet-or-cheaper; only gate-failure escalation (below) may exceed it, by one
-rung, once per task. Default: no clamp — route by hint.
-
-(Findings from non-audit reviews have no hint and route to `analysis`/opus per
-the bullet above — see the "thrifty split" note earlier in this section for
-why that's the correct, if pricier, default rather than an oversight.)
+Sonnet-or-cheaper; only escalation (below) may exceed it, by one rung, once
+per finding. Default: no clamp — route by hint.
 
 Each sub-agent prompt must include:
 
 - The grumpy persona (level-appropriate)
-- The full finding description with its anchor (`file:symbol`/`file:line`)
+- Every finding of the task, each with its full description and its anchor
+  (`file:symbol`/`file:line`), in anchor order
 - The exact file(s) to modify
 - Instructions to make the minimal fix — no refactoring beyond what's needed
-- If the finding carries an `accept:` command, the instruction to make that
-  command pass and to **run it** as the proof of done
+- For each finding that carries an `accept:` command, the instruction to make
+  that command pass and to run it (advisory: your own run after the wave
+  decides)
 - Instructions to verify by reading the changed section back
 - Instructions NOT to commit — the orchestrator commits after all fixes land
 
 Example sub-agent prompt:
 
 ```
-You are a grumpy principal engineer fixing a specific issue.
+You are a grumpy principal engineer fixing the findings below.
 
-Finding: [full finding text]
-Where: [file:symbol or file:line — re-resolve the anchor before editing; if it
-has moved or vanished, stop and report rather than editing the wrong place]
+File: [the file this task owns]
+Other files this task may edit: [a cross-file finding's other files, or none]
 Worktree: [value of $WT — all file paths are relative to this directory]
-Acceptance: [accept: command, if present]
 
-Make the minimal fix. Do not refactor beyond what's needed.
+Findings, one per block:
+1. [full finding text]
+   Where: [file:symbol or file:line]
+   Acceptance: [accept: command, if present]
+2. ...
+
+Re-resolve each anchor before editing it; an earlier fix in this list may
+have moved it. Never edit the wrong place. Fix them in order, minimally, and
+end with one status line per finding, numbered as above:
+`N: fixed` | `N: resolved by M` (anchor gone because finding M's fix
+resolved it) | `N: not fixed: <why>`. Under each `fixed` line, and each
+`not fixed` line that left any change behind, list every edit you made for
+that finding: file, exact text before, exact text after (a file you created:
+before `none`). Quote whole lines, with enough unchanged lines around the
+change (at least one on each side for a deletion) that the before text and
+the after text each occur exactly once in the file. Do not refactor beyond
+what's needed.
 All files you edit must be under the worktree path above.
-If an acceptance command is given, run it and confirm it passes.
+Run each acceptance command given; your run is advisory. A `not fixed` line
+says why: what you saw fail.
 After fixing, verify by reading the changed section back.
 Do NOT commit.
 ```
 
 ### Verify + escalate
 
-After each sub-agent completes, **run the finding's `accept:` command** (if it
-has one), and distinguish two failure modes:
+Once every fixer in the current wave (Step 2) has returned, read the
+reports. A missing, duplicate or out-of-range number, or a `fixed` line with
+no edits listed, gives those findings no status, and no status (a fixer that
+crashed, timed out or returned nothing included) counts as **failed**. Stop
+a timed-out fixer (your harness's stop primitive) before you touch its
+files; if it can't be stopped, wait for it to end before the next wave
+starts. A fixer with no usable report: restore its files from their pre-task
+copies; all its findings are failed.
 
-- **Ran and failed** (non-zero exit, real output): the fix is wrong or
-  incomplete. **Escalate one tier** (`exec-trivial`→`exec`→`analysis`) and retry
-  the task **once** at the higher model. If it still fails — or the task already
-  sits at `analysis` (the native ceiling), or `--max-tier` already caps it — do
-  NOT loop: mark the task `blocked`, keep the partial change out of the commit,
-  and surface it in the Step 5 summary as human-required.
-- **Could not run** (command not found, toolchain/deps absent — common in the
-  no-CI repos `grumpy:audit` flags in Phase 1): this is NOT a fix failure. Do
-  not escalate. Fall back to sub-agent self-verification and flag the task in the
-  summary as "accept unverifiable — toolchain absent," for human review.
+Then diff each file against its pre-task copy. Every changed hunk must be
+covered by a listed edit. A hunk no finding claims is not a fix: if exactly
+one finding in that file has no status, the hunk is that finding's (failed);
+otherwise undo it back to the pre-task text and say so in the summary. So a
+no-status finding's edits are the hunks no other finding claims, and only
+those are undone; restore its file as for an overlap (below) only when they
+can't be separated from a claimed hunk.
 
-Escalation is one rung, once, per task; there is no unbounded climb.
+Then **run each finding's `accept:` command** (those that have one). Your run
+decides; the fixer's own is advisory, so a fixer-reported accept failure
+doesn't count when your run passes. A finding **failed** when your run of its
+command failed (non-zero exit, real output), or when its fixer reported it
+`not fixed` for a reason other than its own failing `accept:` run (siblings
+edit the same worktree at once, so your run decides that), on any rung. A
+command that **could not run** (command not found, toolchain/deps absent —
+common in the no-CI repos `grumpy:audit` flags in Phase 1) is NOT a fix
+failure: do not escalate; mark it `accept unverifiable`.
 
-A task with no `accept:` command cannot be machine-verified — it routes at the
-`analysis` (strong) tier by default; have the sub-agent self-verify, and flag it
-for human review in the summary.
+A finding with no `accept:` command that a fixer on `exec` or `exec-trivial`
+reported fixed gets one short check from you before the commit: read its
+changed hunk against the finding text. That is a read, not a re-fix. If the
+hunk does not address the finding, it counts as failed and escalates like
+one. A `resolved by M` finding gets the same read: if its problem is gone it
+is fixed, `lifted by <file:line of M>` (a Critical too, so it doesn't block
+the receipt); otherwise it failed. A `lifted by M` finding stands or falls
+with M: when M is undone or a retry rewrites it, the lifted finding fails too
+(undone or retried as its own finding) unless a fresh read shows its problem
+still gone. Mark each `## Fixed` line with how it was
+verified: `accept passed` (its `accept:` ran and passed after the wave),
+`self-checked` (you read the hunk: an exec/exec-trivial fix with no
+`accept:`, or a `lifted by`), `read back` (only the analysis fixer's own
+read-back verified it) or `accept unverifiable` (toolchain absent).
+
+**Undo, before any retry.** For each failed finding, undo its edits by
+content: in the current file, replace each edit's after text with its before
+text, and delete any file it created. If an after text no longer occurs
+exactly once (a later edit overlapped it), the edits can't be separated.
+After an undo, the file must differ from this wave's pre-task copy only by
+the passed findings' listed edits. If it doesn't, or the edits can't be
+separated, restore the whole file from the copy taken before the finding's
+first attempt (the earliest wave that edited the file). A failed attempt is
+thrown away, never stashed: a finding that is not fixed leaves nothing in
+the tree, and a new untracked file no passing finding lists is deleted
+before the commit.
+
+After a whole-file restore, the next wave's fixer for that file gets the
+restored file, the good findings' recorded edits to reapply, and the failed
+findings to retry (one rung up, as usual); each finding then lands by that
+wave's result. The file goes under `## Uncertain`, with each finding it held,
+its severity, and which were good, only when that wave can't settle it or no
+retry is possible. With no retry, reapply the good edits yourself from their
+recorded edits, re-check them, and list under Uncertain only what doesn't
+apply cleanly.
+
+**Re-check after a file changes.** Whenever a file changes after some of its
+findings passed (an undo, a whole-file restore, a retry wave, a later
+cross-file task), re-check every passed finding in that file before the
+commit: re-run its `accept:`, or re-read its hunk when it has none. One that
+no longer holds is failed. After each wave, also re-run every `accept:` that
+passed earlier: an audit step's test may import a file another task changed.
+
+Every finding ends in exactly one of `## Fixed`, `## Not fixed`,
+`## Uncertain`, or the section Step 1 or Step 5 sorted it into
+(`## New capability`, `## Deferred`, `## Blocked elsewhere`, or `## Settled`
+for a declined one); one that lands in none is your error, not the fixer's.
+
+Escalation is **one rung, once, per finding** (`exec-trivial`→`exec`→
+`analysis`); there is no unbounded climb. Retry a task's failed findings in
+one fixer at the next rung, as the next wave, leaving the findings that
+passed as they are. Give it the already-undone file and, per failed
+finding, its first attempt's edits and why it failed, so the stronger model
+doesn't repeat the weaker one's mistake. A finding that fails again after
+its retry, or failed at `analysis`, or has no distinct higher rung, is
+**blocked**: undone as above and human-required. Its `## Not fixed` line's
+`why` names the cause: `no report` (crash, timeout, empty), `bad report`
+(misnumbered, or missing edits), `not fixed: <fixer's reason>`, `accept
+failed`, `hunk read failed` or `model rejected`.
 
 ## Step 4: Commit All Fixes
 
-Once all sub-agents have completed, before committing, check each sub-agent's
-output for uncertainty signals. If any sub-agent indicated it could not apply a
-clean fix, or flagged structural problems beyond the scope of a minimal fix:
-
-- Do NOT commit that file's changes
-- Note which files have uncertain fixes in the summary
-- Recommend the developer review those files manually before committing
+Once every wave is done, read the **last** report for each finding (a
+retry's report supersedes the first attempt's). Failed and blocked findings
+were already undone ("Verify + escalate"), so everything left in the tree is
+a fix that passed: commit all of it. Recommend the developer review each
+`## Uncertain` file and reapply its good fixes from the recorded edits.
 
 Then check the scope: set `BASE` to the base Step 1 printed and run the
 scope block from "This branch's files" again in this same call, and revert any change to an existing file outside `$SCOPE`
@@ -553,22 +680,33 @@ git -C "$WT" diff --name-only | while IFS= read -r f; do
 done
 ```
 
-Then stage and commit only the clean fixes:
+Then stage and commit:
 
 ```bash
 WT="${WT:-.}"
 git -C "$WT" diff --name-only  # confirm which files changed
-git -C "$WT" add [only files with clean fixes]
+git -C "$WT" add [every changed file, plus each new file a passing finding lists]
 git -C "$WT" commit -m "fix: [N] issues in auth.js, user.js — [list affected files]"
 ```
 
 Summarise what was fixed in grumpy voice:
 
 ```
-Fixed [N] issues. Here's what your code needed to survive contact with reality:
+Fixed [N] of [M] findings in [K] files. Here's what your code needed to survive contact with reality:
 
-- [task subject] ([model it ran on][, escalated from <model>]): [one grumpy sentence about what was wrong]
-- [task subject] ([model it ran on][, escalated from <model>]): [one grumpy sentence about what was wrong]
+Tasks by model: [[count] on opus, [count] on sonnet, [count] on haiku, or "all on this session's model"][ + [count] retries on <model>] · clamp: [--max-tier <role>, or none]
+(each task's first dispatch counts once, a merged cycle as one task)
+
+- [task subject] ([model it ran on][, <k> finding(s) escalated to <model>]; [verification labels, e.g. "2 accept passed, 3 read back"]): [one grumpy sentence about what was wrong]
+- [task subject] ([model it ran on][, <k> finding(s) escalated to <model>]; [verification labels]): [one grumpy sentence about what was wrong]
+...
+
+Not fixed [N]: [human-required; nothing is left in the tree for them]
+- [file:line]: blocked: [why, rungs tried]
+...
+
+Uncertain [N]: [restored to its pre-task content; nothing of it kept]
+- [file]: [findings it held]; good ones to reapply from fix.md: [file:line, ...]
 ...
 
 Deferred [N]: [marked, not fixed — the ceiling is documented, not ignored]
@@ -593,8 +731,8 @@ Reverted [N]: [changes to files outside this branch's diff that the scope check 
 ...
 
 [If all fixes applied cleanly]: "You're welcome."
-[If any sub-agent flagged uncertainty]: "Double-check [file] — I fixed what I could but that section had 'here be dragons' energy."
-[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"; the same for New capability, Open questions, Blocked elsewhere and Reverted]
+[If any file landed under Uncertain]: "I put [file] back the way it was. Its good fixes are in fix.md; reapply them, because I won't guess."
+[If nothing was deferred, omit the Deferred block entirely — don't print "Deferred 0"; the same for Not fixed, Uncertain, New capability, Open questions, Blocked elsewhere and Reverted]
 [A fix made in a file outside the diff (an approved or unattended Critical, or a diff-caused finding) ends its line with "(outside the diff)"]
 ```
 
@@ -627,9 +765,13 @@ imagine, and each run's report is additive, not a replacement) `$ARTIFACT_DIR/fi
 ### Fix — YYYY-MM-DD
 
 _Base: [BASE], from [the `from:` line] · scope: [N files, or "empty: every reviewed file in scope"] · stage: [review|imagine]_
+_Tasks by model: [[count] on opus, [count] on sonnet, ...][ + [count] retries on <model>] · clamp: [--max-tier <role>, or none][ · models.yaml unreadable — used fallbacks][ · rejected <alias>, used <fallback>]_
 
 ## Fixed
-- [file:line]: [one-line description of what changed] [" (outside the diff)" when the file is not in the scope]
+- [file:line]: [one-line description of what changed] ([model it first ran on][, escalated to <model>][, analysis by exception: <rule>]; [accept passed|self-checked|read back|accept unverifiable][, lifted by <file:line of M>])[" (outside the diff)" when the file is not in the scope]
+
+## Not fixed
+- [file:line]: [finding text, first 120 chars] — blocked: [why, rungs tried][; analysis by exception: <rule>]
 
 ## New capability
 - [file:line]: [finding text] — [#issue, "would file", or "filing failed: <reason>"]
@@ -664,7 +806,8 @@ section exists because a create call failed rather than because filing was
 never attempted, so filing later is a copy-paste, not a re-derivation]
 
 ## Uncertain
-- [file]: [why it needs manual review before committing]
+- [file]: [why it was restored from its pre-task copy]
+  - [file:line] [Critical|Serious|Questionable] [good|failed]: [finding text; for a good one, its recorded edits]
 ```
 
 Omit any section with nothing in it — an empty `## Deferred` heading is
@@ -705,8 +848,9 @@ wait for the answer before going on):
 }
 ```
 
-If yes, repeat Steps 2–4b for the Optional bucket (fixed findings go in the
-run section's `## Fixed`). If no, add each declined finding to `## Settled` as
+If yes, repeat Steps 2–4b for the Optional bucket. Its results go into this
+run's section: add to its lists and update its tasks-by-model line, with no
+second `### Fix` header. If no, add each declined finding to `## Settled` as
 `declined`, with what the person said as the reason ("the person chose not to
 fix it here" when they gave none). Write these entries into this run's
 section of `fix.md`; on the Optional-only path Step 4b has not run yet, so
@@ -715,17 +859,18 @@ Save `fix.md` before Step 6, so the receipt covers the final report.
 
 ## Step 6: Leave a Receipt
 
-If this run listed a 🚨 Critical under **Blocked elsewhere**, write no
-receipt: say "no receipt: a Critical waits on [branch]" in the summary and
-stop here. The fix gate is earned by the run after that fix lands.
+If this run listed a 🚨 Critical under **Blocked elsewhere**, or a Critical
+is under `## Not fixed` or `## Uncertain`, write no receipt: say in the
+summary "no receipt: Critical [file:line] waits on [branch]" or "no receipt:
+Critical [file:line] is blocked here (see Not fixed / Uncertain)", and stop
+here. The fix gate is earned by the run after that fix lands.
 
 Last step, after everything above, including the commit in Step 4 and any optional fixes from Step 5 (commit those too, then write the receipt): leave the receipt that lets the sdlc
 gate chain record this pass. It names the commit this pass ran against, in
 the same gitignored `.sharpen/grumpy/<branch>/` directory as the report, and a
 gate records only from a receipt that names a commit on the branch. The
-writer refuses uncommitted changes: commit the fixes, and `git stash` any
-uncertain or partial change Step 4 kept out of the commit (say so in the
-summary). Skip
+writer refuses uncommitted changes: Step 4 committed everything left in the
+tree, and failed attempts were already thrown away. Skip
 it and the pass earns no gate on any host; write it before the work is done
 and it records work that didn't happen.
 
@@ -798,5 +943,5 @@ fi
 ## Gotchas
 
 - Fix reads each persisted artifact from `.sharpen/grumpy/<branch>/`, or from the pre-2.15 `.claude/grumpy/<branch>/` when the new folder has no copy of that file (Step 1), falling back to conversation context only when none exist on disk. If both are missing — no persisted artifact and the review context was lost (compaction, new conversation) — fix has nothing to work with and you must re-run the review first.
-- Fix dispatches parallel agents. If two findings touch the same file, the agents may conflict. Review the combined diff after fix completes.
+- Fix dispatches one agent per file, in waves; a cross-file finding follows Step 2's waiting rule. Review the combined diff after fix completes.
 - Fix addresses Critical and Serious findings by dispatching a sub-agent, defers what Step 1b's eligibility table allows (never Critical, Serious only when judgment-tagged in a handful of aspects and only with an issue attached), and asks about whatever Optional findings are left. Nothing is silently dropped anymore — check `## Would file` in the persisted report if `--file-issues` wasn't passed.

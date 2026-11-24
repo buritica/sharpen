@@ -34,10 +34,10 @@ hedging and backs every harsh line with the specific technical argument for
 it.
 
 `/grumpy:fix` resolves what a review finds: tier-routed sub-agents (cheap
-model for a trivial fix, strongest for anything unverifiable), one retry at
-a higher tier if a fix's own check fails, and — for anything non-critical —
-the option to defer into a `ponytail:` marker instead of forcing a fix at
-review time. See "Deferring findings" below.
+model for a trivial or judgment fix, strongest for facts and correctness),
+one retry a tier up if a fix fails its check or read-back, and — for anything
+non-critical — the option to defer into a `ponytail:` marker instead of
+forcing a fix at review time. See "Deferring findings" below.
 
 ## Commands
 
@@ -64,9 +64,21 @@ Each step is **honestly sized** — a step tagged small must carry a runnable
 
 `/grumpy:fix` then routes each step by that tier (the **thrifty split**: cheap
 where it can, strong where it must), passing the resolved model to each fix
-agent and escalating one tier on a failed `accept:` check:
+agent and escalating one tier, once, when a fix fails its `accept:` check, its
+fixer reports it not fixed, or a read of the hunk of an `exec` or
+`exec-trivial` fix with no `accept:` finds it missed:
 
 - `exec: trivial` → Haiku · `exec: standard` → Sonnet · large/unverifiable → Opus
+- Findings from review, imagine and the other passes carry no tier, so they route by
+  severity: Critical, and Serious tagged `(fact)`/`[fact]` or untagged → Opus; Serious
+  tagged `(judgment)`/`[judgment]` and Questionable findings you chose to fix → Sonnet
+  (Opus when they touch correctness, security, data loss or a trust-boundary validation)
+- One fixer per file, holding all of that file's findings, not one per finding; it runs
+  on the highest role among them, so one Opus finding puts the whole file on Opus
+- To keep every review and imagine fix on Opus, pin `exec` to `opus` in
+  `.sharpen/models.yaml`; audit's `exec: standard` steps move with it (`exec: trivial`
+  stays on `exec-trivial` unless you pin that too). With `exec` and `analysis` on one
+  model a failed `exec` fix has no rung left, so it is reported blocked, not retried
 - `--max-tier <role>` clamps the ceiling (fix's ladder tops at the `analysis` role: `exec-trivial < exec < analysis`)
 
 The role→model map lives in `models.yaml`. Each role has the Anthropic API id,
@@ -75,7 +87,7 @@ model to start a Codex session on, since Codex (like pi) can't pick a model per
 subagent, plus the OpenAI API id the no-agent path calls (`openai`, see "No agent
 installed"). Review runs its finding passes on the `analysis` role; imagine stays
 on the session's model until a larger benchmark run settles which model suits
-it; fix routes by `exec:` tier; audit dispatches its dimension reviews on
+it; fix routes as listed above; audit dispatches its dimension reviews on
 `analysis`. A repo can override single values in a committed
 `.sharpen/models.yaml`; the lookup and merge rules are at the top of
 `models.yaml`, and every report names the model that ran. Lowering `analysis`

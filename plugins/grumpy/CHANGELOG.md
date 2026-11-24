@@ -3,6 +3,46 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.19.0 — the fix pass costs less: one fixer per file, judgment calls on Sonnet
+
+`/grumpy:fix` dispatches one fixer per file, carrying every finding in that file, instead
+of one per finding. A fixer's cost is mostly reading the file, its callers and its tests
+before it edits, so fifteen findings in three files are now three fixers, not fifteen. A
+finding that spans files waits for the tasks of the other files it touches.
+
+Findings without an `exec:` hint (everything except `/grumpy:audit`'s steps) used to route
+to `analysis` (Opus) every time. They now route by what the report says: Critical and
+untagged (`fact`) Serious findings stay on `analysis`; Serious findings tagged `(judgment)`
+and Questionable findings you choose to fix in Step 5 go to `exec` (Sonnet), except ones
+that touch correctness, security, data loss or a trust boundary, which stay on `analysis`.
+A file's task runs on the highest role any of its findings needs. Fixing a rename or a doc
+on Opus paid the strong tier for nothing, and a review's Serious list often carries
+several judgment calls.
+
+Non-audit findings carry no `accept:` command, so a Sonnet fix has no machine check. A
+finding now escalates when its fixer reports it `not fixed` or the orchestrator's read of
+its hunk (`self-checked`) finds it doesn't address the finding: the orchestrator undoes its
+edits, then retries it one rung up, once per finding.
+
+- The summary says how many tasks ran on each model.
+- To keep every review and imagine fix on Opus, pin `exec` to `opus` in
+  `.sharpen/models.yaml`. That also moves audit's `exec: standard` steps; audit's
+  `exec: trivial` steps stay on `exec-trivial` unless you pin that role too.
+- A repo `.sharpen/models.yaml` that pinned `exec` lower than Sonnet now also covers
+  judgment Serious and chosen Questionable fixes, which used to ignore it.
+- A failed finding is undone on its own, by content, and any file it created is deleted.
+  The undo is checked against a pre-task copy of the file, kept under
+  `.sharpen/grumpy/<branch>/pre-task/`; a change no finding claims is undone too. If the
+  edits can't be separated, the whole file goes back to its pre-task content and its good
+  fixes are reapplied in the next wave; it lands under `## Uncertain` only when that wave
+  can't settle it. Nothing is stashed.
+- A finding that passed is re-checked whenever its file changes later (an undo, a retry, a
+  cross-file task), and so is a finding lifted by another finding's fix.
+- The run stops before its first edit when the worktree has uncommitted changes, so they
+  never land in the fix commit.
+- No receipt is written while a Critical sits under `## Not fixed` or `## Uncertain`
+  (before, only when it was blocked elsewhere), so gate 4/6 waits for it.
+
 ## 2.18.0 — the fix pass picks its own stage
 
 `/grumpy:fix` now writes its receipt with `receipt.py fix --stage auto`, which reads the stage
