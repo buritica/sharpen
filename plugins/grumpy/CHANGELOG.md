@@ -3,21 +3,27 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
-## 2.20.0 — review runs every aspect in one Opus agent on small and medium diffs
+## 2.20.0 — review runs every aspect in one agent on small and medium diffs
 
 `/grumpy:review` used to start one subagent per aspect, up to seven, on every diff. It
 now picks by size. A diff up to 60,000 characters (about 1,500 diff lines) runs
-**single**: one subagent on the `analysis` role (Opus) works through every aspect in
-turn. A larger diff still runs **fanout**, one subagent per aspect. `--single` and
+**single**: one subagent on the `analysis` role works through every aspect in turn.
+That role is Opus by default, and `.sharpen/models.yaml` can override it. Codex and pi
+can't pick a per-subagent model, so there the subagent runs on the session's model. On a
+host without subagents the aspects run inline in the session.
+A larger diff still runs **fanout**, one subagent per aspect. `--single` and
 `--fanout` override the rule, and the report's `_Model:_` line says which ran and why.
 
 Most of a pass's cost is the agent reading the repository around the diff, and fanout
 pays it once per aspect. In the first benchmark round (2026-11-23, Opus, two real-size
-replays), fanout found 15 to 25 points more of the planted issues but cost three to four
-times as much and raised blocking noise from about 1 finding per run to 5 to 11. Small
-and medium diffs take the cheaper, quieter path; large ones keep the recall. The single agent runs on `analysis` whatever model the
-session uses, because a Sonnet session running the aspects itself missed most planted
-issues.
+replays), fanout was compared with one session running every aspect inline, not with
+one subagent. Fanout found 15 to 25 points more of the planted issues but cost three to
+four times as much and raised blocking noise from about 1 finding per run to 5 to 11.
+Single (one subagent) has not been benchmarked yet. It is expected, not measured, to be
+cheaper and quieter than fanout on small and medium diffs. To measure it, run
+`python3 scripts/bench-grumpy.py run --host claude --pass review --mode single,fanout`.
+On Claude Code the single agent runs on `analysis` whatever model the session uses, because a Sonnet
+session running the aspects itself missed most planted issues.
 
 The benchmark takes `--mode single`, and `observed_mode` reads one subagent as `single`.
 

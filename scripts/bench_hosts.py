@@ -141,8 +141,9 @@ MODE_HINTS = {
         "this session. Do not use the Agent tool for them."
     ),
     "single": (
-        _HAS_AGENTS + "Take the command's single path: one Agent call, on the "
-        "model the command specifies, runs every pass in turn."
+        _HAS_AGENTS + "Take the command's single path whatever the diff's "
+        "size, as if `--single` were passed: one Agent call, on the model the "
+        "command specifies, runs every pass in turn."
     ),
     "fanout": (
         _HAS_AGENTS + "Take the command's fanout subagent path whatever the "
@@ -394,6 +395,9 @@ def observed_mode(host, usage):
     """How the pass actually ran: `inline` when Claude Code spawned no
     subagent, `single` when it spawned one (review's single path), `fanout`
     when it spawned more, None where the host can't say.
+    The count is ambiguous: a single-path review whose one agent failed or
+    was rate-limited may be rerun once (review.md's Model paragraph), which
+    spawns a second subagent and reads as `fanout` here.
     On Claude Code this reads `subagent_stats.spawned` from the JSON result
     and nothing else; when that key is absent the mode is None, and the
     summary says so under the table."""

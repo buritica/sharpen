@@ -133,7 +133,7 @@ def compare(
     compared as rates, so runs with different --repeat compare fairly. Mean
     cost (or, where a host reports no cost, tokens) rising by more than
     `cost_rise` (a fraction: 0.5 is +50%) is a problem; wall time and a
-    change in how the passes ran (inline or fanned out) are notes.
+    change in how the passes ran (inline, in one subagent or fanned out) are notes.
     """
     limits = {
         "recall": recall_drop,
@@ -254,7 +254,7 @@ def _quality_problems(bs, cs, limits):
 
 def _run_notes(bs, cs):
     """Notes on how the runs went, not on what they found: wall time and
-    whether the passes ran inline or fanned out."""
+    whether the passes ran inline, in one subagent or fanned out."""
     notes = []
     bt, ct = bs.get("duration_s"), cs.get("duration_s")
     if bt and ct and ct > bt * 1.5:

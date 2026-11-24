@@ -1623,11 +1623,14 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(s["mode_missed"], 1)
         notes = bench._row_notes(s, "claude")
         self.assertTrue(any("ignored the pinned --mode" in n for n in notes))
+        self.assertTrue(any("reran its agent" in n for n in notes))
 
     def test_single_mode_pins_its_own_hint(self):
         argv, _ = bench.build_command("claude", "review", mode="single")
         hint = argv[argv.index("--append-system-prompt") + 1]
         self.assertIn("single path", hint)
+        self.assertIn("whatever the diff's size", hint)
+        self.assertIn("`--single`", hint)
 
     def test_claude_without_json_records_nothing(self):
         self.assertIsNone(bench.parse_usage("claude", "plain text\n{not json"))

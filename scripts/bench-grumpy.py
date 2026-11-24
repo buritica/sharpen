@@ -794,8 +794,9 @@ def _row_notes(s, host):
         )
     if s.get("mode_missed"):
         notes.append(
-            f"{s['mode_missed']} run(s) ignored the pinned --mode; their row's"
-            " mode label is wrong for them"
+            f"{s['mode_missed']} run(s) ignored the pinned --mode or (a pinned"
+            " single) reran its agent; check those runs before trusting the"
+            " row's mode label"
         )
     return notes
 
@@ -882,9 +883,9 @@ def _list(arg):
 
 def _analysis_pin(args, model):
     """The alias to pin models.yaml's analysis role to, or None. --analysis
-    wins; otherwise a Claude run on an alias pins analysis to it, so under
-    fanout review's passes run on the model the row names, as they do inline
-    (where the session runs them itself)."""
+    wins; otherwise a Claude run on an alias pins analysis to it, so review's
+    subagent passes (single or fanout) run on the model the row names, as they
+    do inline (where the session runs them itself)."""
     if getattr(args, "analysis", None):
         return args.analysis
     if getattr(args, "host", None) == "claude" and model in CLAUDE_ALIASES:
@@ -1224,7 +1225,7 @@ def main(argv=None):
         p.add_argument(
             "--mode",
             default=None,
-            help="how the pass runs its passes: auto (the host decides), inline, fanout, or several comma-separated; inline and fanout are claude only",
+            help="how the pass runs its passes: auto (the host decides), inline, single, fanout, or several comma-separated; inline, single and fanout are claude only, and single is review only (--pass review)",
         )
         p.add_argument("--pass", dest="pass_", default="all", choices=[*PASSES, "all"])
         p.add_argument("--invoke", choices=["native", "inline"], default=None)
@@ -1250,7 +1251,7 @@ def main(argv=None):
         "--analysis",
         choices=["haiku", "sonnet", "opus"],
         default=None,
-        help="pin models.yaml's analysis role (review's fanned-out passes on Claude Code; not oneshot); default: --model when it is a Claude Code alias",
+        help="pin models.yaml's analysis role (review's subagent passes, single or fanout, on Claude Code; not oneshot); default: --model when it is a Claude Code alias",
     )
     p.add_argument(
         "--timeout", type=int, default=1200, help="seconds per run (default 1200)"
