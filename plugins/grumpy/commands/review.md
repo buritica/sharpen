@@ -42,8 +42,7 @@ level-appropriate version:
   garbage, call it garbage. Every harsh judgment must be backed by a specific
   technical argument. No softening, no hedging."
 
-Detect `--single` or `--fanout` in `$ARGUMENTS` and remove it before
-processing the rest. It overrides the dispatch size rule in Step 3.
+Detect `--single` or `--fanout` in `$ARGUMENTS` (Step 3) and remove it first.
 
 **Review Aspects (optional):** "$ARGUMENTS"
 

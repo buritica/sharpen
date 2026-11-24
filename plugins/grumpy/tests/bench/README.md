@@ -110,9 +110,9 @@ against the baseline:
 - has a higher share of failed runs or of runs that re-raised a settled finding;
 - or is missing a case/pass the baseline has, or has no runs at all.
 
-A run that took more than 1.5 times as long, or whose passes ran differently (inline in
-one, fanned out in the other; how often each mode ran doesn't count, so a different
-`--repeat` alone prints nothing), is printed as a note.
+A run that took more than 1.5 times as long, or whose passes ran differently (inline,
+single or fanout on one side and another mode on the other; how often each mode ran
+doesn't count, so a different `--repeat` alone prints nothing), is printed as a note.
 
 Rows match by name. A plain row (`case/pass`) also matches the other side's
 `case/pass @model/mode` row when that is the only row it has for the case/pass, so a
@@ -123,7 +123,7 @@ A model or mode listed twice runs once. Two variants whose labels fold to the sa
 name (`claude-opus` and `claude_opus`, or `Opus` and `opus` on a case-insensitive disk)
 are refused before the first run.
 
-`--mode inline` or `--mode fanout` is refused together with `--cmd`: the bench can't tell
+Any `--mode` but `auto` is refused together with `--cmd`: the bench can't tell
 where in a custom command line the system-prompt flag belongs, so put
 `--append-system-prompt` in the template yourself. A `--cmd` for Claude Code needs
 `--output-format json` too, or its runs record no usage and no `observed_mode`; and with

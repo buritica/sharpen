@@ -130,24 +130,25 @@ HOSTS = {
 # How a pass runs its finding passes. `auto` leaves it to the host: headless
 # Claude Code (`claude -p`) usually runs every pass itself in one session,
 # while an interactive session usually fans out to one subagent per pass, so
-# a bench that never pins the mode measures the cheaper path only. `inline`
-# and `fanout` pin it with a line appended to Claude Code's system prompt.
-# Codex, pi and oneshot have one way to run, so only `auto` applies there.
+# a bench that never pins the mode measures the cheaper path only. `inline`,
+# `single` and `fanout` pin it with a line appended to Claude Code's system
+# prompt. Codex, pi and oneshot have one way to run, so only `auto` applies
+# there.
 MODES = ("auto", "inline", "single", "fanout")
+_HAS_AGENTS = "This harness supports subagents: the Agent tool is available. "
 MODE_HINTS = {
     "inline": (
         "Run every review or simulation pass yourself, one after another, in "
         "this session. Do not use the Agent tool for them."
     ),
     "single": (
-        "This harness supports subagents: the Agent tool is available. Take "
-        "the command's single path: one Agent call, on the model the command "
-        "specifies, runs every pass in turn."
+        _HAS_AGENTS + "Take the command's single path: one Agent call, on the "
+        "model the command specifies, runs every pass in turn."
     ),
     "fanout": (
-        "This harness supports subagents: the Agent tool is available. Take "
-        "the command's subagent path: dispatch each pass as its own Agent "
-        "call, in parallel, with the model the command specifies."
+        _HAS_AGENTS + "Take the command's subagent path: dispatch each pass "
+        "as its own Agent call, in parallel, with the model the command "
+        "specifies."
     ),
 }
 MODE_HOSTS = {"claude"}
