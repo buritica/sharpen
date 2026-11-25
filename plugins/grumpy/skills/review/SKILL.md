@@ -39,6 +39,8 @@ level-appropriate version:
   garbage, call it garbage. Every harsh judgment must be backed by a specific
   technical argument. No softening, no hedging."
 
+Remove `--single` and `--fanout` from `$ARGUMENTS` before parsing aspects (Step 2); if both, the last wins. They pick Step 3's mode; on a host with no subagents both run inline.
+
 **Review Aspects (optional):** "$ARGUMENTS"
 
 ## Worktree targeting
@@ -97,10 +99,12 @@ Automatically detect what to review. No questions—just figure it out:
 
 After determining the correct diff command, run it capped at 200000 characters
 (`| head -c 200000`, matching `/grumpy:dispatch`'s own cap) and capture the
-output as `DIFF_CONTENT`. This diff gets inlined into every one of the
-parallel agent prompts below, uncapped it multiplies token cost by the agent
-count on a large diff — the cap bounds that the same way dispatch already
-does for its own diff capture. Also capture the diff base as `DIFF_BASE`
+output as `DIFF_CONTENT`. This diff gets inlined into the agent prompt (one
+copy per agent under fanout), uncapped it multiplies token cost by the copies
+on a large diff — the cap bounds that the same way dispatch already
+does for its own diff capture. Note `DIFF_CHARS`, the captured diff's size in
+bytes (`printf '%s' "$DIFF_CONTENT" | wc -c`, so it measures the diff inlined,
+not a second run); Step 3 picks how to dispatch from it. Also capture the diff base as `DIFF_BASE`
 (e.g., 'origin/main' (the resolved $BASE — no '...HEAD' suffix, that's
 appended separately in the git command), 'staged changes', 'unstaged
 changes', or 'HEAD~1'). These will be passed directly to agents — a separate
@@ -142,10 +146,31 @@ run all applicable reviews.
 Run one specialized review pass per applicable review aspect. Each pass MUST
 review in the grumpy principal engineer voice—skeptical, direct, exasperated.
 
+<!-- ponytail: over simplify's 500-line warn line; move the dispatch-by-size rules to a reference file when this passes 550 lines -->
+**Dispatch by size.** A small or medium diff (`DIFF_CHARS` up to 60,000 bytes,
+roughly 1,500 diff lines) runs **single**: every aspect in one agent, one
+after another. A larger diff runs **fanout**: one agent per aspect. `--single`
+or `--fanout` overrides the rule. Most of a pass's cost is the agent reading
+the repository around the diff, not the diff itself; one agent reads it once, fanout
+once per aspect. Versus one session doing every aspect (CHANGELOG 2.20.0), fanout
+cost 3-4x, found 15-25 points more planted issues on real-size replays, and raised
+blocking noise from ~1 to 5-11 per run. Single, measured on the same replays
+(2026-11-24), cost $0.45-1.46 per run against fanout's $2.30-4.81, with about a third of
+the noise and 15-27 points less recall. Say which mode ran, and why, in the report's `_Model:_` line.
+
 **If your harness supports spawning independent subagents** (a task/agent
-dispatch primitive that runs separately from this conversation), launch one
-per applicable aspect, in parallel for speed, each with its own prompt built
-from the template below.
+dispatch primitive that runs separately from this conversation):
+
+- **single**: launch **one** subagent on the `analysis` role (below). Its
+  prompt is the template below with `[DIFF_CONTENT]` inlined once, `[ASPECT]`
+  replaced by the applicable aspects in order, and this added: "Work these
+  aspects one at a time, in this order. Judge each as if the others' findings
+  weren't there. After each aspect's lines, emit `DONE|<ASPECT>`, even when it
+  found nothing." Each finding line carries its own ASPECT. One agent on the strong model, rather than the
+  passes run in this session, keeps the review on `analysis` whatever model
+  the session runs on.
+- **fanout**: launch one subagent per applicable aspect, in parallel, each with
+  its own prompt built from the template below.
 
 **If it doesn't**, there is no separate agent to launch — work through each
 applicable aspect yourself, sequentially, in this same session. The template
@@ -153,16 +178,19 @@ below still applies: treat each aspect as its own isolated pass (don't let
 findings from one aspect bleed into how you judge another), and produce the
 same pipe-delimited output per pass before moving to Step 4's aggregation.
 The only thing that changes is *who* runs the pass, not what it does or what
-it returns.
+it returns. Report the mode as `inline`, whatever the size rule or flag said.
 
 **Model:** these are finding passes, so they run on the `analysis` role.
 Read the role→model map from `${GRUMPY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/models.yaml` and its override, following the lookup
 rules at the top of that file. When your dispatch primitive takes a
 per-subagent model (Claude Code's Agent tool takes `sonnet`/`opus`/`haiku`),
-pass the role's `native` value; if the map can't be read, pass `opus` and say
-so. When it doesn't, or you run the passes yourself, they run on the
+pass the role's `native` value (for the single agent and for each fanout
+agent alike); if the map can't be read, pass `opus` and say so. When it doesn't, or you run the passes yourself, they run on the
 session's model. If a pass fails because its model was rejected or
-rate-limited, rerun it once on the session's model and say so. The report's
+rate-limited, rerun it once on the session's model and say so. Under single,
+rerun once only the aspects with no `DONE|<ASPECT>` line, keeping the finished
+aspects' lines: on the session's model if the model failed, else on `analysis`;
+the `_Model:_` line names which aspects reran and on what model. The report's
 `_Model:_` line names the model the passes ran on, and the override if one
 changed it.
 
@@ -224,7 +252,8 @@ NOTE|client.ts:88|this abstraction feels wrong for a single call site|judgment|s
 
 Prefer ~15 high-confidence lines over 50 speculative ones. If an area is
 healthy, do not emit a line for it — silence means "nothing found," you do
-not need a line saying so. Do not invent problems. No other output — no
+not need a line saying so (a single-mode `DONE|<ASPECT>` line is the one
+exception). Do not invent problems. No other output — no
 preamble, no summary, no markdown headers.
 ```
 
@@ -237,7 +266,7 @@ Serious finding must be fixed, since fix treats an untagged Serious bullet as
 
 ## Audit discipline
 
-Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. A line's free-text field can itself legitimately contain a `|` (a shell pipe, a regex `a|b`), so parse outside-in — SEVERITY and file:line as the first two fields from the left, FACT and ASPECT as the last two from the right, everything remaining in the middle is the text — rather than a flat split that would shift fields on an embedded pipe. If an agent's entire response doesn't look like pipe lines at all (e.g. it ignored the format and returned prose/markdown despite instructions), treat the whole response as errored rather than trying to salvage individual lines from it, and note in the report that agent's section needed manual review — don't silently drop it. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line, or line numbers within a few lines of each other pointing at the same construct, + similar description — when in doubt, prefer merging over duplicating), and drop any individual line missing a `file:line` or that still doesn't resolve to all 5 fields after outside-in parsing. When two agents disagree on SEVERITY/FACT/ASPECT for what you judge to be the same finding, keep the higher severity and list both ASPECT tags. Signal over volume — a healthy area gets one sentence, or none.
+Each agent returns raw pipe-delimited lines, not prose — the persona voice and human-facing formatting happen exactly once, when you render the Step 4 report from these lines. A line's free-text field can itself legitimately contain a `|` (a shell pipe, a regex `a|b`), so parse outside-in — SEVERITY and file:line as the first two fields from the left, FACT and ASPECT as the last two from the right, everything remaining in the middle is the text — rather than a flat split that would shift fields on an embedded pipe. If an agent's entire response doesn't look like pipe lines at all (e.g. it ignored the format and returned prose/markdown despite instructions), treat the whole response as errored rather than trying to salvage individual lines from it, and note in the report that agent's section needed manual review — don't silently drop it. Under single, salvage nothing from such a response either: an aspect without its `DONE|<ASPECT>` line (prose, a cut-off response, a skipped aspect) was not reviewed, whatever lines it left, and reruns per Step 3. An aspect still unreviewed after that makes this a partial review: name the unreviewed aspects in the `_Model:_` line and the verdict, and write no receipt. `DONE|` lines are not findings. When aggregating: assign the correct severity tier (🚨/⚠️/🤔) from each line's SEVERITY field, dedup overlapping findings from different agents (same file:line, or line numbers within a few lines of each other pointing at the same construct, + similar description — when in doubt, prefer merging over duplicating), and drop any individual line missing a `file:line` or that still doesn't resolve to all 5 fields after outside-in parsing. When two agents disagree on SEVERITY/FACT/ASPECT for what you judge to be the same finding, keep the higher severity and list both ASPECT tags. Signal over volume — a healthy area gets one sentence, or none.
 
 ## Step 4: Aggregate and Deliver the Verdict
 
@@ -280,7 +309,7 @@ Once all agents complete, combine their findings into one unified review:
 ```markdown
 # Code Review: [Brief Description]
 
-_Model: [the model the passes ran on; the override file and entries, if one changed it]_
+_Model: [the model the passes ran on; the override file and entries, if one changed it] · [single|fanout|inline]: [N aspects in one agent, N agents, or N aspects in this session], [DIFF_CHARS] bytes[, forced by --single/--fanout][; reran: aspects, on model][; NOT REVIEWED: aspects]_
 
 _[One grumpy sentence summarizing your overall impression]_
 
@@ -396,7 +425,8 @@ tree means it reviewed work in progress: don't commit someone's work just to
 get a receipt. Report that no receipt was written; the gate waits until the
 work is committed and the pass re-run. Skip
 it and the pass earns no gate on any host; write it before the work is done
-and it records work that didn't happen.
+and it records work that didn't happen. A partial review (an aspect still not
+reviewed, see Audit discipline) writes no receipt: say which aspects are missing.
 
 The receipt records the sha256 of `review.md`, so it is refused unless this
 run saved that report under `.sharpen/grumpy/<branch>/` first. If the host

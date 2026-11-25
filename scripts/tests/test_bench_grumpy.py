@@ -1595,6 +1595,43 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(bench.observed_mode("claude", u), "fanout")
         self.assertEqual(bench.output_text("claude", self.CLAUDE), "the report")
 
+    def test_observed_mode_counts_subagents(self):
+        for n, mode in ((0, "inline"), (1, "single"), (2, "fanout"), (7, "fanout")):
+            self.assertEqual(bench.observed_mode("claude", {"subagents": n}), mode)
+
+    def test_a_single_run_observed_as_fanout_is_flagged(self):
+        score = bench.score(KEY, [])
+        runs = [
+            {
+                "case": "c",
+                "pass": "review",
+                "score": score,
+                "usage": {"subagents": 3},
+                "pinned_mode": "single",
+                "observed_mode": "fanout",
+            },
+            {
+                "case": "c",
+                "pass": "review",
+                "score": score,
+                "usage": {"subagents": 1},
+                "pinned_mode": "single",
+                "observed_mode": "single",
+            },
+        ]
+        s = bench.summarize(runs)["c/review"]
+        self.assertEqual(s["mode_missed"], 1)
+        notes = bench._row_notes(s, "claude")
+        self.assertTrue(any("ignored the pinned --mode" in n for n in notes))
+        self.assertTrue(any("reran its agent" in n for n in notes))
+
+    def test_single_mode_pins_its_own_hint(self):
+        argv, _ = bench.build_command("claude", "review", mode="single")
+        hint = argv[argv.index("--append-system-prompt") + 1]
+        self.assertIn("single path", hint)
+        self.assertIn("whatever the diff's size", hint)
+        self.assertIn("`--single`", hint)
+
     def test_claude_without_json_records_nothing(self):
         self.assertIsNone(bench.parse_usage("claude", "plain text\n{not json"))
         self.assertEqual(bench.output_text("claude", "plain"), "plain")
@@ -1692,6 +1729,17 @@ class UsageTest(unittest.TestCase):
             "claude", "review", mode="auto", template="env X=1 claude -p {prompt}"
         )
         self.assertEqual(argv[:3], ["env", "X=1", "claude"])
+
+    def test_single_mode_is_refused_for_a_pass_without_a_single_path(self):
+        # Only review.md has a single path; a hint for imagine would label
+        # whatever the model improvised as `single`.
+        with self.assertRaises(ValueError) as cm:
+            bench.build_command("claude", "imagine", "sonnet", mode="single")
+        self.assertIn("--pass review", str(cm.exception))
+        argv, _ = bench.build_command("claude", "review", "sonnet", mode="single")
+        self.assertEqual(argv[1], "--append-system-prompt")
+        argv, _ = bench.build_command("claude", "imagine", "sonnet", mode="fanout")
+        self.assertEqual(argv[1], "--append-system-prompt")
 
     def test_a_repeated_model_or_mode_runs_once(self):
         args = argparse.Namespace(

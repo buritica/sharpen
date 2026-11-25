@@ -3,6 +3,43 @@
 Version-specific migration notes. Nothing reads this file programmatically — it exists so a
 past release's behavior change stays discoverable without bloating the current README.
 
+## 2.20.0 — review runs every aspect in one agent on small and medium diffs
+
+`/grumpy:review` used to start one subagent per aspect, up to seven, on every diff. It
+now picks by size. A diff up to 60,000 characters (about 1,500 diff lines) runs
+**single**: one subagent on the `analysis` role works through every aspect in turn.
+That role is Opus by default, and `.sharpen/models.yaml` can override it. Codex and pi
+can't pick a per-subagent model, so there the subagent runs on the session's model. On a
+host without subagents the aspects run inline in the session.
+A larger diff still runs **fanout**, one subagent per aspect. `--single` and
+`--fanout` override the rule, and the report's `_Model:_` line says which ran and why.
+
+Most of a pass's cost is the agent reading the repository around the diff, and fanout
+pays it once per aspect. In the first benchmark round (2026-11-23, Opus, two real-size
+replays), fanout was compared with one session running every aspect inline, not with
+one subagent. Fanout found 15 to 25 points more of the planted issues but cost three to
+four times as much and raised blocking noise from about 1 finding per run to 5 to 11.
+The follow-up round (2026-11-24, 3 runs per row, on this release's first commit)
+measured single directly:
+
+| Case | Mode | Recall | Blocking noise | Cost |
+|---|---|---|---|---|
+| 16 KB replay | single, Opus session | 44% | 3.7 | $0.96 |
+| 16 KB replay | single, Sonnet session (Opus agent) | 50% | 1.0 | $0.45 |
+| 16 KB replay | fanout, Opus (first round, 2 runs) | 67% | 7.0 | $2.30 |
+| 120 KB replay | single, Opus session | 43% | 1.3 | $1.46 |
+| 120 KB replay | single, Sonnet session (Opus agent) | 50% | 3.7 | $0.97 |
+| 120 KB replay | fanout, Opus | 70% | 3.3 | $4.81 |
+
+Single trades 15 to 27 points of recall for a third to a fifth of the cost and less
+noise, the same trade the first round showed. The 120 KB replay is over the cutoff, so
+it still fans out by default. `--mode fanout` on the 16 KB replay ran single: review's
+size rule outranks the benchmark's mode hint, so that row came from the first round.
+On Claude Code the single agent runs on `analysis` whatever model the session uses, because a Sonnet
+session running the aspects itself missed most planted issues.
+
+The benchmark takes `--mode single`, and `observed_mode` reads one subagent as `single`.
+
 ## 2.19.0 — the fix pass costs less: one fixer per file, judgment calls on Sonnet
 
 `/grumpy:fix` dispatches one fixer per file, carrying every finding in that file, instead

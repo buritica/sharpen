@@ -66,10 +66,13 @@ table when a row's cost is the mean of only some of its runs. Every run also rec
 `duration_s`.
 
 `observed_mode` says how the passes actually ran: `inline` (the session ran every pass
-itself), `fanout` (it started subagents) or `oneshot`. This matters because headless
-Claude Code usually runs the passes inline, while an interactive session usually fans
-out, and on a real-size diff fan-out cost 4 to 11 times as much in the runs that
-prompted this (2026-11-23). `--mode` asks for one: `inline` or `fanout` appends a line
+itself), `single` (one subagent ran them all, review's default for a diff up to 60,000
+characters), `fanout` (it started more than one) or `oneshot`. This matters because the
+runs before review's size rule (grumpy 2.20.0) showed headless Claude Code usually running
+the passes inline, while an interactive session usually fanned out, and on a real-size diff
+fan-out cost 4 to 11 times as much in the runs that prompted this (2026-11-23). Review now
+picks `single` or `fanout` by diff size when it has subagents, so which path an `auto` run
+takes is up to the host and command. `--mode` asks for one: `inline`, `single` or `fanout` appends a line
 saying so to Claude Code's system prompt, and `auto` (the default) leaves it to the
 host. The line is a request, not a guarantee, so the summary notes runs whose
 `observed_mode` differs from the mode they asked for; their row's label is wrong for
@@ -109,9 +112,9 @@ against the baseline:
 - has a higher share of failed runs or of runs that re-raised a settled finding;
 - or is missing a case/pass the baseline has, or has no runs at all.
 
-A run that took more than 1.5 times as long, or whose passes ran differently (inline in
-one, fanned out in the other; how often each mode ran doesn't count, so a different
-`--repeat` alone prints nothing), is printed as a note.
+A run that took more than 1.5 times as long, or whose passes ran differently (inline,
+single or fanout on one side and another mode on the other; how often each mode ran
+doesn't count, so a different `--repeat` alone prints nothing), is printed as a note.
 
 Rows match by name. A plain row (`case/pass`) also matches the other side's
 `case/pass @model/mode` row when that is the only row it has for the case/pass, so a
@@ -122,9 +125,10 @@ A model or mode listed twice runs once. Two variants whose labels fold to the sa
 name (`claude-opus` and `claude_opus`, or `Opus` and `opus` on a case-insensitive disk)
 are refused before the first run.
 
-`--mode inline` or `--mode fanout` is refused together with `--cmd`: the bench can't tell
+Any `--mode` but `auto` is refused together with `--cmd`: the bench can't tell
 where in a custom command line the system-prompt flag belongs, so put
-`--append-system-prompt` in the template yourself. A `--cmd` for Claude Code needs
+`--append-system-prompt` in the template yourself. `--mode single` is refused for any
+pass but `review`, the only command with a single path. A `--cmd` for Claude Code needs
 `--output-format json` too, or its runs record no usage and no `observed_mode`; and with
 several models in `--model` the template must contain `{model}`, or `run` refuses it
 rather than paying for identical runs under different labels.
@@ -174,6 +178,7 @@ OpenAI; it is planted toy code, but say so if that matters where you run it.
 
 ## Cost
 
+<!-- ponytail: no cost figures for `single` yet; add them when a bench run records --mode single on the replays -->
 Nine cases: five for review, two for imagine, and two real-size replays that run both.
 `run --pass all` with the default three repeats is 33 headless sessions per host, model
 and mode, so a two-model, two-mode eval is 132. The replays are where the money goes: on

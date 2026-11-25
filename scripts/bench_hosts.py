@@ -127,22 +127,28 @@ HOSTS = {
         "verified": True,
     },
 }
-# How a pass runs its finding passes. `auto` leaves it to the host: headless
-# Claude Code (`claude -p`) usually runs every pass itself in one session,
-# while an interactive session usually fans out to one subagent per pass, so
-# a bench that never pins the mode measures the cheaper path only. `inline`
-# and `fanout` pin it with a line appended to Claude Code's system prompt.
-# Codex, pi and oneshot have one way to run, so only `auto` applies there.
-MODES = ("auto", "inline", "fanout")
+# How a pass runs its finding passes. `auto` leaves it to the host and the
+# command (headless Claude Code has often run the passes itself; with
+# subagents, review picks single or fanout by diff size), so an unpinned bench
+# may not measure the path you care about. `inline`, `single` and `fanout`
+# pin it with a line appended to Claude Code's system prompt. Codex, pi and
+# oneshot have one way to run, so only `auto` applies there.
+MODES = ("auto", "inline", "single", "fanout")
+_HAS_AGENTS = "This harness supports subagents: the Agent tool is available. "
 MODE_HINTS = {
     "inline": (
         "Run every review or simulation pass yourself, one after another, in "
         "this session. Do not use the Agent tool for them."
     ),
+    "single": (
+        _HAS_AGENTS + "Take the command's single path whatever the diff's "
+        "size, as if `--single` were passed: one Agent call, on the model the "
+        "command specifies, runs every pass in turn."
+    ),
     "fanout": (
-        "This harness supports subagents: the Agent tool is available. Take "
-        "the command's subagent path: dispatch each pass as its own Agent "
-        "call, in parallel, with the model the command specifies."
+        _HAS_AGENTS + "Take the command's fanout subagent path whatever the "
+        "diff's size, as if `--fanout` were passed: dispatch each pass as its "
+        "own Agent call, in parallel, with the model the command specifies."
     ),
 }
 MODE_HOSTS = {"claude"}
@@ -203,8 +209,9 @@ def build_command(
 ):
     """Return (argv, stdin_text) for one run. `{model}` and `{provider}`
     each drop with the flag before them when no value is given. A pinned
-    `mode` (inline or fanout) appends its hint to Claude Code's system prompt
-    and is refused on a host with one way to run, or with a `template`."""
+    `mode` (inline, single or fanout) appends its hint to Claude Code's system
+    prompt and is refused on a host with one way to run, or with a `template`;
+    `single` is refused for any pass but review, the only one with that path."""
     profile = HOSTS[host]
     invoke = invoke or profile["default_invoke"]
     if template:
@@ -249,6 +256,11 @@ def build_command(
             raise ValueError(
                 f"--mode {mode} can't be added to a --cmd template; put"
                 " --append-system-prompt in the template instead"
+            )
+        if mode == "single" and pass_name != "review":
+            raise ValueError(
+                f"--mode single is for review only; {pass_name} has no single"
+                " path, so use --pass review"
             )
         argv[1:1] = ["--append-system-prompt", MODE_HINTS[mode]]
     stdin_text = None if invoke == "native" else skill_prompt(pass_name, grumpy)
@@ -380,8 +392,12 @@ def parse_usage(host, stdout, stderr=""):
 
 
 def observed_mode(host, usage):
-    """How the pass actually ran: `fanout` when Claude Code spawned
-    subagents, `inline` when it spawned none, None where the host can't say.
+    """How the pass actually ran: `inline` when Claude Code spawned no
+    subagent, `single` when it spawned one (review's single path), `fanout`
+    when it spawned more, None where the host can't say.
+    The count is ambiguous: a single-path review whose one agent failed or
+    was rate-limited may be rerun once (review.md's Model paragraph), which
+    spawns a second subagent and reads as `fanout` here.
     On Claude Code this reads `subagent_stats.spawned` from the JSON result
     and nothing else; when that key is absent the mode is None, and the
     summary says so under the table."""
@@ -389,7 +405,9 @@ def observed_mode(host, usage):
         return "oneshot"
     if not usage or usage.get("subagents") is None:
         return None
-    return "fanout" if usage["subagents"] else "inline"
+    # ponytail: one subagent reads as `single` for every pass; split by pass when an imagine row reports observed_mode single
+    n = usage["subagents"]
+    return "inline" if not n else "single" if n == 1 else "fanout"
 
 
 def oneshot_version(grumpy=GRUMPY):
